@@ -426,7 +426,7 @@ class TupleGetItem(ExprWithOp):
         The index.
 
     span: Optional[tvm.relay.Span]
-        Span that points to original source code.
+        Span that points to original source code
     """
 
     def __init__(self, tuple_value, index, span=None):
