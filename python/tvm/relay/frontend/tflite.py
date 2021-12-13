@@ -292,12 +292,17 @@ class OperatorConverter(object):
 
             if len(output_tensors) == 1:
                 tensor_idx = output_tensors[0].tensor_idx
-                self.exp_tab.set_expr(get_tensor_name(self.subgraph, tensor_idx), ret)
+                curr_output = get_tensor_name(self.subgraph, tensor_idx)
+                ret = set_span(ret, "location: {}, output_name: {}".format(op_idx, curr_output))
+                self.exp_tab.set_expr(curr_output, ret)
             else:
-                for idx, output_tensor in enumerate(output_tensors):
-                    self.exp_tab.set_expr(
-                        get_tensor_name(self.subgraph, output_tensor.tensor_idx), ret[idx]
-                    )
+                out_names = []
+                for output_tensor in output_tensors:
+                    out_names.append(get_tensor_name(self.subgraph, output_tensor.tensor_idx))
+                curr_output = ", ".join(out_names)
+                ret = set_span(ret, "location: {}, output_name: {}".format(op_idx, curr_output))
+                for idx, out_name in enumerate(out_names):
+                    self.exp_tab.set_expr(out_name, ret[idx])
 
     def get_op_code_str(self, op):
         """Get TFLite ops string representation"""

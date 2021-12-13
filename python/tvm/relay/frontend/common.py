@@ -26,6 +26,7 @@ from tvm.topi.utils import get_const_tuple
 
 from ..expr_functor import ExprMutator
 from .. import expr as _expr
+from ..expr_functor import ExprMutator
 from .. import function as _function
 from .. import transform as _transform
 from .. import op as _op
