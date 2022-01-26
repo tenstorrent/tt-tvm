@@ -130,6 +130,13 @@ TVM_DLL Pass LazyGradientInit();
 TVM_DLL Pass FoldConstant(bool fold_qnn = false);
 
 /*!
+ * \brief Print graph to standard outs.
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass PrintGraph();
+
+/*!
  * \brief Split function with huge number of arguments to smaller pieces.
  *
  * \param max_function_args Maximum number of function arguments. If it equals 0 then SplitArgs
