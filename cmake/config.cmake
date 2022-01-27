@@ -164,7 +164,8 @@ set(USE_MICRO_STANDALONE_RUNTIME OFF)
 # - OFF: disable llvm, note this will disable CPU codegen
 #        which is needed for most cases
 # - /path/to/llvm-config: enable specific LLVM when multiple llvm-dev is available.
-set(USE_LLVM OFF)
+set(USE_LLVM "/usr/bin/llvm-config --link-static")
+set(HIDE_PRIVATE_SYMBOLS ON)
 
 # Whether use MLIR to help analyze, requires USE_LLVM is enabled
 # Possible values: ON/OFF
@@ -267,6 +268,9 @@ set(USE_ROCBLAS OFF)
 # Whether use contrib sort
 set(USE_SORT ON)
 
+# Buda
+set(USE_BUDA_CODEGEN ON)
+
 # Whether to use Arm Compute Library (ACL) codegen
 # We provide 2 separate flags since we cannot build the ACL runtime on x86.
 # This is useful for cases where you want to cross-compile a relay graph
@@ -330,7 +334,7 @@ set(USE_CLML_GRAPH_EXECUTOR OFF)
 set(USE_ANTLR OFF)
 
 # Whether use Relay debug mode
-set(USE_RELAY_DEBUG OFF)
+set(USE_RELAY_DEBUG ON)
 
 # Whether to enable debug code that may cause ABI changes
 set(TVM_DEBUG_WITH_ABI_CHANGE OFF)

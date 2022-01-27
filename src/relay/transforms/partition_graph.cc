@@ -166,8 +166,19 @@ class Partitioner : public MixedModeMutator {
         // The type of the created variable is the same as the compiler_begin
         // node.
         std::string target = call->attrs.as<CompilerAttrs>()->compiler;
-        std::string varname =
-            target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
+        //std::string varname =
+        //    target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
+        std::cout << "STAN: index=" << index << std::endl;
+        std::cout << call->args[0] << std::endl;
+        auto calling_var = call->args[0].as<VarNode>();
+        //std::cout << call->args[0].as<VarNode>()->name_hint() << std::endl;
+        std::string varname;
+        if (calling_var != nullptr) {
+          varname = calling_var->name_hint();
+        } else {
+          varname = target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
+        }
+
         auto var = Var(varname, GetRef<Call>(call)->checked_type_);
 
         std::pair<Var, Expr> cand = std::make_pair(var, input_expr);
