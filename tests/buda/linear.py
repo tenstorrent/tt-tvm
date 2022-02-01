@@ -1,103 +1,97 @@
+import torch
+
 import numpy as np
 import tvm
 import tvm.relay as relay
 
-import torch
+from ctypes import cast, POINTER
+from pybuda._C import cast_graph, dump_graph
+import pybuda._C.graph as pygraph
 
 
-shape = (64, 64)
+# shape = (64, 64)
 
-torchmod = torch.nn.Linear(64, 64)
-act = torch.rand(*shape)
-scr = torch.jit.trace(torchmod, act)
-mod, params = tvm.relay.frontend.from_pytorch(scr, [('input', (64, 64))])
-#print(mod)
-#print(params)
-#mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+# torchmod = torch.nn.Linear(64, 64)
+# act = torch.rand(*shape)
+# scr = torch.jit.trace(torchmod, act)
+# mod, params = tvm.relay.frontend.from_pytorch(scr, [('input', (64, 64))])
+# print(mod)
+# print(params)
+# mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+# import pdb; pdb.set_trace()
 
-shape = (64, 64)
-w1 = relay.var("weight", shape=shape)
+shape = (32, 32)
+params = {}
+w1_np = np.random.random((shape)).astype("float32") - 0.5
+w2_np = np.random.random((shape)).astype("float32") - 0.5
+
+w1 = relay.const(tvm.nd.array(w1_np))
+params["weight"] = w1.data
 x1 = relay.var("x1", shape=shape)
-wt1 = relay.transpose(w1)
-m1 = relay.nn.dense(wt1, x1)
+# wt1 = relay.transpose(w1)
+m1 = relay.nn.dense(x1, w1)
 x2 = relay.var("x2", shape=shape)
 
-w2 = relay.var("weight2", shape=shape)
-m2 = relay.nn.dense(w2, x2)
+w2 = relay.const(tvm.nd.array(w2_np))
+params["weight2"] = w2.data
+# wt2 = relay.transpose(w2)
+m2 = relay.nn.dense(x2, w2)
 
 y = relay.add(m1, m2)
 
-func = relay.Function([x1, x2, w1, w2], y)
+func = relay.Function([x1, x2], y)
 mod = tvm.IRModule.from_expr(func)
 print(mod)
-
-
-from tvm.relay.dataflow_pattern import *
-class DenseWeightTranspose(DFPatternCallback):
-    def __init__(self):
-        super().__init__()
-        self.weight = wildcard()
-        act = wildcard()
-        #self.opt_t = weight.optional(lambda x: is_op('transpose')(x))
-        #self.pattern = is_op('nn.dense')(act, self.opt_t)
-        self.pattern = is_op('nn.dense')(act, self.weight)
-        self.transpose_pattern = is_op('transpose')(wildcard())
-
-    def callback(self, pre, post, node_map):
-        print("match:")
-        print("PRE", pre)
-        print("POST", post)
-        print("NODE_MAP", node_map)
-
-        #t = node_map[self.opt_t][0]
-        #print("Transpose: ", t)
-        print(type(pre))
-        print(type(post))
-        if self.transpose_pattern.match(pre.args[0]):
-            print("has transpose")
-            return post
-
-        # Doesn't have transpose, add it
-        print("doesn't have transpose")
-        weight = pre.args[0]
-        act = pre.args[1]
-        wt1 = relay.transpose(weight)
-        wt2 = relay.transpose(wt1)
-        return relay.nn.dense(wt2, act)
-
-#from tvm.relay.dataflow_pattern import rewrite
-#out = rewrite(DenseWeightTranspose(), mod["main"])
-#print(out)
-
-#mod = relay.transform.FoldConstant()(mod)
-#mod = relay.transform.FuseOps(fuse_opt_level=3)(mod)
-#tvm.transform.PrintIR()(mod)
-#mod = relay.transform.EliminateCommonSubexpr()(mod)
-#print(mod)
 
 
 if not tvm.get_global_func("relay.ext.buda", True):
     print("Buda codegen not available")
     exit(-2)
 
-#mod = create_relay_module_from_model() # Output: Figure 1
 mod = tvm.relay.op.contrib.buda.partition_for_buda(mod)
-#from tvm.relay import transform
-#mod = transform.AnnotateTarget("buda")(mod)
-#mod = transform.MergeCompilerRegions()(mod)
-#mod = transform.PartitionGraph()(mod)
-print(mod)
+# print(mod)
 
-
-ret = tvm.relay.build_module.build(mod, target="llvm")
-print(ret)
-exit(-1)
+ret = tvm.relay.build_module.build(mod, target="llvm", params=params)
+# print(ret)
 
 with tvm.transform.PassContext(opt_level=3):
     func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
-print(func)
+in0 = np.random.random((shape)).astype("float32") - 0.5
+in1 = np.random.random((shape)).astype("float32") - 0.5
 
-#res = tvm.build(mod, target="buda")
-#print(res)
+
+@tvm.register_func
+def my_py_packed_func(*args):
+    t = tuple(args)
+    vp = t[4].value
+    graph = cast_graph(vp)
+
+    inputs = [torch.from_numpy(npt.numpy()) for npt in t[:-1]]
+    for idx, _ in enumerate(inputs):
+        while len(inputs[idx].shape) < 4:
+            inputs[idx] = inputs[idx].unsqueeze(0)
+    
+    inputs = tuple(inputs)
+    res = pygraph.eval(graph, inputs)
+    return tvm.runtime.ndarray.array(res[0].numpy())
+
+# z = np.zeros(32)
+# o = np.ones(32) * 31
+# grid = np.linspace(z, o, 32)
+
+res = func(in0, in1).numpy()
+
+def np_fun(a, b, c, d):
+    mm1 = np.matmul(a, c)
+    mm2 = np.matmul(b, d)
+    sum = mm1 + mm2
+    return sum
+    
+
+sum = np_fun(in0, in1, w1_np.transpose(), w2_np.transpose())
+
+print(f"Results correct: {np.allclose(res, sum, atol=1e-6)}")
+
+
 
