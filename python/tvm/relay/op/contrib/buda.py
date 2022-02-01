@@ -15,7 +15,7 @@ def _register_external_op_helper(op_name, supported=True):
         return supported
     return _func_wrapper
 
-#_register_external_op_helper("nn.dense")
+# _register_external_op_helper("nn.dense")
 _register_external_op_helper("add")
 _register_external_op_helper("subtract")
 _register_external_op_helper("multiply")
@@ -44,15 +44,15 @@ class DenseWeightTranspose(DFPatternCallback):
         self.transpose_pattern = is_op('transpose')(wildcard())
 
     def callback(self, pre, post, node_map):
-        print("match:")
-        print("PRE", pre)
-        print("POST", post)
-        print("NODE_MAP", node_map)
+        # print("match:")
+        # print("PRE", pre)
+        # print("POST", post)
+        # print("NODE_MAP", node_map)
 
         #t = node_map[self.opt_t][0]
         #print("Transpose: ", t)
-        print(type(pre))
-        print(type(post))
+        # print(type(pre))
+        # print(type(post))
         if self.transpose_pattern.match(pre.args[0]):
             print("has transpose")
             return post
@@ -68,26 +68,36 @@ class DenseWeightTranspose(DFPatternCallback):
 def partition_for_buda(mod):
     seq1 = tvm.transform.Sequential(
         [
+            # tvm.transform.PrintIR(),
             transform.CanonicalizeOps(),
-            transform.InferType(),
-            transform.SimplifyInference(),
-            transform.FoldConstant(),
-            transform.FoldScaleAxis(),
-            # fold consecutive add ops to simplify pattern `conv2d-bias_add-bn-relu`
-            transform.SimplifyExpr(),
-            transform.FoldConstant()
+            # tvm.transform.PrintIR(),
+            # transform.InferType(),
+            # tvm.transform.PrintIR(),
+            # transform.SimplifyInference(),
+            # tvm.transform.PrintIR(),
+            # transform.FoldConstant(),
+            # tvm.transform.PrintIR(),
+            # transform.FoldScaleAxis(),
+            # tvm.transform.PrintIR(),
+            # # fold consecutive add ops to simplify pattern `conv2d-bias_add-bn-relu`
+            # transform.SimplifyExpr(),
+            # tvm.transform.PrintIR(),
+            # transform.FoldConstant(),
+            # tvm.transform.PrintIR(),
         ]
     )
     seq2 = tvm.transform.Sequential(
         [
             tvm.transform.PrintIR(),
             transform.MergeComposite(pattern_table()),
+            transform.FoldConstant(),
             tvm.transform.PrintIR(),
             transform.AnnotateTarget("buda"),
             tvm.transform.PrintIR(),
             transform.MergeCompilerRegions(),
             tvm.transform.PrintIR(),
             transform.PartitionGraph(),
+            tvm.transform.PrintIR(),
             tvm.transform.PrintIR(),
         ]
     )

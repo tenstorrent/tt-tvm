@@ -9,6 +9,7 @@
 #include <fstream>
 #include <numeric>
 #include <sstream>
+#include <fstream>
 
 #include "../../utils.h"
 
@@ -97,15 +98,23 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   auto func = Downcast<Function>(ref);
   auto func_name = GetExtSymbol(func);
   BudaJSONSerializer serializer(func_name, func);
-  std::cout << "STAN: call serialize" << std::endl;
   serializer.serialize();
   std::string graph_json = serializer.GetJSON();
   auto params = serializer.GetParams();
 
-  std::cout << "Buda json: " << std::endl << graph_json << std::endl;
+  std::ofstream out_file; 
+  out_file.open ("buda_graph.json");
+  out_file << graph_json;
+  out_file.close();
 
-  //const auto* pf = runtime::Registry::Get("runtime.BudaJSONRuntimeCreate");
-  const auto* pf = runtime::Registry::Get("runtime.DNNLJSONRuntimeCreate");
+  out_file.open ("buda_params.json");
+  out_file << params;
+  out_file.close();
+
+
+  // std::cout << "Buda json: " << std::endl << graph_json << std::endl;
+
+  const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
   ICHECK(pf != nullptr) << "Cannot find JSON runtime module to create";
   auto mod = (*pf)(func_name, graph_json, params);
   return mod;

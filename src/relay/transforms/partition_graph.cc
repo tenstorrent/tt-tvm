@@ -168,8 +168,6 @@ class Partitioner : public MixedModeMutator {
         std::string target = call->attrs.as<CompilerAttrs>()->compiler;
         //std::string varname =
         //    target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
-        std::cout << "STAN: index=" << index << std::endl;
-        std::cout << call->args[0] << std::endl;
         auto calling_var = call->args[0].as<VarNode>();
         //std::cout << call->args[0].as<VarNode>()->name_hint() << std::endl;
         std::string varname;

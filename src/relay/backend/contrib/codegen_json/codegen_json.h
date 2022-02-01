@@ -159,11 +159,9 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
     relay::Function func = Downcast<relay::Function>(func_);
     // First we convert all the parameters into input nodes.
     for (const auto& param : func->params) {
-      std::cout << "STAN2: here" << param->name_hint() << std::endl;
       auto node_ptr = std::make_shared<JSONGraphNode>(param->name_hint(), "input" /* op_type_ */);
       memo_[param] = AddNode(node_ptr, param);
     }
-    std::cout << "STAN: here" << std::endl;
     heads_ = VisitExpr(func->body);
   }
 
