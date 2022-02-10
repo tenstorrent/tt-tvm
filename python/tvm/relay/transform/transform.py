@@ -301,6 +301,16 @@ def FoldConstant(fold_qnn=False):
     """
     return _ffi_api.FoldConstant(fold_qnn)
 
+def DecomposeVariance():
+    """Decompose variance op to primitive ops.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for variance decomp.
+    """
+    return _ffi_api.DecomposeVariance()
+
 
 def FuseOps(fuse_opt_level=-1):
     """Fuse operators in an expr to a larger operator according to some rules.
