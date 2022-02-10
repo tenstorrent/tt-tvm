@@ -149,6 +149,14 @@ TVM_DLL Pass FoldConstant(bool fold_qnn = false);
 TVM_DLL Pass PrintGraph();
 
 /*!
+ * \brief Decompose Variance to primitive ops
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass DecomposeVariance();
+
+
+/*!
  * \brief Split function with huge number of arguments to smaller pieces.
  *
  * \param max_function_args Maximum number of function arguments. If it equals 0 then SplitArgs
