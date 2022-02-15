@@ -187,7 +187,7 @@ class BudaRuntime : public JSONRuntimeBase {
 
   }
  private:
-  std::map <uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int>> id_to_tensor_;
+  std::map <uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> id_to_tensor_;
   Graph* graph_;
 
   const Shape MakeBudaShape(std::vector<int64_t> shape) {
@@ -209,9 +209,9 @@ class BudaRuntime : public JSONRuntimeBase {
 
   void PrintMap() {
     std::cout << "id_to_tensor_ entries:" << std::endl;
-    for (std::pair<uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int>> entry : id_to_tensor_) {
+    for (std::pair<uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> entry : id_to_tensor_) {
       std::cout << "  " << entry.first << ", " << std::get<0>(entry.second) << ", " << std::get<1>(entry.second) 
-        <<  ", " << std::get<2>(entry.second) << std::endl;
+        <<  ", " << std::get<2>(entry.second) <<   ", " << std::get<3>(entry.second) << std::endl;
     }
   }
   // Build up the engine based on the input graph.
@@ -241,7 +241,7 @@ class BudaRuntime : public JSONRuntimeBase {
       const Shape buda_shape = MakeBudaShape(shape);
       node->set_shape(buda_shape);
       
-      id_to_tensor_.emplace(eid, std::make_tuple(node->id(), name, 0));
+      id_to_tensor_.emplace(eid, std::make_tuple(node->id(), name, 0, buda_shape));
     }
 
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
@@ -263,7 +263,7 @@ class BudaRuntime : public JSONRuntimeBase {
         const Shape buda_shape = MakeBudaShape(shape);
         buda_node->set_shape(buda_shape);
 
-        id_to_tensor_.emplace(nid, std::make_tuple(buda_node->id(), buda_name, 0));
+        id_to_tensor_.emplace(nid, std::make_tuple(buda_node->id(), buda_name, 0, buda_shape));
 
         auto inputs = node.GetInputs();
         for (unsigned int i = 0; i < inputs.size(); i++) {
@@ -271,8 +271,18 @@ class BudaRuntime : public JSONRuntimeBase {
           
           Edge edge(std::get<0>(id_to_tensor_.at(inputs[i].id_)), 0, buda_node->id(), i, EdgeType::kData);
           graph_->add_edge(edge);
+          
+          //TODO: Better broadcast
+          std::shared_ptr<EdgeAttributes> attr = graph_->get_edge_attributes(edge);
 
-          //TODO: Broadcast
+          auto input_shape = std::get<3>(id_to_tensor_.at(inputs[i].id_)).as_vector();
+          for (size_t dim = 0; dim < input_shape.size(); dim++) {
+            if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
+              attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
+              std::cout << "Explicit Broadcasting: " << nodes_[inputs[i].id_].GetOpName() << " to: " << nodes_[nid].GetOpName() << " dim: " << dim << " port: " << i << std::endl;
+              std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
+            }
+          }
         }
 
       }
