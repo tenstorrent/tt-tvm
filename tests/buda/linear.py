@@ -20,7 +20,7 @@ import pybuda._C.graph as pygraph
 # mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 # import pdb; pdb.set_trace()
 
-shape = (32, 32)
+shape = (256, 32)
 params = {}
 w1_np = np.random.random((shape)).astype("float32") - 0.5
 w2_np = np.random.random((shape)).astype("float32") - 0.5
@@ -71,14 +71,14 @@ def my_py_packed_func(*args):
     for idx, _ in enumerate(inputs):
         while len(inputs[idx].shape) < 4:
             inputs[idx] = inputs[idx].unsqueeze(0)
-    
+
     inputs = tuple(inputs)
     res = pygraph.eval(graph, inputs)
     return tvm.runtime.ndarray.array(res[0].numpy())
 
-# z = np.zeros(32)
-# o = np.ones(32) * 31
-# grid = np.linspace(z, o, 32)
+z = np.zeros(32)
+o = np.ones(32) * 63
+grid = np.linspace(z, o, 64)
 
 res = func(in0, in1).numpy()
 
