@@ -36,16 +36,19 @@ def main():
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
 
     tvm_model, tvm_params = tvm.relay.frontend.pytorch.from_pytorch(traced_model, input_list, default_dtype="float32")
-
     target = "llvm"
+    tvm.relay.backend.te_compiler.get().clear()
+    with tvm.transform.PassContext(opt_level=4):
+        tvm_model_opt, tvm_params_opt = tvm.relay.op.contrib.compile_for_buda(tvm_model, target=target, params=tvm_params)
+
 
     # Need graphviz to visualize
     viz = visualize(tvm_model["main"])
     viz.save()
 
-    tvm.relay.backend.te_compiler.get().clear()
-    with tvm.transform.PassContext(opt_level=4):
-        tvm_model_opt, tvm_params_opt = tvm.relay.optimize(mod=tvm_model, target=target, params=tvm_params)
+    # tvm.relay.backend.te_compiler.get().clear()
+    # with tvm.transform.PassContext(opt_level=4):
+    #     tvm_model_opt, tvm_params_opt = tvm.relay.optimize(mod=tvm_model, target=target, params=tvm_params)
         # graph, lib, params = tvm.relay.build(tvm_model,
         #                              target=target,
         #                              params=tvm_params)
