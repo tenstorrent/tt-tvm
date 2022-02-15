@@ -64,7 +64,7 @@ in1 = np.random.random((shape)).astype("float32") - 0.5
 @tvm.register_func
 def my_py_packed_func(*args):
     t = tuple(args)
-    vp = t[4].value
+    vp = t[-1].value
     graph = cast_graph(vp)
 
     inputs = [torch.from_numpy(npt.numpy()) for npt in t[:-1]]
