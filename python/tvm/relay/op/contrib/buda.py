@@ -1,9 +1,12 @@
 import logging
 
 import tvm.ir
+from tvm.ir.transform import PassContext
 from tvm.relay import transform
-from tvm.relay.build_module import bind_params_by_name
-
+from tvm.relay.build_module import bind_params_by_name, BuildModule,build_target_by_device_type_map
+from tvm.ir import IRModule
+from tvm.relay import function as _function
+from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
@@ -106,3 +109,66 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(DenseWeightTranspose(), mod["main"])
         mod = seq2(mod)
     return mod
+
+
+def compile_for_buda(relay_module, target='llvm', params=None):
+
+    if not isinstance(relay_module, (IRModule, _function.Function)):
+        raise ValueError("Type of input parameter mod must be tvm.IRModule")
+
+    if isinstance(relay_module, _function.Function):
+        if params:
+            relay_module = bind_params_by_name(relay_module, params)
+        relay_module = IRModule.from_expr(relay_module)
+        logger.warning(
+            "Please use input parameter mod (tvm.IRModule) "
+            "instead of deprecated parameter func (tvm.relay.function.Function)"
+        )
+
+    target = build_target_by_device_type_map(target)
+
+    if isinstance(tvm.autotvm.DispatchContext.current, tvm.autotvm.FallbackContext):
+        tophub_context = tvm.autotvm.tophub.context(list(target.values()))
+    else:
+        tophub_context = tvm.autotvm.utils.EmptyContext()
+
+
+    with tophub_context:
+        bld_mod = BuildModule()
+        if params:
+            bld_mod._set_params(params)
+        context = PassContext().current()
+        compiler_config = make_compilation_config(context,target)
+
+
+        passes = tvm.transform.Sequential(
+            [
+                transform.RemoveUnusedFunctions(),
+                transform.ToBasicBlockNormalForm(),
+                transform.Legalize(),
+                transform.SimplifyInference(),
+                transform.DynamicToStatic(),
+                transform.EliminateCommonSubexpr(),
+                transform.SimplifyExpr(),
+                transform.CombineParallelConv2D(3),
+                transform.CombineParallelDense(3),
+                transform.CombineParallelBatchMatmul(3),
+                transform.FoldConstant(),
+                transform.FoldScaleAxis(),
+                transform.CanonicalizeCast(),
+                transform.CanonicalizeOps(),
+                transform.InferType(),
+                transform.AlterOpLayout(),
+                transform.FoldConstant(),
+                transform.SplitArgs(-1),
+                transform.FuseOps(),
+                transform.InferType(),
+                transform.Inline(),
+                transform.InferType(),
+                transform.DecomposeVariance(),
+            ]
+        )
+
+        compiled_relay_module = passes(relay_module)
+
+    return compiled_relay_module, params
