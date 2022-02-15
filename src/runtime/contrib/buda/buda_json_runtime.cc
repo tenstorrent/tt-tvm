@@ -96,16 +96,22 @@ class BudaRuntime : public JSONRuntimeBase {
 
         DLTensor *dl_tensor;
 
-        TVMArrayAlloc(data_entry_[eid]->shape, data_entry_[eid]->ndim, data_entry_[eid]->dtype.code, data_entry_[eid]->dtype.bits, data_entry_[eid]->dtype.lanes, data_entry_[eid]->device.device_type, data_entry_[eid]->device.device_id, &dl_tensor);
+        std::vector<int64_t> reversed_shape;
+        for (auto i = data_entry_[eid]->ndim - 1; i >= 0; i--) {
+          reversed_shape.push_back(data_entry_[eid]->shape[i]);
+        }
+
+        TVMArrayAlloc(&reversed_shape[0], data_entry_[eid]->ndim, data_entry_[eid]->dtype.code, data_entry_[eid]->dtype.bits, data_entry_[eid]->dtype.lanes, data_entry_[eid]->device.device_type, data_entry_[eid]->device.device_id, &dl_tensor);
         
         NDArray::CopyFromTo(data_entry_[eid], dl_tensor, NULL);
         //TODO: loop over z and w
-        auto shape = data_entry_[eid]->shape;
+        auto shape = dl_tensor->shape;
         float *row_major_data = static_cast<float*>(dl_tensor->data);
         float *col_major_data = static_cast<float*>(data_entry_[eid]->data);
+        
         for (int i = 0; i < shape[0]; i ++) {
           for (int j = 0; j < shape[1]; j++) {
-            row_major_data[(j * 32) + i] = col_major_data[(i * 32) + j];
+            row_major_data[(i * shape[1]) + j] = col_major_data[(j * shape[0]) + i];
           }
         }
         
@@ -192,8 +198,8 @@ class BudaRuntime : public JSONRuntimeBase {
 
   const Shape MakeBudaShape(std::vector<int64_t> shape) {
     std::vector<int> shape_4d;
-    for (int64_t dim : shape) {
-      shape_4d.push_back(static_cast<int>(dim));
+    for (auto it =  shape.rbegin(); it != shape.rend(); ++it) {
+      shape_4d.push_back(static_cast<int>(*it));
     }
     int i = 0;
     while (shape_4d.size() < 4) {
@@ -239,6 +245,7 @@ class BudaRuntime : public JSONRuntimeBase {
       auto node = graph_->add_node(create_node<InputNode>(name, input_type, requires_grad));
       
       const Shape buda_shape = MakeBudaShape(shape);
+      std::cout << "Tensor shape: " << buda_shape << std::endl;
       node->set_shape(buda_shape);
       
       id_to_tensor_.emplace(eid, std::make_tuple(node->id(), name, 0, buda_shape));
