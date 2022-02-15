@@ -2,7 +2,7 @@ import torch
 import tvm
 import tvm.relay
 
-from visualize_tvm import visualize
+# from visualize_tvm import visualize
 
 from transformers import BertModel, BertTokenizer
 
@@ -42,9 +42,9 @@ def main():
     tvm_model_opt, tvm_params_opt = tvm.relay.op.contrib.compile_for_buda(tvm_model, target=target, params=tvm_params)
 
 
-    # Need graphviz to visualize
-    viz = visualize(tvm_model["main"])
-    viz.save()
+    # # Need graphviz to visualize
+    # viz = visualize(tvm_model["main"])
+    # viz.save()
 
     # tvm.relay.backend.te_compiler.get().clear()
     # with tvm.transform.PassContext(opt_level=4):
@@ -53,9 +53,9 @@ def main():
         #                              target=target,
         #                              params=tvm_params)
 
-    viz_opt = visualize(tvm_model_opt["main"])
-    viz_opt.filename='Digraph_opt.gv'
-    viz_opt.save()
+    # viz_opt = visualize(tvm_model_opt["main"])
+    # viz_opt.filename='Digraph_opt.gv'
+    # viz_opt.save()
     # dev = tvm.cpu()
     # module = tvm.contrib.graph_executor.create(graph, lib, dev)
 
