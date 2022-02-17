@@ -8,8 +8,8 @@ import tvm.relay as relay
 from ctypes import cast, POINTER
 from pybuda._C import cast_graph, dump_graph
 import pybuda._C.graph as pygraph
-
-
+from pybuda import TTDevice, TTDeviceType, PyBudaModule
+import pybuda
 
 
 class DoubleLinear(nn.Module):
@@ -40,6 +40,8 @@ if not tvm.get_global_func("relay.ext.buda", True):
     print("Buda codegen not available")
     exit(-2)
 
+mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target="llvm", params=params)
+
 mod = tvm.relay.op.contrib.buda.partition_for_buda(mod)
 # print(mod)
 
@@ -52,18 +54,48 @@ with tvm.transform.PassContext(opt_level=3):
 
 @tvm.register_func
 def my_py_packed_func(*args):
+
     t = tuple(args)
     vp = t[-1].value
     graph = cast_graph(vp)
 
-    inputs = [torch.from_numpy(npt.numpy()) for npt in t[:-1]]
+    # inputs = [torch.from_numpy(npt.numpy()) for npt in t[:-1]]
+    inputs = []
+    input_type = []
+    node_name = []
+    for arg in t[:-1]:
+        if isinstance(arg, str):
+            _type, _name = arg.split("|||")
+            input_type.append(_type)
+            node_name.append(_name)
+        elif isinstance(arg, tvm.runtime.ndarray.NDArray):
+            inputs.append(torch.from_numpy(arg.numpy()) )
+        else:
+            assert 0, "Unexpected data type"
+
     for idx, _ in enumerate(inputs):
         while len(inputs[idx].shape) < 4:
             inputs[idx] = inputs[idx].unsqueeze(0)
-    
+
+    # Create parameters
+    tt0 = TTDevice("tt0", devtype=TTDeviceType.Model)
+
+    tvm_module = PyBudaModule("tvm")
+
+    for _type, _name, _data in zip(input_type, node_name, inputs):
+        if _type == "parameter":
+            param = pybuda.Parameter(
+                *_data.shape, 
+                requires_grad=True,
+                name=_name,
+                value=_data,
+            )
+            tvm_module._parameters[_name] = param
+
+    tt0.place_module(tvm_module)
     inputs = tuple(inputs)
-    res = pygraph.eval(graph, inputs)
-    return tvm.runtime.ndarray.array(res[0].numpy())
+    res = pygraph.eval(graph, inputs, tt0)
+    return tvm.runtime.ndarray.array(res[0][0].numpy())
 
 # z = np.zeros(32)
 # o = np.ones(32) * 31

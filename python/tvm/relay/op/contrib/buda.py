@@ -133,16 +133,16 @@ def compile_for_buda(relay_module, target='llvm', params=None):
         tophub_context = tvm.autotvm.utils.EmptyContext()
 
 
-    with tophub_context:
+    with tophub_context, tvm.transform.PassContext(opt_level=5):
         bld_mod = BuildModule()
         if params:
             bld_mod._set_params(params)
         context = PassContext().current()
         compiler_config = make_compilation_config(context,target)
 
-
         passes = tvm.transform.Sequential(
             [
+                transform.InferType(),
                 transform.RemoveUnusedFunctions(),
                 transform.ToBasicBlockNormalForm(),
                 transform.Legalize(),
@@ -158,10 +158,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
                 transform.CanonicalizeCast(),
                 transform.CanonicalizeOps(),
                 transform.InferType(),
-                transform.AlterOpLayout(),
                 transform.FoldConstant(),
-                transform.SplitArgs(-1),
-                transform.FuseOps(),
                 transform.InferType(),
                 transform.Inline(),
                 transform.InferType(),
