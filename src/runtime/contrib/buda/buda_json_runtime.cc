@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <assert.h>
 
 #include "../json/json_node.h"
 #include "../json/json_runtime.h"
@@ -83,14 +84,27 @@ class BudaRuntime : public JSONRuntimeBase {
       const auto* pf = Registry::Get("my_py_packed_func");
       ICHECK(pf != nullptr) << "Cannot find my_py_packed_func";
 
+    //   const auto* pf = Registry::Get("initialize_device_packed_func");
+    //   ICHECK(pf != nullptr) << "Cannot find initialize_device_packed_func";
       // std::vector<py::object> torch_tensors;
 
-      std::vector<TVMValue> values(input_nodes_.size() + 1);
-      std::vector<int> codes(input_nodes_.size() + 1);
+      std::vector<TVMValue> values(input_nodes_.size() * 2 + 1);
+      std::vector<int> codes(input_nodes_.size() * 2 + 1);
       TVMArgsSetter setter(values.data(), codes.data());
 
       size_t i;
       std::vector<Node *> ordered_inputs = graph_->ordered_inputs();
+
+      // Cast to InputNode ptr
+      std::vector<InputNode *> order_input_nodes;
+      for (Node* node_ptr : ordered_inputs) {
+        InputNode* inp_ptr = dynamic_cast<InputNode*>(node_ptr);
+        if (inp_ptr == NULL){
+            assert(("Cannot cast Node * to InputNode *", 0));
+        }
+        order_input_nodes.push_back(inp_ptr);
+      }
+
       for (i = 0; i < input_nodes_.size(); ++i) {
         auto eid = EntryID(input_nodes_[i], 0);
 
@@ -117,14 +131,23 @@ class BudaRuntime : public JSONRuntimeBase {
         
         tt::graphlib::NodeId node_id = std::get<0>(id_to_tensor_.at(eid));
         size_t pos = 0;
-        for (Node *ordered_input : ordered_inputs) {
+        for (InputNode *ordered_input : order_input_nodes) {
+            std::cout << "Node type is " << ordered_input->input_type().c_str() << " with name " << ordered_input->name()<< std::endl;
           if (node_id == ordered_input->id()) {
+            // Set Data
+            std::cout << "Setting input index " << i << " into position " << pos << std::endl; 
+            setter(pos, dl_tensor);
+
+            // Set Type + Name String
+            std::string input_string = ordered_input->input_type() + "|||" + ordered_input->name();
+            // Setter is by reference, need to dynamically allocate
+            char* p = new char[sizeof(input_string)];
+            strcpy(p, input_string.c_str());
+            setter(pos + 1, p);
             break;
           }
-          pos++;
+          pos += 2; // (arui) Hack: Every other entry is a string storing type + Name 
         }
-        std::cout << "Setting input index " << i << " into position " << pos << std::endl; 
-        setter(pos, dl_tensor);
 
         // tt::graphlib::NodeId node_id = std::get<0>(id_to_tensor_.at(eid));
         // Shape shape = graph_->node_by_id(node_id)->shape();
@@ -146,14 +169,15 @@ class BudaRuntime : public JSONRuntimeBase {
       }
       i++;
       // setter(i, static_cast<void *>(graph_));
-      values[i - 1].v_handle = static_cast<void *>(graph_);
-      codes[i - 1] = TVMArgTypeCode::kTVMOpaqueHandle;
+      values[values.size() - 1].v_handle = static_cast<void *>(graph_);
+      codes[codes.size() - 1] = TVMArgTypeCode::kTVMOpaqueHandle;
 
 
 
       TVMRetValue rv;
-      pf->CallPacked(TVMArgs(values.data(), codes.data(), i), &rv);
+      pf->CallPacked(TVMArgs(values.data(), codes.data(), values.size()), &rv);
 
+      // TODO (arui) : Free the pointers passed to TVMArgs
       std::cout << "Returned" << std::endl;
 
       DLTensor *ret_value = static_cast<DLTensor *>(rv);

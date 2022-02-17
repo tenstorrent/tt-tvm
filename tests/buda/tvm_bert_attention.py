@@ -38,8 +38,8 @@ def main():
     tvm_model, tvm_params = tvm.relay.frontend.pytorch.from_pytorch(traced_model, input_list, default_dtype="float32")
     target = "llvm"
     tvm.relay.backend.te_compiler.get().clear()
-    with tvm.transform.PassContext(opt_level=4):
-        tvm_model_opt, tvm_params_opt = tvm.relay.op.contrib.compile_for_buda(tvm_model, target=target, params=tvm_params)
+    # with tvm.transform.PassContext(opt_level=4):
+    tvm_model_opt, tvm_params_opt = tvm.relay.op.contrib.compile_for_buda(tvm_model, target=target, params=tvm_params)
 
 
     # Need graphviz to visualize
