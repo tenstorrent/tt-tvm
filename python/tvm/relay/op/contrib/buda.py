@@ -1,6 +1,6 @@
 import logging
 
-import tvm.ir
+import tvm
 from tvm.ir.transform import PassContext
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name, BuildModule,build_target_by_device_type_map
@@ -10,6 +10,8 @@ from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
+from tvm.relay.dataflow_pattern import *
+
 logger = logging.getLogger("Buda")
 
 def _register_external_op_helper(op_name, supported=True):
@@ -18,16 +20,19 @@ def _register_external_op_helper(op_name, supported=True):
         return supported
     return _func_wrapper
 
-# _register_external_op_helper("nn.dense")
+_register_external_op_helper("transpose")
 _register_external_op_helper("add")
 _register_external_op_helper("subtract")
 _register_external_op_helper("multiply")
+_register_external_op_helper("reshape")
+_register_external_op_helper("nn.batch_matmul")
 
 def dense_to_matmul():
   data = wildcard()
   weight = wildcard()
   weight_t = is_op('transpose')(weight)
-  return is_op('nn.dense')(weight_t, data)
+  return is_op('nn.dense')(data, weight_t)
+
 
 @register_pattern_table("buda")
 def pattern_table():
@@ -35,79 +40,119 @@ def pattern_table():
   buda_patterns = [matmul]
   return buda_patterns
 
-from tvm.relay.dataflow_pattern import *
+
 class DenseWeightTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__()
+        super().__init__(rewrite_once=True)
         self.weight = wildcard()
         act = wildcard()
-        #self.opt_t = weight.optional(lambda x: is_op('transpose')(x))
-        #self.pattern = is_op('nn.dense')(act, self.opt_t)
         self.pattern = is_op('nn.dense')(act, self.weight)
         self.transpose_pattern = is_op('transpose')(wildcard())
 
     def callback(self, pre, post, node_map):
-        # print("match:")
-        # print("PRE", pre)
-        # print("POST", post)
-        # print("NODE_MAP", node_map)
-
-        #t = node_map[self.opt_t][0]
-        #print("Transpose: ", t)
-        # print(type(pre))
-        # print(type(post))
-        if self.transpose_pattern.match(pre.args[0]):
+        # If there's already a transpose, we don't need another one to 
+        # fuse into buda.matmul
+        if self.transpose_pattern.match(pre.args[1]):
             print("has transpose")
             return post
 
-        # Doesn't have transpose, add it
+        # Doesn't have transpose, add two, one to fuse, the other to undo
         print("doesn't have transpose")
-        weight = pre.args[0]
-        act = pre.args[1]
+        act = pre.args[0]
+        weight = pre.args[1]
         wt1 = tvm.relay.transpose(weight)
         wt2 = tvm.relay.transpose(wt1)
-        return tvm.relay.nn.dense(wt2, act)
+        return tvm.relay.nn.dense(act, wt2)
+
+
+class FoldReshapes(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+        self.pattern = is_op('reshape')(self.input_tensor)
+        self.visited_ops = []
+
+    def callback(self, pre, post, node_map):
+        input_shape = node_map[self.input_tensor][0].checked_type.shape
+        output_shape = node_map[self.pattern][0].checked_type.shape
+        
+        assert len(input_shape) <= 4
+
+        superfluous_reshape = False
+        if len(input_shape) > len(output_shape):
+            extra_dims = len(input_shape) - len(output_shape)
+            if all([extra_dim == 1 for extra_dim in input_shape[:extra_dims]]):
+                superfluous_reshape = True
+        elif len(output_shape) > len(input_shape):
+            extra_dims = len(output_shape) - len(input_shape)
+            if all([extra_dim == 1 for extra_dim in output_shape[:extra_dims]]):
+                superfluous_reshape = True
+            
+        if superfluous_reshape:
+            a = pre.args[0]
+            return tvm.relay.reshape(a, newshape=pre.attrs.newshape, not_squeeze_unsqueeze=False)
+
+        return post
+
+
+class ExplicateTranspose(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('nn.batch_matmul')(wildcard(), wildcard())
+
+    def callback(self, pre, post, node_map):
+        transpose_a = pre.attrs.transpose_a
+        transpose_b = pre.attrs.transpose_b
+
+        if not (transpose_a or transpose_b):
+            return post
+
+        a = pre.args[0]
+        ndim = len(pre.args[0].checked_type.shape)
+        axes = list(range(ndim))
+        axes[-2], axes[-1] = axes[-1], axes[-2]
+        if transpose_a:
+            a = tvm.relay.transpose(a, axes=axes)
+        b = pre.args[1]
+        if transpose_b:
+            b = tvm.relay.transpose(b, axes=axes)
+            
+        return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
 def partition_for_buda(mod):
-    seq1 = tvm.transform.Sequential(
-        [
-            # tvm.transform.PrintIR(),
-            transform.CanonicalizeOps(),
-            # tvm.transform.PrintIR(),
-            # transform.InferType(),
-            # tvm.transform.PrintIR(),
-            # transform.SimplifyInference(),
-            # tvm.transform.PrintIR(),
-            # transform.FoldConstant(),
-            # tvm.transform.PrintIR(),
-            # transform.FoldScaleAxis(),
-            # tvm.transform.PrintIR(),
-            # # fold consecutive add ops to simplify pattern `conv2d-bias_add-bn-relu`
-            # transform.SimplifyExpr(),
-            # tvm.transform.PrintIR(),
-            # transform.FoldConstant(),
-            # tvm.transform.PrintIR(),
-        ]
-    )
-    seq2 = tvm.transform.Sequential(
-        [
-            tvm.transform.PrintIR(),
-            transform.MergeComposite(pattern_table()),
-            transform.FoldConstant(),
-            tvm.transform.PrintIR(),
-            transform.AnnotateTarget("buda"),
-            tvm.transform.PrintIR(),
-            transform.MergeCompilerRegions(),
-            tvm.transform.PrintIR(),
-            transform.PartitionGraph(),
-            tvm.transform.PrintIR(),
-            tvm.transform.PrintIR(),
-        ]
-    )
     with tvm.transform.PassContext(opt_level=3):
-        mod = seq1(mod)
+        mod = tvm.transform.Sequential([transform.CanonicalizeOps()])(mod)
+        print("After CanonicalizeOps")
+        print(mod.functions)
         mod["main"] = rewrite(DenseWeightTranspose(), mod["main"])
-        mod = seq2(mod)
+        print("After DenseWeightTranspose")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        print("After InferType")
+        print(mod.functions)
+        mod["main"] = rewrite(ExplicateTranspose(), mod["main"])
+        print("After ExplicateTranspose")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        print("After InferType")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
+        print("After MergeComposite")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
+        print("After FoldConstant")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
+        print("After AnnotateTarget")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
+        print("After MergeCompilerRegions")
+        print(mod.functions)
+        mod = tvm.transform.Sequential([transform.PartitionGraph()])(mod)
+        print("After PartitionGraph")
+        print(mod.functions)
     return mod
 
 
@@ -159,10 +204,14 @@ def compile_for_buda(relay_module, target='llvm', params=None):
                 transform.CanonicalizeOps(),
                 transform.InferType(),
                 transform.FoldConstant(),
+                transform.SplitArgs(-1),
+                # transform.FuseOps(),
                 transform.InferType(),
                 transform.Inline(),
                 transform.InferType(),
                 transform.DecomposeVariance(),
+                transform.FoldConstant(),
+                transform.InferType(),
             ]
         )
 

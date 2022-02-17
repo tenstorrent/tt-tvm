@@ -15,8 +15,8 @@ import pybuda
 class DoubleLinear(nn.Module):
     def __init__(self):
         super().__init__()
-        self.l1 = nn.Linear(32, 32, bias=True)
-        self.l2 = nn.Linear(32, 32, bias=True)
+        self.l1 = nn.Linear(64, 64, bias=True)
+        self.l2 = nn.Linear(64, 64, bias=True)
 
     def forward(self, x1, x2):
         m1 = self.l1(x1)
@@ -24,15 +24,13 @@ class DoubleLinear(nn.Module):
         return m1 + m2
 
 
-shape = (32, 32)
+shape = (128, 64)
 x1 = torch.rand(*shape)
 x2 = torch.rand(*shape)
 torchmod = DoubleLinear()
 traced_model = torch.jit.trace(torchmod, (x1, x2))
 input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
 mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
-print(mod)
-print(params)
 mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
 
@@ -44,7 +42,6 @@ mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target="llvm", params=p
 
 mod = tvm.relay.op.contrib.buda.partition_for_buda(mod)
 # print(mod)
-
 ret = tvm.relay.build_module.build(mod, target="llvm", params=params)
 # print(ret)
 
