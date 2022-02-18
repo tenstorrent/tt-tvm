@@ -81,12 +81,8 @@ class BudaRuntime : public JSONRuntimeBase {
   void Run() override {
       std::cout << "BudaRuntime::Run" << std::endl;
 
-      const auto* pf = Registry::Get("my_py_packed_func");
-      ICHECK(pf != nullptr) << "Cannot find my_py_packed_func";
-
-    //   const auto* pf = Registry::Get("initialize_device_packed_func");
-    //   ICHECK(pf != nullptr) << "Cannot find initialize_device_packed_func";
-      // std::vector<py::object> torch_tensors;
+      const auto* pf = Registry::Get("retrieve_pybuda_graph");
+      ICHECK(pf != nullptr) << "Cannot find retrieve_pybuda_graph";
 
       std::vector<TVMValue> values(input_nodes_.size() * 2 + 1);
       std::vector<int> codes(input_nodes_.size() * 2 + 1);
@@ -289,15 +285,6 @@ class BudaRuntime : public JSONRuntimeBase {
     auto inputs = nodes_[nid].GetInputs();
     ICHECK_EQ(inputs.size(), 1);
     auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
-
-    // std::cout << "Got input node, input shape = ";
-    // for (auto se:input_shape) {
-    //   std::cout << se << ", ";
-    // }
-    // std::cout << "output shape = ";
-    // for (auto se:output_shape) {
-    //   std::cout << se << ", ";
-    // }
 
     bool can_remove = true;
     if (output_shape.size() > input_shape.size()) {
