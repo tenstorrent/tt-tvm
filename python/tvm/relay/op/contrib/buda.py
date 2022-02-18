@@ -224,8 +224,6 @@ def compile_for_buda(relay_module, target='llvm', params=None):
                 transform.CanonicalizeOps(),
                 transform.InferType(),
                 transform.FoldConstant(),
-                transform.SplitArgs(-1),
-                # transform.FuseOps(),
                 transform.InferType(),
                 transform.Inline(),
                 transform.InferType(),

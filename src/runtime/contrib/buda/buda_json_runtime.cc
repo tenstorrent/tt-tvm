@@ -92,20 +92,7 @@ class BudaRuntime : public JSONRuntimeBase {
       std::vector<int> codes(input_nodes_.size() * 2 + 1);
       TVMArgsSetter setter(values.data(), codes.data());
 
-      size_t i;
-      std::vector<Node *> ordered_inputs = graph_->ordered_inputs();
-
-      // Cast to InputNode ptr
-      std::vector<InputNode *> order_input_nodes;
-      for (Node* node_ptr : ordered_inputs) {
-        InputNode* inp_ptr = dynamic_cast<InputNode*>(node_ptr);
-        if (inp_ptr == NULL){
-            assert(("Cannot cast Node * to InputNode *", 0));
-        }
-        order_input_nodes.push_back(inp_ptr);
-      }
-
-      for (i = 0; i < input_nodes_.size(); ++i) {
+      for (size_t i = 0; i < input_nodes_.size(); ++i) {
         auto eid = EntryID(input_nodes_[i], 0);
 
         DLTensor *dl_tensor;
@@ -114,27 +101,16 @@ class BudaRuntime : public JSONRuntimeBase {
         NDArray::CopyFromTo(data_entry_[eid], dl_tensor, NULL);
         
         tt::graphlib::NodeId node_id = std::get<0>(id_to_tensor_.at(eid));
-        size_t pos = 0;
-        for (InputNode *ordered_input : order_input_nodes) {
-            std::cout << "Node type is " << ordered_input->input_type().c_str() << " with name " << ordered_input->name()<< std::endl;
-          if (node_id == ordered_input->id()) {
-            // Set Data
-            std::cout << "Setting input index " << i << " into position " << pos << std::endl; 
-            setter(pos, dl_tensor);
+        // Set Data
+        setter(2*i, dl_tensor);
 
-            // Set Type + Name String
-            std::string input_string = ordered_input->input_type() + "|||" + ordered_input->name();
-            // Setter is by reference, need to dynamically allocate
-            char* p = new char[sizeof(input_string)];
-            strcpy(p, input_string.c_str());
-            setter(pos + 1, p);
-            break;
-          }
-          pos += 2; // (arui) Hack: Every other entry is a string storing type + Name 
-        }
-
+        // Set Type + Name String
+        std::string input_string = graph_->node_by_id(node_id)->as<InputNode>()->input_type() + "|||" + graph_->node_by_id(node_id)->name();
+        // Setter is by reference, need to dynamically allocate
+        char* p = new char[sizeof(input_string)];
+        strcpy(p, input_string.c_str());
+        setter(2*i + 1, p);
       }
-      i++;
       // setter(i, static_cast<void *>(graph_));
       values[values.size() - 1].v_handle = static_cast<void *>(graph_);
       codes[codes.size() - 1] = TVMArgTypeCode::kTVMOpaqueHandle;
@@ -182,6 +158,7 @@ class BudaRuntime : public JSONRuntimeBase {
     std::cout << "BudaRuntime::Build" << std::endl;
     graph_ = new Graph();
 
+    std::vector<tt::graphlib::NodeId> module_inputs;
     for (size_t i = 0; i < input_nodes_.size(); ++i) {
       uint32_t eid = EntryID(input_nodes_[i], 0);
       auto shape = nodes_[eid].GetOpShape()[0];
@@ -200,6 +177,7 @@ class BudaRuntime : public JSONRuntimeBase {
       }
 
       auto node = graph_->add_node(create_node<InputNode>(name, input_type, requires_grad));
+      module_inputs.push_back(node->id());
       
       const Shape buda_shape = MakeBudaShape(shape);
       std::cout << "Node: " << node->id() << " shape: " << buda_shape<< " type: " << input_type << std::endl;
@@ -208,6 +186,7 @@ class BudaRuntime : public JSONRuntimeBase {
       id_to_tensor_.emplace(eid, std::make_tuple(node->id(), name, 0, buda_shape));
     }
 
+    graph_->register_module_inputs(module_inputs);
     for (size_t nid = 0; nid < nodes_.size(); ++nid) {
       std::vector<int> attributes;
       const auto& node = nodes_[nid];
@@ -274,6 +253,7 @@ class BudaRuntime : public JSONRuntimeBase {
       }
     }
 
+    std::vector<tt::graphlib::NodeId> module_outputs;
     for (auto output : outputs_) {
       auto input_id = output.id_;
       // if this node is to be skipped
@@ -284,6 +264,7 @@ class BudaRuntime : public JSONRuntimeBase {
       }
       std::string buda_name = nodes_[input_id].GetOpName() + "_output";
       auto buda_node = graph_->add_node(create_node<OutputNode>(buda_name));
+      module_outputs.push_back(buda_node->id());
       std::cout << "Node: " << buda_node->id() << " type: " << buda_name << std::endl;
       auto shape = nodes_[input_id].GetOpShape()[0];
       const Shape buda_shape = MakeBudaShape(shape);
@@ -294,6 +275,7 @@ class BudaRuntime : public JSONRuntimeBase {
       graph_->add_edge(edge);
 
     }
+    graph_->register_module_outputs(module_outputs);
   }
 
   void PopulateHSliceAttrs(const size_t& nid, std::vector<int> *attributes) {

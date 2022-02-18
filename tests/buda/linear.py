@@ -8,7 +8,7 @@ import tvm.relay as relay
 from ctypes import cast, POINTER
 from pybuda._C import cast_graph, dump_graph
 import pybuda._C.graph as pygraph
-from pybuda import TTDeviceType, TTDevice, TVMModule
+from pybuda import TTDeviceType, TTDevice
 import pybuda
 # shape = (64, 64)
 
