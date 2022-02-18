@@ -9,6 +9,7 @@ from ctypes import cast, POINTER
 from pybuda._C import cast_graph, dump_graph
 import pybuda._C.graph as pygraph
 
+from pybuda_runtime import compile_tvm_for_buda
 
 
 
@@ -37,61 +38,27 @@ class KQ(nn.Module):
         
         return scores
 
-shape = (1, 64, 128)
-hidden_states = torch.rand(*shape)
-torchmod = KQ()
-traced_model = torch.jit.trace(torchmod, (hidden_states))
-input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
-mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
-mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
-print(mod.functions)
 
-target = "llvm"
-
-with tvm.transform.PassContext(opt_level=4):
-    # model_opt, params_opt = tvm.relay.optimize(mod=mod, target=target, params=params)
-    model_opt, params_opt = tvm.relay.op.contrib.buda.compile_for_buda(mod, target=target, params=params)
-
-print(model_opt.functions)
-
-if not tvm.get_global_func("relay.ext.buda", True):
-    print("Buda codegen not available")
-    exit(-2)
-
-mod = tvm.relay.op.contrib.buda.partition_for_buda(model_opt)
-print(mod.functions)
-
-ret = tvm.relay.build_module.build(mod, target="llvm", params=params)
+def run_test():
 
 
-with tvm.transform.PassContext(opt_level=3):
-    func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
+    shape = (1, 64, 128)
+    hidden_states = torch.rand(*shape)
+    torchmod = KQ()
+    traced_model = torch.jit.trace(torchmod, (hidden_states))
+    input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
+    mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
+    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+    print(mod.functions)
+
+    func = compile_tvm_for_buda(mod, params)
+
+    res = func(hidden_states).numpy()
+
+    res_pt = torchmod(hidden_states).detach().numpy()
+
+    print(f"Results correct: {np.allclose(res, res_pt, atol=1e-6)}")
 
 
-@tvm.register_func
-def my_py_packed_func(*args):
-    t = tuple(args)
-    vp = t[-1].value
-    graph = cast_graph(vp)
-
-    inputs = [torch.from_numpy(npt.numpy()) for npt in t[:-1]]
-    for idx, _ in enumerate(inputs):
-        while len(inputs[idx].shape) < 4:
-            inputs[idx] = inputs[idx].unsqueeze(0)
-    
-    inputs = tuple(inputs)
-    
-    res = pygraph.eval(graph, inputs)
-    return tvm.runtime.ndarray.array(res[0].numpy())
-
-# z = np.zeros(32)
-# o = np.ones(32) * 31
-# grid = np.linspace(z, o, 32)
-
-res = func(hidden_states).numpy()
-
-res_pt = torchmod(hidden_states).detach().numpy()
-
-print(f"Results correct: {np.allclose(res, res_pt, atol=1e-6)}")
-
-
+if __name__ == "__main__":
+    run_test()
