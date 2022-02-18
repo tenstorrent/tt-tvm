@@ -103,7 +103,7 @@ class BudaRuntime : public JSONRuntimeBase {
         // Set Type + Name String
         std::string input_string = graph_->node_by_id(node_id)->as<InputNode>()->input_type() + "|||" + graph_->node_by_id(node_id)->name();
         // Setter is by reference, need to dynamically allocate
-        char* p = new char[sizeof(input_string)];
+        char* p = new char[input_string.size()];
         strcpy(p, input_string.c_str());
         setter(2*i + 1, p);
       }
