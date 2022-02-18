@@ -28,17 +28,37 @@ _register_external_op_helper("reshape")
 _register_external_op_helper("nn.batch_matmul")
 
 def dense_to_matmul():
-  data = wildcard()
-  weight = wildcard()
-  weight_t = is_op('transpose')(weight)
-  return is_op('nn.dense')(data, weight_t)
+    data = wildcard()
+    weight = wildcard()
+    weight_t = is_op('transpose')(weight)
+    return is_op('nn.dense')(data, weight_t)
 
+def is_reshape_transpose_hslice(call):
+    t_axes = call.attrs.axes
+    hslice_t_axes = (0, 2, 1, 3)
+    
+    if not (len(t_axes) == 4 and all([hslice_t_axes[i] == t_axes[i] for i in range(4)])):
+        return False
+
+    r_input_shape = call.args[0].type_args[0].shape
+    r_newshape = call.args[0].attrs.newshape
+
+    if not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0] == 1)) and (r_input_shape[-2] == r_newshape[-3]):
+        return False
+
+    return True
+
+def reshape_transpose_to_hslice():
+    act = wildcard()
+    act_r = is_op('reshape')(act)
+    return is_op('transpose')(act_r)
 
 @register_pattern_table("buda")
 def pattern_table():
-  matmul = ("buda.matmul", dense_to_matmul())
-  buda_patterns = [matmul]
-  return buda_patterns
+    matmul = ("buda.matmul", dense_to_matmul())
+    hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
+    buda_patterns = [hslice, matmul]
+    return buda_patterns
 
 
 class DenseWeightTranspose(DFPatternCallback):
@@ -145,14 +165,14 @@ def partition_for_buda(mod):
         print("After FoldConstant")
         print(mod.functions)
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
-        print("After AnnotateTarget")
-        print(mod.functions)
+        # print("After AnnotateTarget")
+        # print(mod.functions)
         mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
-        print("After MergeCompilerRegions")
-        print(mod.functions)
+        # print("After MergeCompilerRegions")
+        # print(mod.functions)
         mod = tvm.transform.Sequential([transform.PartitionGraph()])(mod)
-        print("After PartitionGraph")
-        print(mod.functions)
+        # print("After PartitionGraph")
+        # print(mod.functions)
     return mod
 
 

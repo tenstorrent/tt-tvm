@@ -191,18 +191,18 @@ class BudaRuntime : public JSONRuntimeBase {
       bool requires_grad = false;
       if (std::count(const_idx_.begin(), const_idx_.end(), eid) == 0) {
         input_type = "activations";
-        std::cout << "Creating activations tensor: " << name << std::endl;
+        // std::cout << "Creating activations tensor: " << name << std::endl;
       }
       else {
         requires_grad = true;
         input_type = "parameter";
-        std::cout << "Creating parameter tensor: " << name << std::endl;
+        // std::cout << "Creating parameter tensor: " << name << std::endl;
       }
 
       auto node = graph_->add_node(create_node<InputNode>(name, input_type, requires_grad));
       
       const Shape buda_shape = MakeBudaShape(shape);
-      std::cout << "Tensor shape: " << buda_shape << std::endl;
+      std::cout << "Node: " << node->id() << " shape: " << buda_shape<< " type: " << input_type << std::endl;
       node->set_shape(buda_shape);
       
       id_to_tensor_.emplace(eid, std::make_tuple(node->id(), name, 0, buda_shape));
@@ -225,10 +225,11 @@ class BudaRuntime : public JSONRuntimeBase {
           if (DoSkipReshape(nid, &attributes)) {
             continue; 
           }
-          op_type = "hslice";
-          // std::cout << "Is needed: " << is_needed << std::endl;
         } else if ("transpose" == op_name) {
           op_type = "transpose";
+        } else if ("buda.hslice" == op_name) {
+          op_type = "hslice";
+          PopulateHSliceAttrs(nid, &attributes);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -236,6 +237,7 @@ class BudaRuntime : public JSONRuntimeBase {
         auto shape = nodes_[nid].GetOpShape()[0];
         auto buda_node = graph_->add_node(create_node<OpNode>(buda_name, OpType{.op=op_type, .attr=attributes}));
         const Shape buda_shape = MakeBudaShape(shape);
+        std::cout << "Node: " << buda_node->id() << " shape: " << buda_shape<< " type: " << buda_name << std::endl;
         buda_node->set_shape(buda_shape);
 
         id_to_tensor_.emplace(nid, std::make_tuple(buda_node->id(), buda_name, 0, buda_shape));
@@ -249,9 +251,9 @@ class BudaRuntime : public JSONRuntimeBase {
             ICHECK_EQ(inputs.size(), 1);
             input_id = inputs[0].id_;
           }
-          std::cout << "Add node input: " << nodes_[input_id].GetOpName() << " to op: " << node.GetOpName() << " in position: " << i << std::endl;
           
           Edge edge(std::get<0>(id_to_tensor_.at(input_id)), 0, buda_node->id(), i, EdgeType::kData);
+          std::cout << "Edge from: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << std::endl;
           graph_->add_edge(edge);
           
           //TODO: Better broadcast
@@ -259,10 +261,12 @@ class BudaRuntime : public JSONRuntimeBase {
 
           auto input_shape = std::get<3>(id_to_tensor_.at(input_id)).as_vector();
           for (size_t dim = 0; dim < input_shape.size(); dim++) {
-            if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
-              attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
-              std::cout << "Explicit Broadcasting: " << nodes_[input_id].GetOpName() << " to: " << nodes_[nid].GetOpName() << " dim: " << dim << " port: " << i << std::endl;
-              std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
+            if (op_type == "add") {
+              if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
+                attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
+                // std::cout << "Explicit Broadcasting: " << nodes_[input_id].GetOpName() << " to: " << nodes_[nid].GetOpName() << " dim: " << dim << " port: " << i << std::endl;
+                // std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
+              }
             }
           }
         }
@@ -271,16 +275,31 @@ class BudaRuntime : public JSONRuntimeBase {
     }
 
     for (auto output : outputs_) {
-      std::string buda_name = nodes_[output.id_].GetOpName() + "_output";
+      auto input_id = output.id_;
+      // if this node is to be skipped
+      while (std::get<0>(id_to_tensor_.at(input_id)) == -1) {
+        auto inputs = nodes_[input_id].GetInputs();
+        ICHECK_EQ(inputs.size(), 1);
+        input_id = inputs[0].id_;
+      }
+      std::string buda_name = nodes_[input_id].GetOpName() + "_output";
       auto buda_node = graph_->add_node(create_node<OutputNode>(buda_name));
-      auto shape = nodes_[output.id_].GetOpShape()[0];
+      std::cout << "Node: " << buda_node->id() << " type: " << buda_name << std::endl;
+      auto shape = nodes_[input_id].GetOpShape()[0];
       const Shape buda_shape = MakeBudaShape(shape);
       buda_node->set_shape(buda_shape);
       
-      Edge edge(std::get<0>(id_to_tensor_.at(output.id_)), 0, buda_node->id(), 0, EdgeType::kData);
+      Edge edge(std::get<0>(id_to_tensor_.at(input_id)), 0, buda_node->id(), 0, EdgeType::kData);
+      std::cout << "Edge from: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << 0 << std::endl;
       graph_->add_edge(edge);
 
     }
+  }
+
+  void PopulateHSliceAttrs(const size_t& nid, std::vector<int> *attributes) {
+    auto shape = nodes_[nid].GetOpShape()[0];
+    const Shape buda_shape = MakeBudaShape(shape);
+    attributes->push_back(buda_shape[1]);
   }
 
   bool DoSkipReshape(const size_t& nid, std::vector<int> *attributes) {
@@ -289,14 +308,14 @@ class BudaRuntime : public JSONRuntimeBase {
     ICHECK_EQ(inputs.size(), 1);
     auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
 
-    std::cout << "Got input node, input shape = ";
-    for (auto se:input_shape) {
-      std::cout << se << ", ";
-    }
-    std::cout << "output shape = ";
-    for (auto se:output_shape) {
-      std::cout << se << ", ";
-    }
+    // std::cout << "Got input node, input shape = ";
+    // for (auto se:input_shape) {
+    //   std::cout << se << ", ";
+    // }
+    // std::cout << "output shape = ";
+    // for (auto se:output_shape) {
+    //   std::cout << se << ", ";
+    // }
 
     bool can_remove = true;
     if (output_shape.size() > input_shape.size()) {
@@ -323,14 +342,14 @@ class BudaRuntime : public JSONRuntimeBase {
         }
       }
     }
-    std::cout << " can be removed: " << can_remove << std::endl;
+    // std::cout << " can be removed: " << can_remove << std::endl;
 
     // if we can't remove it, see if it can be replaced w/ a hslice
     if (can_remove) {
       id_to_tensor_.emplace(nid, std::make_tuple(-1, "", 0, Shape()));
     }
     else {
-      std::cout << "Here" << std::endl;
+      // std::cout << "Here" << std::endl;
       auto hdim = output_shape.size() - 2;
       attributes->push_back(output_shape[hdim]);
     }
