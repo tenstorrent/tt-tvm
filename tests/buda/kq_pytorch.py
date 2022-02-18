@@ -43,6 +43,7 @@ torchmod = KQ()
 traced_model = torch.jit.trace(torchmod, (hidden_states))
 input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
 mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
+mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 print(mod.functions)
 
 target = "llvm"
@@ -79,7 +80,7 @@ def my_py_packed_func(*args):
             inputs[idx] = inputs[idx].unsqueeze(0)
     
     inputs = tuple(inputs)
-    import pdb; pdb.set_trace()
+    
     res = pygraph.eval(graph, inputs)
     return tvm.runtime.ndarray.array(res[0].numpy())
 
@@ -88,8 +89,6 @@ def my_py_packed_func(*args):
 # grid = np.linspace(z, o, 32)
 
 res = func(hidden_states).numpy()
-
-import pdb; pdb.set_trace()
 
 res_pt = torchmod(hidden_states).detach().numpy()
 
