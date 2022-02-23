@@ -6,11 +6,10 @@ import tvm
 import tvm.relay as relay
 
 from ctypes import cast, POINTER
-from pybuda._C import cast_graph, dump_graph
 import pybuda._C.graph as pygraph
 
 from pybuda_runtime import compile_tvm_for_buda
-
+import math
 
 
 class KQ(nn.Module):
@@ -34,9 +33,12 @@ class KQ(nn.Module):
         key = self.transpose_for_scores(key)
 
         key_t = key.transpose(-1, -2)
-        scores = torch.matmul(query, key_t)
+        attention_scores = torch.matmul(query, key_t)
         
-        return scores
+        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        
+        attention_probs = nn.Softmax(dim=-1)(attention_scores)
+        return attention_probs
 
 
 def run_test():
@@ -58,7 +60,6 @@ def run_test():
     res_pt = torchmod(hidden_states).detach().numpy()
 
     print(f"Results correct: {np.allclose(res, res_pt, atol=1e-6)}")
-
 
 if __name__ == "__main__":
     run_test()

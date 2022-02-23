@@ -26,6 +26,7 @@ _register_external_op_helper("subtract")
 _register_external_op_helper("multiply")
 _register_external_op_helper("reshape")
 _register_external_op_helper("nn.batch_matmul")
+_register_external_op_helper("nn.softmax")
 
 def dense_to_matmul():
     data = wildcard()
@@ -115,6 +116,19 @@ class FoldReshapes(DFPatternCallback):
         return post
 
 
+class InvertDivide(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.in_a = wildcard()
+        self.in_b = is_constant()
+
+        self.pattern = is_op('divide')(self.in_a, self.in_b)
+
+    def callback(self, pre, post, node_map):
+        one = tvm.relay.const(1.0)
+        multiplicand = tvm.relay.divide(one, pre.args[1])
+        return tvm.relay.multiply(pre.args[0], multiplicand)
+
 class ExplicateTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__()
@@ -142,37 +156,52 @@ class ExplicateTranspose(DFPatternCallback):
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
 def partition_for_buda(mod):
+    print_all = False
     with tvm.transform.PassContext(opt_level=3):
         mod = tvm.transform.Sequential([transform.CanonicalizeOps()])(mod)
-        print("After CanonicalizeOps")
-        print(mod.functions)
+        if print_all:
+            print("After CanonicalizeOps")
+            print(mod.functions)
         mod["main"] = rewrite(DenseWeightTranspose(), mod["main"])
-        print("After DenseWeightTranspose")
-        print(mod.functions)
+        if print_all:
+            print("After DenseWeightTranspose")
+            print(mod.functions)
+        mod["main"] = rewrite(InvertDivide(), mod["main"])
+        if print_all:
+            print("After InvertDivide")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
-        print("After InferType")
-        print(mod.functions)
+        if print_all:
+            print("After InferType")
+            print(mod.functions)
         mod["main"] = rewrite(ExplicateTranspose(), mod["main"])
-        print("After ExplicateTranspose")
-        print(mod.functions)
+        if print_all:
+            print("After ExplicateTranspose")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
-        print("After InferType")
-        print(mod.functions)
+        if print_all:
+            print("After InferType")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
-        print("After MergeComposite")
-        print(mod.functions)
+        if print_all:
+            print("After MergeComposite")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
-        print("After FoldConstant")
-        print(mod.functions)
+        if print_all:
+            print("After FoldConstant")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
-        # print("After AnnotateTarget")
-        # print(mod.functions)
+        if print_all:
+            print("After AnnotateTarget")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
-        # print("After MergeCompilerRegions")
-        # print(mod.functions)
+        if print_all:
+            print("After MergeCompilerRegions")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.PartitionGraph()])(mod)
-        # print("After PartitionGraph")
-        # print(mod.functions)
+        if print_all:
+            print("After PartitionGraph")
+            print(mod.functions)
     return mod
 
 
