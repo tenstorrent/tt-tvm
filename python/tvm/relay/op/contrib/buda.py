@@ -34,17 +34,61 @@ def dense_to_matmul():
     weight_t = is_op('transpose')(weight)
     return is_op('nn.dense')(data, weight_t)
 
-def is_reshape_transpose_hslice(call):
+def is_superfluous_reshape(call):
+    input_shape = call.args[0].checked_type.shape
+    output_shape = call.checked_type.shape
+
+    joint_size = min(len(input_shape), len(output_shape))
+
+    superfluous_reshape = all([input_shape[i] == output_shape[i] for i in range(-1, -1*joint_size - 1, -1)])
+
+    if len(input_shape) > len(output_shape):
+        extra_dims = len(input_shape) - len(output_shape)
+        if all([extra_dim == 1 for extra_dim in input_shape[:extra_dims]]):
+            superfluous_reshape = superfluous_reshape and True
+    elif len(output_shape) > len(input_shape):
+        extra_dims = len(output_shape) - len(input_shape)
+        if all([extra_dim == 1 for extra_dim in output_shape[:extra_dims]]):
+            superfluous_reshape = superfluous_reshape and True
+    
+    return superfluous_reshape
+            
+def is_reshape_hslice(call):
+    r_input_shape = call.args[0].type_args[0].shape
+    r_newshape = call.args[0].checked_type.shape
+
+    if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
+    or not (r_input_shape[-2].value == r_newshape[-3].value) 
+    or is_superfluous_reshape(call)):
+            return False
+
+    return True
+
+def is_transpose_hslice(call):
     t_axes = call.attrs.axes
     hslice_t_axes = (0, 2, 1, 3)
     
     if not (len(t_axes) == 4 and all([hslice_t_axes[i] == t_axes[i] for i in range(4)])):
         return False
 
-    r_input_shape = call.args[0].type_args[0].shape
-    r_newshape = call.args[0].attrs.newshape
+    return True
 
-    if not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0] == 1)) and (r_input_shape[-2] == r_newshape[-3]):
+def is_reshape_transpose_hslice(call):
+    return is_reshape_hslice(call) and is_transpose_hslice(call)
+
+def is_transpose_reshape_hstack(call):
+    r_newshape = call.checked_type.shape
+    r_input_shape = call.type_args[0].shape
+    
+    if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
+    or not (r_input_shape[-3].value == r_newshape[-2].value) 
+    or is_superfluous_reshape(call)):
+            return False
+
+    t_axes = call.args[0].attrs.axes
+    hstack_t_axes = (0, 2, 1, 3)
+    
+    if not (len(t_axes) == 4 and all([hstack_t_axes[i] == t_axes[i] for i in range(4)])):
         return False
 
     return True
@@ -53,12 +97,18 @@ def reshape_transpose_to_hslice():
     act = wildcard()
     act_r = is_op('reshape')(act)
     return is_op('transpose')(act_r)
+    
+def transpose_reshape_to_hstack():
+    act = wildcard()
+    act_t = is_op("transpose")(act)
+    return is_op("reshape")(act_t)
 
 @register_pattern_table("buda")
 def pattern_table():
     matmul = ("buda.matmul", dense_to_matmul())
     hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
-    buda_patterns = [hslice, matmul]
+    hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
+    buda_patterns = [hstack, hslice, matmul]
     return buda_patterns
 
 
@@ -86,34 +136,29 @@ class DenseWeightTranspose(DFPatternCallback):
         return tvm.relay.nn.dense(act, wt2)
 
 
-class FoldReshapes(DFPatternCallback):
+class ExplicateHSliceTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__()
-        self.input_tensor = wildcard()
-        self.pattern = is_op('reshape')(self.input_tensor)
-        self.visited_ops = []
+        super().__init__(rewrite_once=True)
+        act = wildcard()
+        act_r = is_op('reshape')(act)
+        self.pattern = is_op('transpose')(act_r)
 
     def callback(self, pre, post, node_map):
-        input_shape = node_map[self.input_tensor][0].checked_type.shape
-        output_shape = node_map[self.pattern][0].checked_type.shape
+        if is_reshape_transpose_hslice(pre) or not is_reshape_hslice(pre):
+            return post
+
+        t_axes = pre.attrs.axes
+        hslicet_t_taxes = [0, 2, 3, 1]
         
-        assert len(input_shape) <= 4
+        if not (len(t_axes) == 4 and all([hslicet_t_taxes[i] == t_axes[i] for i in range(4)])):
+            return post
 
-        superfluous_reshape = False
-        if len(input_shape) > len(output_shape):
-            extra_dims = len(input_shape) - len(output_shape)
-            if all([extra_dim == 1 for extra_dim in input_shape[:extra_dims]]):
-                superfluous_reshape = True
-        elif len(output_shape) > len(input_shape):
-            extra_dims = len(output_shape) - len(input_shape)
-            if all([extra_dim == 1 for extra_dim in output_shape[:extra_dims]]):
-                superfluous_reshape = True
-            
-        if superfluous_reshape:
-            a = pre.args[0]
-            return tvm.relay.reshape(a, newshape=pre.attrs.newshape, not_squeeze_unsqueeze=False)
+        act = pre.args[0].args[0]
+        r = tvm.relay.reshape(act, newshape=pre.args[0].attrs.newshape)
+        rt = tvm.relay.transpose(r, axes=[0, 2, 1, 3])
+        rtt = tvm.relay.transpose(rt, axes=[0, 1, 3, 2])
 
-        return post
+        return rtt
 
 
 class InvertDivide(DFPatternCallback):
@@ -156,8 +201,11 @@ class ExplicateTranspose(DFPatternCallback):
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
 def partition_for_buda(mod):
-    print_all = False
+    print_all = True
     with tvm.transform.PassContext(opt_level=3):
+        if print_all:
+            print("At Entry")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.CanonicalizeOps()])(mod)
         if print_all:
             print("After CanonicalizeOps")
@@ -177,6 +225,10 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(ExplicateTranspose(), mod["main"])
         if print_all:
             print("After ExplicateTranspose")
+            print(mod.functions)
+        mod["main"] = rewrite(ExplicateHSliceTranspose(), mod["main"])
+        if print_all:
+            print("After ExplicateHSliceTranspose")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         if print_all:
@@ -226,7 +278,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
     else:
         tophub_context = tvm.autotvm.utils.EmptyContext()
 
-
+    print_all = False
     with tophub_context, tvm.transform.PassContext(opt_level=5):
         bld_mod = BuildModule()
         if params:
@@ -234,34 +286,125 @@ def compile_for_buda(relay_module, target='llvm', params=None):
         context = PassContext().current()
         compiler_config = make_compilation_config(context,target)
 
-        passes = tvm.transform.Sequential(
-            [
-                transform.InferType(),
-                transform.RemoveUnusedFunctions(),
-                transform.ToBasicBlockNormalForm(),
-                transform.Legalize(),
-                transform.SimplifyInference(),
-                transform.DynamicToStatic(),
-                transform.EliminateCommonSubexpr(),
-                transform.SimplifyExpr(),
-                transform.CombineParallelConv2D(3),
-                transform.CombineParallelDense(3),
-                transform.CombineParallelBatchMatmul(3),
-                transform.FoldConstant(),
-                transform.FoldScaleAxis(),
-                transform.CanonicalizeCast(),
-                transform.CanonicalizeOps(),
-                transform.InferType(),
-                transform.FoldConstant(),
-                transform.InferType(),
-                transform.Inline(),
-                transform.InferType(),
-                transform.DecomposeVariance(),
-                transform.FoldConstant(),
-                transform.InferType(),
-            ]
-        )
+        if print_all:
+            print("Before Compiling")
+            print(relay_module.functions)
 
-        compiled_relay_module = passes(relay_module)
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.RemoveUnusedFunctions()])(relay_module)
+        if print_all:
+            print("After RemoveUnusedFunctions")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.ToBasicBlockNormalForm()])(relay_module)
+        if print_all:
+            print("After ToBasicBlockNormalForm")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.Legalize()])(relay_module)
+        if print_all:
+            print("After Legalize")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.SimplifyInference()])(relay_module)
+        if print_all:
+            print("After SimplifyInference")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.DynamicToStatic()])(relay_module)
+        if print_all:
+            print("After DynamicToStatic")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr()])(relay_module)
+        if print_all:
+            print("After EliminateCommonSubexpr")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.SimplifyExpr()])(relay_module)
+        if print_all:
+            print("After SimplifyExpr")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.CombineParallelConv2D(3)])(relay_module)
+        if print_all:
+            print("After CombineParallelConv2D")
+            print(relay_module.functions)
+
+        # relay_module = tvm.transform.Sequential([transform.CombineParallelDense(3)])(relay_module)
+        # if print_all:
+        #     print("After CombineParallelDense")
+        #     print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.CombineParallelBatchMatmul(3)])(relay_module)
+        if print_all:
+            print("After CombineParallelBatchMatmul")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+        if print_all:
+            print("After FoldConstant")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
+        if print_all:
+            print("After FoldScaleAxis")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
+        if print_all:
+            print("After CanonicalizeCast")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
+        if print_all:
+            print("After CanonicalizeOps")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+        if print_all:
+            print("After FoldConstant")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.Inline()])(relay_module)
+        if print_all:
+            print("After Inline")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
+        if print_all:
+            print("After DecomposeVariance")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+        if print_all:
+            print("After FoldConstant")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        compiled_relay_module = relay_module
 
     return compiled_relay_module, params
