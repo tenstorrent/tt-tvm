@@ -2,9 +2,10 @@ import torch
 import tvm
 import tvm.relay
 
-# from visualize_tvm import visualize
+import numpy as np
 
 from transformers import BertModel, BertTokenizer
+from pybuda_runtime import compile_tvm_for_buda
 
 def main():
     enc = BertTokenizer.from_pretrained("bert-base-uncased")
@@ -29,43 +30,32 @@ def main():
     for p in model.parameters():
         p.requires_grad_(False)
 
-    hidden_states = model.embeddings(tokens_tensor)
-    bert_layer = model.encoder.layer[0]
+    # hidden_states = model.embeddings(tokens_tensor)
+    shape = (1, 64, 128)
+    hidden_states = torch.rand(*shape)
 
-    traced_model = torch.jit.trace(bert_layer.attention, hidden_states)
+    torchmod = model.encoder.layer[0].attention.self
+
+    traced_model = torch.jit.trace(torchmod, hidden_states)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
 
-    tvm_model, tvm_params = tvm.relay.frontend.pytorch.from_pytorch(traced_model, input_list, default_dtype="float32")
-    target = "llvm"
-    tvm.relay.backend.te_compiler.get().clear()
-    # with tvm.transform.PassContext(opt_level=4):
-    tvm_model_opt, tvm_params_opt = tvm.relay.op.contrib.compile_for_buda(tvm_model, target=target, params=tvm_params)
+    mod, params = tvm.relay.frontend.pytorch.from_pytorch(traced_model, input_list)
+    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
+    func = compile_tvm_for_buda(mod, params)
 
-    # # Need graphviz to visualize
-    # viz = visualize(tvm_model["main"])
-    # viz.save()
+    res = func(hidden_states)
+    if isinstance(res, (list, tuple)):
+        res = res[0]
+    res = res.numpy()
 
-    # tvm.relay.backend.te_compiler.get().clear()
-    # with tvm.transform.PassContext(opt_level=4):
-    #     tvm_model_opt, tvm_params_opt = tvm.relay.optimize(mod=tvm_model, target=target, params=tvm_params)
-        # graph, lib, params = tvm.relay.build(tvm_model,
-        #                              target=target,
-        #                              params=tvm_params)
+    res_pt = torchmod(hidden_states)
+    if isinstance(res_pt, (list, tuple)):
+        res_pt = res_pt[0]
 
-    # viz_opt = visualize(tvm_model_opt["main"])
-    # viz_opt.filename='Digraph_opt.gv'
-    # viz_opt.save()
-    # dev = tvm.cpu()
-    # module = tvm.contrib.graph_executor.create(graph, lib, dev)
+    res_pt = res_pt.detach().numpy()
 
-    # hs_a = tvm.nd.array(hidden_states.numpy(), dev)
-    # module.set_input("hidden_states", hs_a)
-    # module.set_input(**params)
-
-    # module.run()
-
-    # output = module.get_output(0)
+    print(f"Results correct: {np.allclose(res, res_pt, atol=1e-6)}")
 
 if __name__ == "__main__":
     main()

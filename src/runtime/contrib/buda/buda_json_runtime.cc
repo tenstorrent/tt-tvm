@@ -206,11 +206,16 @@ class BudaRuntime : public JSONRuntimeBase {
         } else if ("transpose" == op_name) {
           op_type = "transpose";
         } else if ("nn.softmax" == op_name) {
-          ExpandCompoundOps(nid);          
+          std::string axis = node.GetAttr<std::vector<std::string>>("axis")[0];
+          attributes.push_back(std::stoi(axis));
+          ExpandCompoundOps(nid, &attributes);          
           continue; 
         } else if ("buda.hslice" == op_name) {
           op_type = "hslice";
           PopulateHSliceAttrs(nid, &attributes);
+        } else if ("buda.hstack" == op_name) {
+          op_type = "hstack";
+          PopulateHStackAttrs(nid, &attributes);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -286,23 +291,42 @@ class BudaRuntime : public JSONRuntimeBase {
     attributes->push_back(buda_shape[1]);
   }
 
-  void ExpandCompoundOps(const size_t& nid) {
+  void PopulateHStackAttrs(const size_t& nid, std::vector<int> *attributes) {
+    auto inputs = nodes_[nid].GetInputs();
+    ICHECK_EQ(inputs.size(), 1) << "HStack can only have one input";
+    
+    auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
+    const Shape buda_shape = MakeBudaShape(input_shape);
+    attributes->push_back(buda_shape[1]);
+  }
+
+  void ExpandCompoundOps(const size_t& nid, std::vector<int> *attributes) {
     const auto* expand_compound_ops = Registry::Get("expand_compound_ops");
     ICHECK(expand_compound_ops != nullptr) << "Cannot find expand_compound_ops";
 
     auto inputs = nodes_[nid].GetInputs();
 
-    std::vector<TVMValue> values(inputs.size() * 4 + 1);
-    std::vector<int> codes(input_nodes_.size() * 4 + 1);
+    // arguments are passed as follows:
+    // num_inputs, input0, input1, ..., num_attributes, attribute0, attribute1, ..., op_name
+    size_t num_elements = inputs.size() * 4 + attributes->size() + 3;
+
+    std::vector<TVMValue> values(num_elements);
+    std::vector<int> codes(num_elements);
     TVMArgsSetter setter(values.data(), codes.data());
     int i = 0;
 
+    setter(i++, inputs.size());
     for (auto input : inputs) {
         auto shape = nodes_[input.id_].GetOpShape()[0];
         auto buda_shape = MakeBudaShape(shape).as_vector();
         for (auto elem : buda_shape) {
           setter(i++, elem);
         }
+    }
+
+    setter(i++, attributes->size());
+    for (int attribute : *attributes) {
+      setter(i++, attribute);
     }
 
     setter(i++, nodes_[nid].GetOpName());
@@ -420,6 +444,8 @@ class BudaRuntime : public JSONRuntimeBase {
       auto hdim = output_shape.size() - 2;
       attributes->push_back(output_shape[hdim]);
     }
+    ICHECK_EQ(can_remove, true)
+        << "Reshape not supported at this time.";
     return can_remove;
   }
 };

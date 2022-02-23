@@ -86,24 +86,28 @@ def retrieve_pybuda_graph(*args):
 
 
 class SubGraph(PyBudaModule):
-    def __init__(self, fn_name):
+    def __init__(self, fn_name, attributes):
         super().__init__("subgraph")
         self.fn_name = fn_name
+        self.attributes = attributes
 
     def forward(self, *act):
-        #TODO: multiple inputs
         if self.fn_name == "nn.softmax":
-            return nn.Softmax("softmax", act[0], dim=-1)
+            return nn.Softmax("softmax", act[0], dim=self.attributes[0])
 
-#TODO: Get dim from graph. 
+
 @tvm.register_func
 def expand_compound_ops(*args):
     print("In expand_compound_ops")
-
     t = tuple(args)
-    num_inptus = (len(t) - 1) // 4
+    num_inptus = t[0]
+    inputs = t[1 : t[0] * 4 + 1]
 
-    mod = SubGraph(t[-1])
+    num_attributes = t[t[0] * 4 + 1]
+    attributes = t[t[0] * 4 + 2 : -1]
+
+    fn_name = t[-1]
+    mod = SubGraph(fn_name=fn_name, attributes=attributes)
 
     tt0 = TTDevice("tt0", devtype=TTDeviceType.Golden)
     tt0.place_module(mod)
@@ -115,8 +119,6 @@ def expand_compound_ops(*args):
     
     acts = tuple(acts)
     graph, _ = tt0.generate_graph(*acts, return_intermediate=False)
-    graph.get_node_name(17)
     vp = c_void_p(cast_graph_to_c_void_p(graph))
-    print(f"Got value: {hex(vp.value)}")
 
     return vp
