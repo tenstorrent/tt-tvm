@@ -492,6 +492,24 @@ inline Tensor fast_erf(const Tensor& x, std::string name = "T_fast_erf",
   }
 }
 
+
+/*!
+ * \brief Creates an operation that returns the reciprocal of a given tensor
+ *
+ * \param x The input tensor
+ * \param name The name of the operation
+ * \param tag The tag to mark the operation
+ *
+ * \return A Tensor whose op member is the reciprocal operation
+ */
+inline Tensor reciprocal(const Tensor& x, std::string name = "T_reciprocal",
+                       std::string tag = kElementWise) {
+  PrimExpr one = make_const(x->dtype, 1);
+  return compute(
+      x->shape, [&](const Array<Var>& i) { return one/x(i); }, name, tag);
+}
+
+
 }  // namespace topi
 }  // namespace tvm
 #endif  // TVM_TOPI_ELEMWISE_H_

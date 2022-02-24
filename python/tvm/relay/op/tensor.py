@@ -337,6 +337,26 @@ def rsqrt(data):
     return _make.rsqrt(data)
 
 
+def reciprocal(data):
+    """Compute elementwise reciprocal of data.
+
+    .. math::
+
+      1/(x)
+
+    Parameters
+    ----------
+    data : relay.Expr
+        The input data
+
+    Returns
+    -------
+    result : relay.Expr
+        The computed result.
+    """
+    return _make.reciprocal(data)
+
+
 def sigmoid(data):
     """Compute elementwise sigmoid of data.
 

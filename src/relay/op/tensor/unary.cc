@@ -524,5 +524,17 @@ RELAY_REGISTER_UNARY_OP("isinf")
     .add_type_rel("IdentityCompRel", IdentityCompRel)
     .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::isinf));
 
+RELAY_REGISTER_UNARY_OP("reciprocal")
+    .describe(R"code(Returns the reciprocal of input array, computed element-wise.
+
+.. math::
+   1/(x)
+
+)code" TVM_ADD_FILELINE)
+    .set_support_level(3)
+    .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::reciprocal));
+
+
+
 }  // namespace relay
 }  // namespace tvm
