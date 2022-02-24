@@ -34,7 +34,7 @@ def main():
     shape = (1, 64, 128)
     hidden_states = torch.rand(*shape)
 
-    torchmod = model.encoder.layer[0].attention
+    torchmod = model.encoder.layer[0].attention.self
 
     traced_model = torch.jit.trace(torchmod, hidden_states)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]

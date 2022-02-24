@@ -10,6 +10,8 @@ from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
+import numpy as np
+
 from tvm.relay.dataflow_pattern import *
 
 logger = logging.getLogger("Buda")
@@ -25,8 +27,12 @@ _register_external_op_helper("add")
 _register_external_op_helper("subtract")
 _register_external_op_helper("multiply")
 _register_external_op_helper("reshape")
+_register_external_op_helper("mean")
 _register_external_op_helper("nn.batch_matmul")
 _register_external_op_helper("nn.softmax")
+_register_external_op_helper("sqrt")
+_register_external_op_helper("reciprocal")
+
 
 def dense_to_matmul():
     data = wildcard()
@@ -77,19 +83,20 @@ def is_reshape_transpose_hslice(call):
     return is_reshape_hslice(call) and is_transpose_hslice(call)
 
 def is_transpose_reshape_hstack(call):
-    r_newshape = call.checked_type.shape
-    r_input_shape = call.type_args[0].shape
-    
-    if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
-    or not (r_input_shape[-3].value == r_newshape[-2].value) 
-    or is_superfluous_reshape(call)):
-            return False
-
     t_axes = call.args[0].attrs.axes
     hstack_t_axes = (0, 2, 1, 3)
     
     if not (len(t_axes) == 4 and all([hstack_t_axes[i] == t_axes[i] for i in range(4)])):
         return False
+
+    r_newshape = call.checked_type.shape
+    r_input_shape = call.type_args[0].shape
+    
+    if (not len(r_newshape) == 2
+    or not all([dim == 1 for dim in r_newshape[:-2]])
+    or not (r_input_shape[-3].value == r_newshape[-2].value)
+    or is_superfluous_reshape(call)):
+            return False
 
     return True
 
@@ -123,14 +130,14 @@ class DenseWeightTranspose(DFPatternCallback):
     def callback(self, pre, post, node_map):
         # If there's already a transpose, we don't need another one to 
         # fuse into buda.matmul
-        if self.transpose_pattern.match(pre.args[1]):
+        if self.transpose_pattern.match(post.args[1]):
             print("has transpose")
             return post
 
         # Doesn't have transpose, add two, one to fuse, the other to undo
         print("doesn't have transpose")
-        act = pre.args[0]
-        weight = pre.args[1]
+        act = post.args[0]
+        weight = post.args[1]
         wt1 = tvm.relay.transpose(weight)
         wt2 = tvm.relay.transpose(wt1)
         return tvm.relay.nn.dense(act, wt2)
@@ -144,17 +151,17 @@ class ExplicateHSliceTranspose(DFPatternCallback):
         self.pattern = is_op('transpose')(act_r)
 
     def callback(self, pre, post, node_map):
-        if is_reshape_transpose_hslice(pre) or not is_reshape_hslice(pre):
+        if is_reshape_transpose_hslice(post) or not is_reshape_hslice(post):
             return post
 
-        t_axes = pre.attrs.axes
+        t_axes = post.attrs.axes
         hslicet_t_taxes = [0, 2, 3, 1]
         
         if not (len(t_axes) == 4 and all([hslicet_t_taxes[i] == t_axes[i] for i in range(4)])):
             return post
 
-        act = pre.args[0].args[0]
-        r = tvm.relay.reshape(act, newshape=pre.args[0].attrs.newshape)
+        act = post.args[0].args[0]
+        r = tvm.relay.reshape(act, newshape=post.args[0].attrs.newshape)
         rt = tvm.relay.transpose(r, axes=[0, 2, 1, 3])
         rtt = tvm.relay.transpose(rt, axes=[0, 1, 3, 2])
 
@@ -165,14 +172,14 @@ class InvertDivide(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.in_a = wildcard()
-        self.in_b = is_constant()
+        self.in_b = wildcard()
 
         self.pattern = is_op('divide')(self.in_a, self.in_b)
 
     def callback(self, pre, post, node_map):
-        one = tvm.relay.const(1.0)
-        multiplicand = tvm.relay.divide(one, pre.args[1])
-        return tvm.relay.multiply(pre.args[0], multiplicand)
+        rep = tvm.relay.reciprocal(post.args[1])
+        return tvm.relay.multiply(post.args[0], rep)
+
 
 class ExplicateTranspose(DFPatternCallback):
     def __init__(self):
@@ -182,19 +189,19 @@ class ExplicateTranspose(DFPatternCallback):
         self.pattern = is_op('nn.batch_matmul')(wildcard(), wildcard())
 
     def callback(self, pre, post, node_map):
-        transpose_a = pre.attrs.transpose_a
-        transpose_b = pre.attrs.transpose_b
+        transpose_a = post.attrs.transpose_a
+        transpose_b = post.attrs.transpose_b
 
         if not (transpose_a or transpose_b):
             return post
 
-        a = pre.args[0]
-        ndim = len(pre.args[0].checked_type.shape)
+        a = post.args[0]
+        ndim = len(post.args[0].checked_type.shape)
         axes = list(range(ndim))
         axes[-2], axes[-1] = axes[-1], axes[-2]
         if transpose_a:
             a = tvm.relay.transpose(a, axes=axes)
-        b = pre.args[1]
+        b = post.args[1]
         if transpose_b:
             b = tvm.relay.transpose(b, axes=axes)
             

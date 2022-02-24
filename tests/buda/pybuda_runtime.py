@@ -26,11 +26,6 @@ def compile_tvm_for_buda(mod, params):
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
     
-    # device = tvm.runtime.ndarray.device(str(target), 0)
-    # mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
-
-    # gmodule = graph_executor.GraphModule(executor_factory["default"](device))
-
     with tvm.transform.PassContext(opt_level=5):
         func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 

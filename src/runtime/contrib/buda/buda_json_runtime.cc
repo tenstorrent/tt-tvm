@@ -195,6 +195,12 @@ class BudaRuntime : public JSONRuntimeBase {
           op_type = "add";
         } else if ("multiply" == op_name) {
           op_type = "multiply";
+        } else if ("subtract" == op_name) {
+          op_type = "subtract";
+        } else if ("sqrt" == op_name) {
+          op_type = "sqrt";
+        } else if ("reciprocal" == op_name) {
+          op_type = "reciprocal";
         } else if ("buda.matmul" == op_name) {
           op_type = "matmul";
         } else if ("nn.batch_matmul" == op_name) {
@@ -216,6 +222,9 @@ class BudaRuntime : public JSONRuntimeBase {
         } else if ("buda.hstack" == op_name) {
           op_type = "hstack";
           PopulateHStackAttrs(nid, &attributes);
+        } else if ("mean" == op_name) {
+          op_type = "reduce_avg";
+          PopulateReduceAttrs(nid, &attributes);
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
@@ -250,7 +259,7 @@ class BudaRuntime : public JSONRuntimeBase {
             if (op_type == "add") {
               if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
                 attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
-                // std::cout << "Explicit Broadcasting: " << nodes_[input_id].GetOpName() << " to: " << nodes_[nid].GetOpName() << " dim: " << dim << " port: " << i << std::endl;
+                // std::cout << "Broadcasting: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << " on dim: " << dim << std::endl;
                 // std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
               }
             }
@@ -298,6 +307,11 @@ class BudaRuntime : public JSONRuntimeBase {
     auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
     const Shape buda_shape = MakeBudaShape(input_shape);
     attributes->push_back(buda_shape[1]);
+  }
+
+  void PopulateReduceAttrs(const size_t& nid, std::vector<int> *attributes) {
+    std::string axis = nodes_[nid].GetAttr<std::vector<std::string>>("axis")[0];
+    attributes->push_back(std::stoi(axis));
   }
 
   void ExpandCompoundOps(const size_t& nid, std::vector<int> *attributes) {
