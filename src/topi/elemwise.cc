@@ -155,5 +155,10 @@ TVM_REGISTER_GLOBAL("topi.bitwise_not").set_body([](TVMArgs args, TVMRetValue* r
   *rv = bitwise_not(args[0]);
 });
 
+TVM_REGISTER_GLOBAL("topi.reciprocal").set_body([](TVMArgs args, TVMRetValue* rv) {
+  *rv = reciprocal(args[0]);
+});
+
+
 }  // namespace topi
 }  // namespace tvm

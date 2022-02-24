@@ -559,6 +559,22 @@ def rsqrt(x):
 
 
 @tvm.te.tag_scope(tag=tag.ELEMWISE)
+def reciprocal(x):
+    """Take reciprocal of input x.
+
+    Parameters
+    ----------
+    x : tvm.te.Tensor
+        Input argument.
+
+    Returns
+    -------
+    y : tvm.te.Tensor
+        The result.
+    """
+    return te.compute(x.shape, lambda *i: te.reciprocal(x(*i)))
+
+@tvm.te.tag_scope(tag=tag.ELEMWISE)
 def sigmoid(x):
     """Take sigmoid tanh of input x.
 
