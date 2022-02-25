@@ -10,8 +10,7 @@ from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
-import numpy as np
-
+import math
 from tvm.relay.dataflow_pattern import *
 
 logger = logging.getLogger("Buda")
@@ -32,6 +31,7 @@ _register_external_op_helper("nn.batch_matmul")
 _register_external_op_helper("nn.softmax")
 _register_external_op_helper("sqrt")
 _register_external_op_helper("reciprocal")
+_register_external_op_helper("gelu")
 
 
 def dense_to_matmul():
@@ -117,6 +117,29 @@ def pattern_table():
     hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
     buda_patterns = [hstack, hslice, matmul]
     return buda_patterns
+
+
+class ReconstructGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        act = wildcard()
+        times_root_two = is_op("multiply")(act, is_constant())
+        erf = is_op("erf")(times_root_two)
+        times_half = is_op("multiply")(erf, is_constant())
+        add = is_op("add")(is_constant(), times_half)
+        gelu = is_op("multiply")(act, add)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        half_added = math.isclose(post.args[1].args[0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(post.args[1].args[1].args[1].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        root_two_multiplied = math.isclose(post.args[1].args[1].args[0].args[0].args[1].data.numpy(), 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        
+        if not (half_added and half_multiplied and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(post.args[0])
 
 
 class DenseWeightTranspose(DFPatternCallback):
@@ -236,6 +259,10 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(ExplicateHSliceTranspose(), mod["main"])
         if print_all:
             print("After ExplicateHSliceTranspose")
+            print(mod.functions)
+        mod["main"] = rewrite(ReconstructGelu(), mod["main"])
+        if print_all:
+            print("After ReconstructGelu")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         if print_all:

@@ -225,6 +225,8 @@ class BudaRuntime : public JSONRuntimeBase {
         } else if ("mean" == op_name) {
           op_type = "reduce_avg";
           PopulateReduceAttrs(nid, &attributes);
+        } else if ("gelu" == op_name) {
+          op_type = "gelu";
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
