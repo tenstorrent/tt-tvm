@@ -357,6 +357,26 @@ def reciprocal(data):
     return _make.reciprocal(data)
 
 
+def gelu(data):
+    """Compute elementwise gelu of data.
+
+    .. math::
+
+      GELU(x)
+
+    Parameters
+    ----------
+    data : relay.Expr
+        The input data
+
+    Returns
+    -------
+    result : relay.Expr
+        The computed result.
+    """
+    return _make.gelu(data)
+
+
 def sigmoid(data):
     """Compute elementwise sigmoid of data.
 

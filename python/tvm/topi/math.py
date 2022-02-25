@@ -573,6 +573,24 @@ def reciprocal(x):
     """
     return te.compute(x.shape, lambda *i: te.reciprocal(x(*i)))
 
+
+@tvm.te.tag_scope(tag=tag.ELEMWISE)
+def gelu(x):
+    """Take gelu of input x.
+
+    Parameters
+    ----------
+    x : tvm.te.Tensor
+        Input argument.
+
+    Returns
+    -------
+    y : tvm.te.Tensor
+        The result.
+    """
+    return te.compute(x.shape, lambda *i: te.gelu(x(*i)))
+
+
 @tvm.te.tag_scope(tag=tag.ELEMWISE)
 def sigmoid(x):
     """Take sigmoid tanh of input x.

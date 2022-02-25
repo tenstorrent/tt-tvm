@@ -534,6 +534,16 @@ RELAY_REGISTER_UNARY_OP("reciprocal")
     .set_support_level(3)
     .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::reciprocal));
 
+RELAY_REGISTER_UNARY_OP("gelu")
+    .describe(R"code(Returns the gelu activation of input array, computed element-wise.
+
+.. math::
+   GELU(x)
+
+)code" TVM_ADD_FILELINE)
+    .set_support_level(3)
+    .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::reciprocal));
+
 
 
 }  // namespace relay
