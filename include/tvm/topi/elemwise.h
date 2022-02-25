@@ -510,6 +510,26 @@ inline Tensor reciprocal(const Tensor& x, std::string name = "T_reciprocal",
 }
 
 
+/*!
+ * \brief Creates an operation that returns the gelu of a given tensor
+ *
+ * \param x The input tensor
+ * \param name The name of the operation
+ * \param tag The tag to mark the operation
+ *
+ * \return A Tensor whose op member is the gelu operation
+ */
+inline Tensor gelu(const Tensor& x, std::string name = "T_gelu",
+                       std::string tag = kElementWise) {
+  PrimExpr one_half = make_const(x->dtype, 0.5);
+  PrimExpr one_over_root_two = make_const(x->dtype, 0.707107);
+  auto x_over_root_2 = compute(x->shape, [&](const Array<Var>& i) { return x(i) * one_over_root_two; }, name, tag);
+  auto erf = fast_erf(x_over_root_2);
+  auto half = compute(x->shape, [&](const Array<Var>& i) { return (erf(i) * one_half) + one_half; }, name, tag);
+  return compute(x->shape, [&](const Array<Var>& i) { return half(i) * x(i); }, name, tag);
+}
+
+
 }  // namespace topi
 }  // namespace tvm
 #endif  // TVM_TOPI_ELEMWISE_H_
