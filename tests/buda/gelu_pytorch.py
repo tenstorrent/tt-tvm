@@ -13,19 +13,16 @@ def run_test():
     class DoubleLinear(nn.Module):
         def __init__(self):
             super().__init__()
-            self.layernorm = nn.LayerNorm(128, eps=0)
-            self.linear = nn.Linear(128, 128, bias=True)
 
         def forward(self, x1):
-            out = self.layernorm(x1)
+            out = nn.functional.gelu(x1)
             return out
 
 
     shape = (64, 128)
     x1 = torch.rand(*shape)
-    x2 = torch.rand(*shape)
     torchmod = DoubleLinear()
-    traced_model = torch.jit.trace(torchmod, (x1))
+    traced_model = torch.jit.trace(torchmod, x1)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))

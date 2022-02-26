@@ -101,7 +101,7 @@ class BudaRuntime : public JSONRuntimeBase {
         setter(2*i, dl_tensor);
 
         // Set Type + Name String
-        std::string input_string = graph_->node_by_id(node_id)->as<InputNode>()->input_type() + "|||" + graph_->node_by_id(node_id)->name();
+        std::string input_string = graph_->node_by_id(node_id)->as<InputNode>()->input_type_string() + "|||" + graph_->node_by_id(node_id)->name();
         // Setter is by reference, need to dynamically allocate
         char* p = new char[input_string.size()];
 
@@ -161,15 +161,15 @@ class BudaRuntime : public JSONRuntimeBase {
       auto shape = nodes_[eid].GetOpShape()[0];
       auto name = nodes_[eid].GetOpName();
 
-      std::string input_type;
+      InputNodeType input_type;
       bool requires_grad = false;
       if (std::count(const_idx_.begin(), const_idx_.end(), eid) == 0) {
-        input_type = "activations";
+        input_type = InputNodeType::Activation;
         // std::cout << "Creating activations tensor: " << name << std::endl;
       }
       else {
         requires_grad = true;
-        input_type = "parameter";
+        input_type = InputNodeType::Parameter;
         // std::cout << "Creating parameter tensor: " << name << std::endl;
       }
 
@@ -214,6 +214,13 @@ class BudaRuntime : public JSONRuntimeBase {
         } else if ("nn.softmax" == op_name) {
           std::string axis = node.GetAttr<std::vector<std::string>>("axis")[0];
           attributes.push_back(std::stoi(axis));
+          ExpandCompoundOps(nid, &attributes);          
+          continue; 
+        } else if ("nn.layer_norm" == op_name) {
+          std::string axis = node.GetAttr<std::vector<std::string>>("axis")[0];
+          attributes.push_back(std::stoi(axis));
+          std::string epsilon = node.GetAttr<std::vector<std::string>>("epsilon")[0];
+          attributes.push_back(std::stoi(epsilon));
           ExpandCompoundOps(nid, &attributes);          
           continue; 
         } else if ("buda.hslice" == op_name) {
@@ -353,20 +360,23 @@ class BudaRuntime : public JSONRuntimeBase {
     Graph* subgraph; 
 
     subgraph = reinterpret_cast<Graph *>((void *)rv);
-    bool input_edge_set = false;
 
-    std::map <uint32_t, uint32_t> subgraph_to_graph_node_id;
+    std::map <NodeId, NodeId> subgraph_to_graph_node_id;
 
-    Node *buda_node;
-    std::string buda_name;
-    Shape buda_shape;
+    auto node_inputs = nodes_[nid].GetInputs();
+    std::vector<Node *> subgraph_inputs = subgraph->ordered_module_inputs();
+    ICHECK_EQ(node_inputs.size(), subgraph_inputs.size()) << "Number of inputs does not match, something went wrong!";
+
+    std::vector<Node *> subgraph_outputs = subgraph->ordered_module_outputs();
 
     std::cout << "Got subgraph with num nodes: " << subgraph->num_nodes() << std::endl;
     for (Node *node : topological_sort(*subgraph)) {
       if (node->node_type() != NodeType::kOp)
         continue;
       
-      
+      Node *buda_node;
+      std::string buda_name;
+      Shape buda_shape;
       buda_name = node->name() + "_" + std::to_string(nid);
       buda_shape = node->shape();
 
@@ -375,47 +385,51 @@ class BudaRuntime : public JSONRuntimeBase {
       subgraph_to_graph_node_id[node->id()] = buda_node->id();
       std::cout << "Node: " << buda_node->id() << " shape: " << buda_shape<< " type: " << buda_name << std::endl;
       buda_node->set_shape(buda_shape);
+      
+      size_t output_index = 0;
+      for (Node *subgraph_output : subgraph_outputs) {
+        auto last_op_node = subgraph->operand_data_edges(subgraph_output);
+        ICHECK_EQ(last_op_node.size(), 1);
+        if (last_op_node[0].producer_node_id == node->id()) {
+          id_to_tensor_.emplace(nid, std::make_tuple(buda_node->id(), buda_name, output_index, buda_shape));
+          std::cout << "Found subgraph output: " << output_index << " at id: " << buda_node->id() << std::endl;
+          break;
+        }
+        output_index++;
+      }
 
-      if (!input_edge_set) {
-        auto inputs = nodes_[nid].GetInputs();
-        for (unsigned int i = 0; i < inputs.size(); i++) {
-          auto input_id = inputs[i].id_;
+      int i = 0;
+      for (Edge &input_edge : subgraph->operand_data_edges(node)) {
+        auto subgraph_input_node_id = input_edge.producer_node_id;
+        auto input_node = subgraph->node_by_id(subgraph_input_node_id);
+        if (input_node->node_type() == NodeType::kInput) {
+          size_t input_index = 0;
+          for (Node *subgraph_input : subgraph_inputs) {
+            if (subgraph_input->id() == subgraph_input_node_id) {
+              std::cout << "Found subgraph input: " << input_index << " at id: " << buda_node->id() << std::endl;
+              break;
+            }
+            input_index++;
+          }
+          
+          auto input_id = inputs[input_index].id_;
 
           Edge edge(std::get<0>(id_to_tensor_.at(input_id)), 0, buda_node->id(), i, EdgeType::kData);
           std::cout << "Edge from: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << std::endl;
           graph_->add_edge(edge);
-          
-          // //TODO: Better broadcast
-          // std::shared_ptr<EdgeAttributes> attr = graph_->get_edge_attributes(edge);
-
-          // auto input_shape = std::get<3>(id_to_tensor_.at(input_id)).as_vector();
-          // for (size_t dim = 0; dim < input_shape.size(); dim++) {
-          //   if (op_type == "add") {
-          //     if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
-          //       attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
-          //       // std::cout << "Explicit Broadcasting: " << nodes_[input_id].GetOpName() << " to: " << nodes_[nid].GetOpName() << " dim: " << dim << " port: " << i << std::endl;
-          //       // std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
-          //     }
-          //   }
-          // }
         }
-        input_edge_set = true;
-      }
-      else {
-        int i = 0;
-        for (Edge &input_edge : subgraph->operand_data_edges(node)) {
+        else {
           auto input_node_id = subgraph_to_graph_node_id[input_edge.producer_node_id];
           Edge edge(input_node_id, input_edge.producer_output_port_id, buda_node->id(), i, EdgeType::kData);
           std::cout << "Edge from: " << input_node_id << ":" << input_edge.producer_output_port_id << " to " << buda_node->id() << ":" << i << std::endl;
-          i++;
           graph_->add_edge(edge);
-
-          //TODO: Broadcasr
         }
+        i++;
+        //TODO: Broadcast
       }
     }
 
-    id_to_tensor_.emplace(nid, std::make_tuple(buda_node->id(), buda_name, 0, buda_shape));
+    
   }
 
   bool DoSkipReshape(const size_t& nid, std::vector<int> *attributes) {
