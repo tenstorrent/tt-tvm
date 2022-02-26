@@ -44,6 +44,7 @@ def retrieve_pybuda_graph(*args):
     inputs = []
     input_type = []
     node_name = []
+    
     for arg in t[:-1]:
         if isinstance(arg, str):
             _type, _name = arg.split("|||")
@@ -75,7 +76,7 @@ def retrieve_pybuda_graph(*args):
 
     tt0.place_module(tvm_module)
     inputs = tuple(inputs)
-    res = pygraph.eval(graph, inputs, tt0)
+    res = pygraph.eval(graph, inputs, tt0, 1, 0, 1, {})
     return tvm.runtime.ndarray.array(res[0][0].numpy())
 
 
@@ -90,26 +91,29 @@ class SubGraph(PyBudaModule):
         if self.fn_name == "nn.softmax":
             return nn.Softmax("softmax", act[0], dim=self.attributes[0])
 
+        if self.fn_name == "nn.layer_norm":
+            return nn.Layernorm("layernorm", act[0], act[1], act[2], dim=self.attributes[0], epsilon=self.attributes[1])
+
 
 @tvm.register_func
 def expand_compound_ops(*args):
     print("In expand_compound_ops")
     t = tuple(args)
-    num_inptus = t[0]
+    num_inputs = t[0]
     inputs = t[1 : t[0] * 4 + 1]
 
     num_attributes = t[t[0] * 4 + 1]
     attributes = t[t[0] * 4 + 2 : -1]
-
     fn_name = t[-1]
     mod = SubGraph(fn_name=fn_name, attributes=attributes)
 
     tt0 = TTDevice("tt0", devtype=TTDeviceType.Golden)
     tt0.place_module(mod)
 
-    shapes = [t[i : i + 4] for i in range(0, len(t) - 1, 4)]
+    shapes = [inputs[i : i + 4] for i in range(0, len(inputs) - 1, 4)]
+
     acts = []
-    for i in range(num_inptus):
+    for i in range(num_inputs):
         acts.append(Tensor.create_from_torch(torch.rand(shapes[0])))
     
     acts = tuple(acts)

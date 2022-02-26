@@ -32,7 +32,12 @@ _register_external_op_helper("nn.softmax")
 _register_external_op_helper("sqrt")
 _register_external_op_helper("reciprocal")
 _register_external_op_helper("gelu")
+_register_external_op_helper("nn.layer_norm")
 
+
+def nn_layernorm_to_buda_layernorm():
+    act = wildcard()
+    return is_op("nn.layer_norm")
 
 def dense_to_matmul():
     data = wildcard()
@@ -115,6 +120,7 @@ def pattern_table():
     matmul = ("buda.matmul", dense_to_matmul())
     hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
     hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
+    layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
     buda_patterns = [hstack, hslice, matmul]
     return buda_patterns
 
@@ -231,7 +237,7 @@ class ExplicateTranspose(DFPatternCallback):
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
 def partition_for_buda(mod):
-    print_all = True
+    print_all = False
     with tvm.transform.PassContext(opt_level=3):
         if print_all:
             print("At Entry")
@@ -389,7 +395,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             print("After FoldScaleAxis")
             print(relay_module.functions)
 
-        relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
+        # relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
         if print_all:
             print("After CanonicalizeCast")
             print(relay_module.functions)
