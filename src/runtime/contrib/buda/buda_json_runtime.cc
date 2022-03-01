@@ -129,6 +129,7 @@ class BudaRuntime : public JSONRuntimeBase {
  private:
   std::map <uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> id_to_tensor_;
   Graph* graph_;
+  int buda_node_id_ = 0;
 
   const Shape MakeBudaShape(std::vector<int64_t> shape) {
     std::vector<int> shape_4d;
@@ -173,7 +174,7 @@ class BudaRuntime : public JSONRuntimeBase {
         // std::cout << "Creating parameter tensor: " << name << std::endl;
       }
 
-      auto node = graph_->add_node(create_node<InputNode>(name, input_type, requires_grad));
+      auto node = graph_->add_node(create_node<InputNode>(name + "_" + std::to_string(buda_node_id_++), input_type, requires_grad));
       module_inputs.push_back(node->id());
       
       const Shape buda_shape = MakeBudaShape(shape);
@@ -237,7 +238,7 @@ class BudaRuntime : public JSONRuntimeBase {
         } else {
           LOG(FATAL) << "Unsupported op: " << op_name;
         }
-        std::string buda_name = op_type + "_" + std::to_string(nid);
+        std::string buda_name = op_type + "_" + std::to_string(buda_node_id_++);
         auto shape = nodes_[nid].GetOpShape()[0];
         auto buda_node = graph_->add_node(create_node<OpNode>(buda_name, OpType{.op=op_type, .attr=attributes}));
         const Shape buda_shape = MakeBudaShape(shape);
@@ -287,7 +288,7 @@ class BudaRuntime : public JSONRuntimeBase {
         ICHECK_EQ(inputs.size(), 1);
         input_id = inputs[0].id_;
       }
-      std::string buda_name = nodes_[input_id].GetOpName() + "_output";
+      std::string buda_name = nodes_[input_id].GetOpName() + "_" + std::to_string(buda_node_id_++) + "_output";
       auto buda_node = graph_->add_node(create_node<OutputNode>(buda_name));
       module_outputs.push_back(buda_node->id());
       std::cout << "Node: " << buda_node->id() << " type: " << buda_name << std::endl;
@@ -377,7 +378,7 @@ class BudaRuntime : public JSONRuntimeBase {
       Node *buda_node;
       std::string buda_name;
       Shape buda_shape;
-      buda_name = node->name() + "_" + std::to_string(nid);
+      buda_name = node->name() + "_" + std::to_string(buda_node_id_++);
       buda_shape = node->shape();
 
       OpNode *op_node = node->as<OpNode>();

@@ -10,18 +10,20 @@ from pybuda_runtime import compile_tvm_for_buda
 
 
 def run_test():
-    class Gelu(nn.Module):
+    class SplitPytorch(nn.Module):
         def __init__(self):
             super().__init__()
+            self.l = nn.Linear(128, 384)
 
         def forward(self, x1):
-            out = nn.functional.gelu(x1)
-            return out
+            out = self.l(x1).reshape((1, -1, 384))
+            split_out = out.split(128, dim=2)
+            return split_out[0] + split_out[1] + split_out[2]
 
 
     shape = (64, 128)
     x1 = torch.rand(*shape)
-    torchmod = Gelu()
+    torchmod = SplitPytorch()
     traced_model = torch.jit.trace(torchmod, x1)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
@@ -31,11 +33,14 @@ def run_test():
 
     func = compile_tvm_for_buda(mod, params)
 
-    res = func(x1).numpy()
+    res = func(x1)
+    res_pt = torchmod(x1)
+    if not isinstance(res, (list, tuple)):
+        res = [res]
+        res_pt = [res_pt]
 
-    res_pt = torchmod(x1).detach().numpy()
-
-    print(f"Results correct: {np.allclose(res, res_pt, atol=1e-6)}")
+    for rb, rpt in zip(res, res_pt):
+        print(f"Results correct: {np.allclose(rb.numpy(), rpt.detach().numpy(), atol=1e-6)}")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
+from tvm.relay.testing import run_infer_type
+
 import math
 from tvm.relay.dataflow_pattern import *
 
@@ -44,6 +46,32 @@ def dense_to_matmul():
     weight = wildcard()
     weight_t = is_op('transpose')(weight)
     return is_op('nn.dense')(data, weight_t)
+
+def is_unsqueeze(call):
+    input_shape = call.args[0].checked_type.shape
+    output_shape = call.checked_type.shape
+
+    joint_size = min(len(input_shape), len(output_shape))
+    
+    superfluous_reshape = all([input_shape[i] == output_shape[i] for i in range(-1, -1*joint_size - 1, -1)])
+
+    if superfluous_reshape and len(input_shape) < len(output_shape):
+        return True
+        
+    return False
+
+def is_squeeze(call):
+    input_shape = call.args[0].checked_type.shape
+    output_shape = call.checked_type.shape
+
+    joint_size = min(len(input_shape), len(output_shape))
+    
+    superfluous_reshape = all([input_shape[i] == output_shape[i] for i in range(-1, -1*joint_size - 1, -1)])
+
+    if superfluous_reshape and len(input_shape) > len(output_shape):
+        return True
+        
+    return False
 
 def is_superfluous_reshape(call):
     input_shape = call.args[0].checked_type.shape
@@ -172,6 +200,49 @@ class DenseWeightTranspose(DFPatternCallback):
         return tvm.relay.nn.dense(act, wt2)
 
 
+class LiftLinearSplit(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        act = wildcard()
+        self.dense = is_op("nn.dense")(act, is_constant())
+        self.add = is_op("add")(self.dense, is_constant())
+        self.reshape = is_op("reshape")(self.add)
+        self.pattern = is_op('split')(self.reshape)
+
+    def callback(self, pre, post, node_map):
+        weight = node_map[self.dense][0].args[1]
+        bias = node_map[self.add][0].args[1]
+
+        indices_or_sections = post.attrs.indices_or_sections
+        axis = post.attrs.axis
+        input_shape = node_map[self.dense][0].checked_type.shape
+        output_shape = node_map[self.reshape][0].checked_type.shape
+
+        newshape = list(output_shape)
+        newshape[axis] = -1
+
+        if (is_unsqueeze(node_map[self.reshape][0])):
+            # Weight should be transposed in nn.dense, so if splitting
+            # along the final output axis, split along the first weight
+            if axis == len(output_shape) - 1:
+                assert output_shape[axis] == weight.data.shape[0]
+                axis = 0
+
+        split_weights = tvm.relay.split(weight, indices_or_sections=indices_or_sections, axis=axis)
+        split_biases = tvm.relay.split(bias, indices_or_sections=indices_or_sections, axis=0)
+
+        outputs = []
+        act = node_map[self.dense][0].args[0]
+        for split_weight, split_bias in zip(split_weights, split_biases):
+            dense_out = tvm.relay.nn.dense(act, split_weight)
+            add_out = tvm.relay.add(dense_out, split_bias)
+            reshape_out = tvm.relay.reshape(add_out, newshape=newshape)
+            outputs.append(reshape_out)
+
+        return tvm.relay.expr.Tuple(outputs)
+
+        
+
 class ExplicateHSliceTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -196,6 +267,27 @@ class ExplicateHSliceTranspose(DFPatternCallback):
 
         return rtt
 
+
+class EstimateWhere(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+
+        self.pattern = is_op('where')(wildcard(), wildcard(), wildcard())
+        
+    def callback(self, pre, post, node_map):
+        # by assuming the masked value is >> activation, this allows
+        # so simulate causal masking with eltwise ops, i.e. simply add
+        # the masked value
+        causal_mask = post.args[0]
+        zero = tvm.relay.const(0.0, dtype=post.checked_type.dtype)
+        one = tvm.relay.const(1.0, dtype=post.checked_type.dtype)
+        inverse_causal_mask = tvm.relay.where(causal_mask, zero, one)
+        
+        value = post.args[2]
+        mask = tvm.relay.multiply(inverse_causal_mask, value)
+
+        act = post.args[1]
+        return tvm.relay.add(act, mask)
 
 class InvertDivide(DFPatternCallback):
     def __init__(self):
@@ -246,6 +338,10 @@ def partition_for_buda(mod):
         if print_all:
             print("After CanonicalizeOps")
             print(mod.functions)
+        mod["main"] = rewrite(LiftLinearSplit(), mod["main"])
+        if print_all:
+            print("After LiftLinearSplit")
+            print(mod.functions)
         mod["main"] = rewrite(DenseWeightTranspose(), mod["main"])
         if print_all:
             print("After DenseWeightTranspose")
@@ -269,6 +365,10 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(ReconstructGelu(), mod["main"])
         if print_all:
             print("After ReconstructGelu")
+            print(mod.functions)
+        mod["main"] = rewrite(EstimateWhere(), mod["main"])
+        if print_all:
+            print("After EstimateWhere")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         if print_all:
