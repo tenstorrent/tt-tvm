@@ -140,6 +140,11 @@ class BudaRuntime : public JSONRuntimeBase {
       shape_4d.insert(shape_4d.begin(), 1);
     }
 
+    for (uint i = 2; i < shape_4d.size(); i++) {
+        if (shape_4d[i] % 32 != 0){
+          shape_4d[i] = (shape_4d[i] / 32 + 1) * 32;
+        }
+    }
     const Shape buda_shape = Shape(shape_4d);
     return buda_shape;
   }
@@ -260,22 +265,7 @@ class BudaRuntime : public JSONRuntimeBase {
           Edge edge(std::get<0>(id_to_tensor_.at(input_id)), 0, buda_node->id(), i, EdgeType::kData);
           std::cout << "Edge from: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << std::endl;
           graph_->add_edge(edge);
-          
-          //TODO: Better broadcast
-          std::shared_ptr<EdgeAttributes> attr = graph_->get_edge_attributes(edge);
-
-          auto input_shape = std::get<3>(id_to_tensor_.at(input_id)).as_vector();
-          for (size_t dim = 0; dim < input_shape.size(); dim++) {
-            if (op_type == "add") {
-              if ((input_shape[dim] == 1) && (buda_shape.as_vector()[dim] != 1)) {
-                attr->set_broadcast_dim(dim, buda_node->shape()[dim]);
-                // std::cout << "Broadcasting: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << " on dim: " << dim << std::endl;
-                // std::cout << "input_shape: " << std::get<3>(id_to_tensor_.at(EntryID(input_nodes_[i], 0))) << " output_shape: " << buda_shape << std::endl;
-              }
-            }
-          }
         }
-
       }
     }
 

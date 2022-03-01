@@ -12,6 +12,7 @@ from tvm.contrib import graph_executor
 from ctypes import c_void_p
 from pybuda._C import cast_c_void_p_to_graph, cast_graph_to_c_void_p, dump_graph
 import pybuda._C.graph as pygraph
+from pybuda._C.graph import broadcast_shapes, get_graph_input_shapes
 import pybuda
 import pybuda.op2
 import pybuda.op2.nn as nn
@@ -40,11 +41,12 @@ def retrieve_pybuda_graph(*args):
     t = tuple(args)
     vp = t[-1].value
     graph = cast_c_void_p_to_graph(vp)
+    broadcast_shapes(graph)
 
     inputs = []
     input_type = []
     node_name = []
-    
+
     for arg in t[:-1]:
         if isinstance(arg, str):
             _type, _name = arg.split("|||")
@@ -58,6 +60,19 @@ def retrieve_pybuda_graph(*args):
     for idx, _ in enumerate(inputs):
         while len(inputs[idx].shape) < 4:
             inputs[idx] = inputs[idx].unsqueeze(0)
+
+    # Pad input data to TILE_DIM
+    input_shapes = get_graph_input_shapes(graph)
+    for i, (_data, buda_shape) in enumerate(zip(inputs, input_shapes)):
+        # Last 2 dimensions needs to be padded to TILE_DIM
+        if _data.shape[-2:] != torch.Size(buda_shape[-2:]):
+            numpy_data = _data.numpy()
+
+            # calculate padding on last 2 dimensions
+            pad = [(0, 0), (0, 0)] + [
+                (0, a_i - b_i) for a_i, b_i in zip(buda_shape[-2:], numpy_data.shape[-2:])
+            ]
+            inputs[i] = torch.from_numpy(np.pad(numpy_data, pad, mode='constant')) # default pads with zero
 
     # Create parameters
     tt0 = TTDevice("tt0", devtype=TTDeviceType.Model)
