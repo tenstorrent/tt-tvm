@@ -10,20 +10,21 @@ from pybuda_runtime import compile_tvm_for_buda
 
 
 def run_test():
-    class SplitPytorch(nn.Module):
+    class WherePytorch(nn.Module):
         def __init__(self):
             super().__init__()
-            self.l = nn.Linear(128, 256)
+            self.causal_mask = torch.tril(torch.ones((32,32), dtype=torch.uint8)).view(1, 1, 32, 32)
+            self.bias = torch.tensor(-1e4)
 
         def forward(self, x1):
-            out = self.l(x1).reshape((1, -1, 256))
-            split_out = out.split(128, dim=2)
-            return torch.matmul(split_out[0], split_out[1])
+            out = torch.where(self.causal_mask, x1, self.bias.to(x1.dtype))
+            out = nn.Softmax(dim=-1)(out)
+            return out
 
 
-    shape = (128, 128)
+    shape = (1, 1, 32, 32)
     x1 = torch.rand(*shape)
-    torchmod = SplitPytorch()
+    torchmod = WherePytorch()
     traced_model = torch.jit.trace(torchmod, x1)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
@@ -35,6 +36,7 @@ def run_test():
 
     res = func(x1)
     res_pt = torchmod(x1)
+    import pdb; pdb.set_trace()
     if not isinstance(res, (list, tuple)):
         res = [res]
         res_pt = [res_pt]
