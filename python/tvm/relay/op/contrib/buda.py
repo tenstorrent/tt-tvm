@@ -12,7 +12,7 @@ from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 
 from tvm.relay.testing import run_infer_type
-
+import numpy as np
 import math
 import numpy as np
 from tvm.relay.dataflow_pattern import *
@@ -155,7 +155,76 @@ def pattern_table():
     return buda_patterns
 
 
-class ReconstructGelu(DFPatternCallback):
+
+class DecomposePower(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.exponent = is_constant()
+        power = is_op("power")(self.act, self.exponent)
+
+        self.pattern = power
+
+    def callback(self, pre, post, node_map):
+
+        act = node_map[self.act][0]
+        exponent = node_map[self.exponent][0].data.numpy().item()
+
+        op = act
+        if exponent < 0:
+            exponent *= -1
+            ADD_DIVIDE = True
+        else:
+            ADD_DIVIDE = False
+
+        if not exponent.is_integer():
+            dec = exponent - int(exponent)
+            assert dec == 0.5 , "Only support a single sqrt for now"
+            op = tvm.relay.sqrt(op)
+            exponent -= dec
+
+        if exponent.is_integer():
+            original_op = op
+            while exponent > 1:
+                op = tvm.relay.multiply(op, original_op)
+                exponent -= 1
+
+        if ADD_DIVIDE:
+            # add an divide
+            op = tvm.relay.reciprocal(op)
+
+        assert exponent == 0 or exponent == 1, "Exponent has not been decomposed"
+
+        return op
+
+
+class ReconstructTFGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.sqrt_half = wildcard()
+        self.half = is_constant()
+        self.one = is_constant()
+        times_root_two = is_op("multiply")(self.act, self.sqrt_half)
+        erf = is_op("erf")(times_root_two)
+        times_half = is_op("multiply")(self.act, self.half)
+        add = is_op("add")(self.one, erf)
+        gelu = is_op("multiply")(times_half, add)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+
+        one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(node_map[self.half][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        root_two_multiplied = math.isclose(node_map[self.sqrt_half][0].args[0].data.numpy(), 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+        
+        if not (one_added and half_multiplied and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
+class ReconstructPyTorchGelu(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         act = wildcard()
@@ -168,16 +237,17 @@ class ReconstructGelu(DFPatternCallback):
         self.pattern = gelu
 
     def callback(self, pre, post, node_map):
+
         half_added = math.isclose(post.args[1].args[0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
         half_multiplied = math.isclose(post.args[1].args[1].args[1].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
         root_two_multiplied = math.isclose(post.args[1].args[1].args[0].args[0].args[1].data.numpy(), 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
-        
+
         if not (half_added and half_multiplied and root_two_multiplied):
             return post
 
         return tvm.relay.gelu(post.args[0])
 
-class ReconstructLayerNorm(DFPatternCallback):
+class ReconstructPyTorchLayerNorm(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
@@ -198,6 +268,56 @@ class ReconstructLayerNorm(DFPatternCallback):
         mul = is_op("multiply")(coef, self.gamma)
         layernorm = is_op("add")(mul, self.beta)
 
+        self.pattern = layernorm
+
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+
+        try:
+            eps = node_map[self.eps][0].data.asnumpy().item()
+        except TVMError: # Does not have epsilon addition
+            eps = 0
+
+        act_shape = list(act.checked_type.shape)
+
+        assert len(gamma.data.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+        axis = None
+        # Find the last dimension of the specific size
+        for i, dim in enumerate(reversed(act_shape)):
+            if dim == gamma.data.shape[0]:
+                axis = (i * -1) - 1 # i == 0 means axis = -1
+                break
+
+        assert axis is not None, "Cannot find an axis in input activation that matches weight shape"
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, axis)
+
+class ReconstructTFLayerNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.gamma = is_constant()
+        self.beta = is_constant()
+        self.eps = is_constant()
+
+        mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, mean_act)
+        mul_0 = is_op("multiply")(sub_0, sub_0)
+        var = is_op("mean")(mul_0)
+
+        sum_denom = var.optional(lambda x: is_op("add")(x, self.eps))
+        denom = is_op("sqrt")(sum_denom)
+        recp = is_op("reciprocal")(denom)
+
+        weight = is_op("multiply")(self.gamma, recp)
+        mean_part = is_op("multiply")(mean_act, weight)
+        act_part = is_op("multiply")(weight, self.act)
+        sub_1 = is_op("subtract")(self.beta, mean_part)
+        layernorm = is_op("add")(sub_1, act_part)
+        # import pdb; pdb.set_trace()
         self.pattern = layernorm
 
     def callback(self, pre, post, node_map):
@@ -250,16 +370,25 @@ class LiftLinearSplit(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         act = wildcard()
-        self.dense = is_op("nn.dense")(act, is_constant())
-        self.add = is_op("add")(self.dense, is_constant())
+        self.dense_weight = is_constant()
+        self.add_bias = is_constant()
+        self.dense = is_op("nn.dense")(act, self.dense_weight)
+        self.add = is_op("add")(self.dense, self.add_bias)
         self.reshape = is_op("reshape")(self.add)
         self.pattern = is_op('split')(self.reshape)
 
     def callback(self, pre, post, node_map):
-        weight = node_map[self.dense][0].args[1].data.numpy()
-        bias = node_map[self.add][0].args[1].data.numpy()
+        weight = node_map[self.dense_weight][0].data.numpy()
+        bias = node_map[self.add_bias][0].data.numpy()
 
-        ios = ios = np.array(post.attrs.indices_or_sections).astype(int)
+        indices_or_sections = post.attrs.indices_or_sections
+        if isinstance(indices_or_sections, tvm.tir.expr.IntImm):
+            # Convert to list of split positions
+            num_parts = int(indices_or_sections)
+            split_idx = np.linspace(0, weight.shape[axis], num_parts + 1).astype(np.int)[1:-1]
+            indices_or_sections = tuple(split_idx)
+    
+        ios = np.array(indices_or_sections).astype(int)
         axis = post.attrs.axis
 
         input_shape = node_map[self.dense][0].checked_type.shape
@@ -272,13 +401,13 @@ class LiftLinearSplit(DFPatternCallback):
             # Weight should be transposed in nn.dense, so if splitting
             # along the final output axis, split along the first weight
             if axis == len(output_shape) - 1:
-                assert output_shape[axis] == weight.data.shape[0]
+                assert output_shape[axis] == weight.shape[0]
                 axis = 0
 
         act = node_map[self.dense][0].args[0]
 
         split_weights = np.split(weight, ios, axis)
-        split_biases = np.split(bias, ios, 0)
+        split_biases = np.split(bias, ios, len(bias.shape) - 1)
 
         outputs = []
         for split_weight, split_bias in zip(split_weights, split_biases):
@@ -407,6 +536,10 @@ def partition_for_buda(mod):
         if print_all:
             print("After DenseWeightTranspose")
             print(mod.functions)
+        mod["main"] = rewrite(DecomposePower(), mod["main"])
+        if print_all:
+            print("After DecomposePower")
+            print(mod.functions)
         mod["main"] = rewrite(InvertDivide(), mod["main"])
         if print_all:
             print("After InvertDivide")
@@ -423,9 +556,13 @@ def partition_for_buda(mod):
         if print_all:
             print("After ExplicateHSliceTranspose")
             print(mod.functions)
-        mod["main"] = rewrite(ReconstructGelu(), mod["main"])
+        mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
         if print_all:
-            print("After ReconstructGelu")
+            print("After ReconstructPyTorchGelu")
+            print(mod.functions)
+        mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
+        if print_all:
+            print("After ReconstructTFGelu")
             print(mod.functions)
         mod["main"] = rewrite(EstimateWhere(), mod["main"])
         if print_all:
@@ -439,11 +576,16 @@ def partition_for_buda(mod):
         if print_all:
             print("After MergeComposite")
             print(mod.functions)
-        mod["main"] = rewrite(ReconstructLayerNorm(), mod["main"])
+        mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
         if print_all:
-            print("After ReconstructLayerNorm")
+            print("After ReconstructTFLayerNorm")
+            print(mod.functions)
+        mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
+        if print_all:
+            print("After ReconstructPyTorchLayerNorm")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
+
         if print_all:
             print("After FoldConstant")
             print(mod.functions)
@@ -496,7 +638,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             bld_mod._set_params(params)
         context = PassContext().current()
         compiler_config = make_compilation_config(context,target)
-
+        # import pdb; pdb.set_trace()
         if print_all:
             print("Before Compiling")
             print(relay_module.functions)
