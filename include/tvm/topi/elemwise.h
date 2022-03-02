@@ -530,6 +530,23 @@ inline Tensor gelu(const Tensor& x, std::string name = "T_gelu",
 }
 
 
+/*!
+ * \brief Creates an operation that returns the layernorm of a given tensor
+ *
+ * \param x The input tensor
+ * \param name The name of the operation
+ * \param tag The tag to mark the operation
+ *
+ * \return A Tensor whose op member is the gelu operation
+ */
+inline Tensor layernorm(const Array<Tensor>& inp, std::string name = "T_layernorm",
+                       std::string tag = kElementWise) {
+  auto x = inp[0];
+  // TODO (ARUI) : Implement actual compute for layernorm. Its just a pass-through now.
+  return compute(x->shape, [&](const Array<Var>& i) { return x(i); }, name, tag);
+
+}
+
 }  // namespace topi
 }  // namespace tvm
 #endif  // TVM_TOPI_ELEMWISE_H_

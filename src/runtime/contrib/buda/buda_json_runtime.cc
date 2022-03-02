@@ -222,7 +222,7 @@ class BudaRuntime : public JSONRuntimeBase {
           attributes.push_back(std::stoi(axis));
           ExpandCompoundOps(nid, &attributes);          
           continue; 
-        } else if ("nn.layer_norm" == op_name) {
+        } else if ("layernorm" == op_name) {
           std::string axis = node.GetAttr<std::vector<std::string>>("axis")[0];
           attributes.push_back(std::stoi(axis));
           std::string epsilon = node.GetAttr<std::vector<std::string>>("epsilon")[0];

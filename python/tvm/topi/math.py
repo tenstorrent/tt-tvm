@@ -591,6 +591,27 @@ def gelu(x):
     return te.compute(x.shape, lambda *i: te.gelu(x(*i)))
 
 
+def layernorm(*operand):
+    """Take layernorm of input x.
+
+    Parameters
+    ----------
+    x : tvm.te.Tensor
+        Input argument.
+    gamma : tvm.te.Tensor
+        Weight.
+    beta : tvm.te.Tensor
+        Bias.
+
+    Returns
+    -------
+    y : tvm.te.Tensor
+        The result.
+    """
+    return te.compute(operand[0].shape, operand)
+
+
+
 @tvm.te.tag_scope(tag=tag.ELEMWISE)
 def sigmoid(x):
     """Take sigmoid tanh of input x.

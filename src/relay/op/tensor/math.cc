@@ -24,7 +24,7 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/op.h>
 #include <tvm/topi/einsum.h>
-
+#include <tvm/topi/elemwise.h>
 #include "../make_op.h"
 #include "../op_common.h"
 #include "../type_relations.h"
@@ -114,6 +114,51 @@ on the operands)doc" TVM_ADD_FILELINE)
     .add_type_rel("Einsum", EinsumRel)
     .set_attr<FTVMCompute>("FTVMCompute", EinsumCompute)
     .set_attr<TOpPattern>("TOpPattern", kInjective);
+
+
+
+Array<te::Tensor> LayernormCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                                const Type& out_type) {
+  const LayerNormAttrs* param = attrs.as<LayerNormAttrs>();
+  ICHECK(param != nullptr);
+  return Array<te::Tensor>{topi::layernorm(inputs)};
+}
+
+bool LayernormRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+                 const TypeReporter& reporter) {
+    ICHECK_EQ(types.size(), 4) << "Expects 4 types, [input, gamma, beta, output]";
+    const auto* data = types[0].as<TensorTypeNode>();
+    if (data == nullptr) {
+        ICHECK(types[0].as<IncompleteTypeNode>())
+        << "Layernorm: expect input type to be TensorType but get " << types[0];
+        return false;
+    }
+
+    reporter->Assign(types[3], TensorType(data->shape, data->dtype));
+
+  return true;
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.layernorm").set_body_typed([](Expr act, Expr weight, Expr bias, double eps, int axis) {
+    static const Op& op = Op::Get("layernorm");
+    auto attrs = make_object<LayerNormAttrs>();
+    attrs->epsilon = eps;
+    attrs->axis = axis;
+    return Call(op, {act, weight, bias}, Attrs(attrs), {});
+});
+
+RELAY_REGISTER_OP("layernorm")
+    .set_num_inputs(3)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_argument("weight", "Tensor", "The weight tensor.")
+    .add_argument("bias", "Tensor", "The bias tensor.")
+    .add_type_rel("Layernorm", LayernormRel)
+    .set_attr<TOpPattern>("TOpPattern", kElemWise)
+    .set_attr<TOpIsStateful>("TOpIsStateful", false)
+    .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
+    .set_support_level(3)
+    .set_attr<FTVMCompute>("FTVMCompute", LayernormCompute);
+
 
 }  // namespace relay
 }  // namespace tvm
