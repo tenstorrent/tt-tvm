@@ -408,6 +408,10 @@ class BudaRuntime : public JSONRuntimeBase {
           Edge edge(std::get<0>(id_to_tensor_.at(input_id)), 0, buda_node->id(), i, EdgeType::kData);
           std::cout << "Edge from: " << std::get<0>(id_to_tensor_.at(input_id)) << ":0 to " << buda_node->id() << ":" << i << std::endl;
           graph_->add_edge(edge);
+          std::shared_ptr<EdgeAttributes> in_attr = subgraph->get_edge_attributes(input_edge);
+          std::shared_ptr<EdgeAttributes> out_attr = graph_->get_edge_attributes(edge);
+          out_attr->set_tms(in_attr->get_tms());
+
         }
         else {
           auto input_node_id = subgraph_to_graph_node_id[input_edge.producer_node_id];
