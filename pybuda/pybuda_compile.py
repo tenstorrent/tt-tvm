@@ -3,8 +3,10 @@ import torch
 import numpy as np
 import tvm
 import tvm.relay as relay
-
-
+import tensorflow as tf
+from tensorflow.python.framework.convert_to_constants import (
+    convert_variables_to_constants_v2,
+)
 from tvm.contrib import graph_executor 
 
 
@@ -23,6 +25,24 @@ def retrieve_json_graph(*args):
     json_graph["func_name"] = t[0]
     json_graph["graph"] = t[1]
     json_graph["param_names"] = t[2]
+
+
+def compile_tf_for_buda(tfmod, *inputs):
+    @tf.function
+    def trace(inputs):
+        return tfmod(*inputs, training=False)
+
+    full_model = trace.get_concrete_function(inputs)
+
+    frozen_func = convert_variables_to_constants_v2(full_model)
+    graph_def = frozen_func.graph.as_graph_def()
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
+    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+
+    _, buda_params = compile_tvm_for_buda(mod, params, return_params=True)
+    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+
+    return copy.deepcopy(json_graph)
 
 
 def compile_pytorch_for_buda(torchmod, *inputs):
