@@ -163,6 +163,10 @@ TVM_REGISTER_GLOBAL("topi.gelu").set_body([](TVMArgs args, TVMRetValue* rv) {
   *rv = reciprocal(args[0]);
 });
 
+TVM_REGISTER_GLOBAL("topi.layernorm").set_body([](TVMArgs args, TVMRetValue* rv) {
+  *rv = layernorm(args[0], args[1], args[2]);
+});
+
 
 }  // namespace topi
 }  // namespace tvm

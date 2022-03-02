@@ -106,7 +106,7 @@ class SubGraph(PyBudaModule):
         if self.fn_name == "nn.softmax":
             return nn.Softmax("softmax", act[0], dim=self.attributes[0])
 
-        if self.fn_name == "nn.layer_norm":
+        if self.fn_name == "layernorm":
             return nn.Layernorm("layernorm", act[0], act[1], act[2], dim=self.attributes[0], epsilon=self.attributes[1])
 
 

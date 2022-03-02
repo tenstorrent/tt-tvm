@@ -377,6 +377,26 @@ def gelu(data):
     return _make.gelu(data)
 
 
+def layernorm(data, gamma, beta, eps=0, axis=-1):
+    """Compute layernorm of data.
+
+    .. math::
+
+      layernorm(x)
+
+    Parameters
+    ----------
+    data : relay.Expr
+        The input data
+
+    Returns
+    -------
+    result : relay.Expr
+        The computed result.
+    """
+    return _make.layernorm(data, gamma, beta, eps, axis)
+
+
 def sigmoid(data):
     """Compute elementwise sigmoid of data.
 

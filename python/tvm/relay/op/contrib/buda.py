@@ -1,6 +1,7 @@
 import logging
 
 import tvm
+from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name, BuildModule,build_target_by_device_type_map
@@ -34,12 +35,12 @@ _register_external_op_helper("nn.softmax")
 _register_external_op_helper("sqrt")
 _register_external_op_helper("reciprocal")
 _register_external_op_helper("gelu")
-_register_external_op_helper("nn.layer_norm")
+_register_external_op_helper("layernorm")
 
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
-    return is_op("nn.layer_norm")
+    return is_op("layernorm")
 
 def dense_to_matmul():
     data = wildcard()
@@ -175,6 +176,52 @@ class ReconstructGelu(DFPatternCallback):
 
         return tvm.relay.gelu(post.args[0])
 
+class ReconstructLayerNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.gamma = is_constant()
+        self.beta = is_constant()
+        self.eps = is_constant()
+
+        mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, mean_act)
+        mul_0 = is_op("multiply")(sub_0, sub_0)
+        var = is_op("mean")(mul_0)
+
+        sum_denom = var.optional(lambda x: is_op("add")(x, self.eps))
+        sub = is_op("subtract")(self.act, mean_act)
+        denom = is_op("sqrt")(sum_denom)
+        recp = is_op("reciprocal")(denom)
+        coef = is_op("multiply")(sub, recp)
+        mul = is_op("multiply")(coef, self.gamma)
+        layernorm = is_op("add")(mul, self.beta)
+
+        self.pattern = layernorm
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+
+        try:
+            eps = node_map[self.eps][0].data.asnumpy().item()
+        except TVMError: # Does not have epsilon addition
+            eps = 0
+
+        act_shape = list(act.checked_type.shape)
+
+        assert len(gamma.data.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+        axis = None
+        # Find the last dimension of the specific size
+        for i, dim in enumerate(reversed(act_shape)):
+            if dim == gamma.data.shape[0]:
+                axis = (i * -1) - 1 # i == 0 means axis = -1
+                break
+
+        assert axis is not None, "Cannot find an axis in input activation that matches weight shape"
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, axis)
 
 class DenseWeightTranspose(DFPatternCallback):
     def __init__(self):
@@ -378,6 +425,10 @@ def partition_for_buda(mod):
         if print_all:
             print("After MergeComposite")
             print(mod.functions)
+        mod["main"] = rewrite(ReconstructLayerNorm(), mod["main"])
+        if print_all:
+            print("After ReconstructLayerNorm")
+            print(mod.functions)
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         if print_all:
             print("After FoldConstant")
@@ -495,7 +546,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             print("After FoldScaleAxis")
             print(relay_module.functions)
 
-        # relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
+        relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
         if print_all:
             print("After CanonicalizeCast")
             print(relay_module.functions)
