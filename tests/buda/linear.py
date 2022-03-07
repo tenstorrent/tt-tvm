@@ -5,7 +5,7 @@ import numpy as np
 import tvm
 import tvm.relay as relay
 
-from pybuda_runtime import compile_tvm_for_buda
+from tvm.contrib.pybuda_compile import compile_tvm_for_buda
 
 
 def run_test():

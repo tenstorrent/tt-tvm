@@ -5,8 +5,7 @@ import tvm.relay
 import numpy as np
 
 from transformers import BertModel, BertTokenizer
-from pybuda_runtime import compile_tvm_for_buda
-
+from tvm.contrib.pybuda_compile import compile_tvm_for_buda
 def main():
     enc = BertTokenizer.from_pretrained("bert-base-uncased")
 

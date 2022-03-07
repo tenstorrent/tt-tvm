@@ -70,15 +70,18 @@ class BudaRuntime : public JSONRuntimeBase {
   const char* type_key() const { return "buda_json"; }
 
   void Init(const Array<NDArray>& consts) override {
-    BuildEngine();
+    // BuildEngine();
 
-    ICHECK_EQ(consts.size(), const_idx_.size())
-        << "The number of input constants must match the number of required.";
+    // ICHECK_EQ(consts.size(), const_idx_.size())
+    //     << "The number of input constants must match the number of required.";
 
-    // Setup constants entries for weights.
-    SetupConstants(consts);
+    // // Setup constants entries for weights.
+    // SetupConstants(consts);
   }
   void Run() override {
+      if (true) {
+        return;
+      }
       std::cout << "BudaRuntime::Run" << std::endl;
 
       const auto* pf = Registry::Get("retrieve_pybuda_graph");
