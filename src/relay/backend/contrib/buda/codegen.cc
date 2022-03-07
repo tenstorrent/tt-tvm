@@ -88,6 +88,9 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
 
 
   // std::cout << "Buda json: " << std::endl << graph_json << std::endl;
+  const auto* jgr = runtime::Registry::Get("retrieve_json_graph");
+  ICHECK(jgr != nullptr) << "Cannot find retrieve_json_graph";
+  (*jgr)(func_name, graph_json, params);
 
   const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
   ICHECK(pf != nullptr) << "Cannot find JSON runtime module to create";

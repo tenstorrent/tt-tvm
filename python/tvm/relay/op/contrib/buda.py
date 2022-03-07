@@ -14,6 +14,7 @@ from .register import register_pattern_table
 from tvm.relay.testing import run_infer_type
 
 import math
+import numpy as np
 from tvm.relay.dataflow_pattern import *
 
 logger = logging.getLogger("Buda")
@@ -235,11 +236,9 @@ class DenseWeightTranspose(DFPatternCallback):
         # If there's already a transpose, we don't need another one to 
         # fuse into buda.matmul
         if self.transpose_pattern.match(post.args[1]):
-            print("has transpose")
             return post
 
         # Doesn't have transpose, add two, one to fuse, the other to undo
-        print("doesn't have transpose")
         act = post.args[0]
         weight = post.args[1]
         wt1 = tvm.relay.transpose(weight)
@@ -257,11 +256,12 @@ class LiftLinearSplit(DFPatternCallback):
         self.pattern = is_op('split')(self.reshape)
 
     def callback(self, pre, post, node_map):
-        weight = node_map[self.dense][0].args[1]
-        bias = node_map[self.add][0].args[1]
+        weight = node_map[self.dense][0].args[1].data.numpy()
+        bias = node_map[self.add][0].args[1].data.numpy()
 
-        indices_or_sections = post.attrs.indices_or_sections
+        ios = ios = np.array(post.attrs.indices_or_sections).astype(int)
         axis = post.attrs.axis
+
         input_shape = node_map[self.dense][0].checked_type.shape
         output_shape = node_map[self.reshape][0].checked_type.shape
 
@@ -275,14 +275,15 @@ class LiftLinearSplit(DFPatternCallback):
                 assert output_shape[axis] == weight.data.shape[0]
                 axis = 0
 
-        split_weights = tvm.relay.split(weight, indices_or_sections=indices_or_sections, axis=axis)
-        split_biases = tvm.relay.split(bias, indices_or_sections=indices_or_sections, axis=0)
+        act = node_map[self.dense][0].args[0]
+
+        split_weights = np.split(weight, ios, axis)
+        split_biases = np.split(bias, ios, 0)
 
         outputs = []
-        act = node_map[self.dense][0].args[0]
         for split_weight, split_bias in zip(split_weights, split_biases):
-            dense_out = tvm.relay.nn.dense(act, split_weight)
-            add_out = tvm.relay.add(dense_out, split_bias)
+            dense_out = tvm.relay.nn.dense(act, tvm.relay.Constant(tvm.nd.array(split_weight)))
+            add_out = tvm.relay.add(dense_out, tvm.relay.Constant(tvm.nd.array(split_bias)))
             reshape_out = tvm.relay.reshape(add_out, newshape=newshape)
             outputs.append(reshape_out)
 
@@ -375,6 +376,19 @@ class ExplicateTranspose(DFPatternCallback):
             
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
+
+class UpdateConstants(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.params = {}
+        self.const_idx = 0
+        self.pattern = is_constant()
+
+    def callback(self, pre, post, node_map):
+        self.params[self.const_idx] = post.data
+        self.const_idx += 1
+        return post
+
 def partition_for_buda(mod):
     print_all = False
     with tvm.transform.PassContext(opt_level=3):
@@ -441,11 +455,17 @@ def partition_for_buda(mod):
         if print_all:
             print("After MergeCompilerRegions")
             print(mod.functions)
-        mod = tvm.transform.Sequential([transform.PartitionGraph()])(mod)
+        mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
         if print_all:
             print("After PartitionGraph")
             print(mod.functions)
-    return mod
+        assert len(mod.get_global_vars()) == 2
+
+        constant_updator = UpdateConstants()
+        rewrite(constant_updator, mod[mod.get_global_vars()[1]])
+        params = constant_updator.params
+        
+    return mod, params
 
 
 def compile_for_buda(relay_module, target='llvm', params=None):
@@ -565,6 +585,11 @@ def compile_for_buda(relay_module, target='llvm', params=None):
         if print_all:
             print("After FoldConstant")
             print(relay_module.functions)
+
+        # relay_module = tvm.transform.Sequential([transform.transform.FuseOps()])(relay_module)
+        # if print_all:
+        #     print("After FuseOps")
+        #     print(relay_module.functions)
 
         relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
         if print_all:
