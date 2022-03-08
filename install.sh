@@ -33,5 +33,6 @@ sed -i "s#/usr/bin/llvm-config#$LLVM_LINK#g" $TVM_HOME/build/config.cmake
 
 cmake -DCMAKE_BUILD_TYPE=Debug $TVM_HOME
 make -j8
+pip install tensorflow
 echo "TVM Built Successful"
 cd $ROOT
