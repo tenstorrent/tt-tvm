@@ -8,6 +8,9 @@ else
 fi
 
 echo $ROOT
+cd $ROOT
+make python_env
+source build/python_env/bin/activate
 export TVM_HOME=$ROOT/third_party/tvm
 export PYTHONPATH=$TVM_HOME/python:${PYTHONPATH}
 
