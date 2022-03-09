@@ -17,7 +17,7 @@ if [ ! -d "$ROOT/third_party/llvm" ]; then
   wget -nc https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
   LLVM_TAR=$ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
   LLVM_DIR=$ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
-  tar -xf $LLVM_TAR && mv $LLVM_DIR $ROOT/third_party/llvm && rm $LLVM_TAR
+  tar -xf $LLVM_TAR && mv $LLVM_DIR $ROOT/third_party/llvm && rm -f $LLVM_TAR
 fi
 
 cd $TVM_HOME
