@@ -127,7 +127,7 @@ def is_transpose_reshape_hstack(call):
     r_newshape = call.checked_type.shape
     r_input_shape = call.type_args[0].shape
     
-    if (not len(r_newshape) == 2
+    if (not (len(r_newshape) == 2 or (len(r_newshape) == 3) and r_newshape[0].value == 1)
     or not all([dim == 1 for dim in r_newshape[:-2]])
     or not (r_input_shape[-3].value == r_newshape[-2].value)
     or is_superfluous_reshape(call)):
