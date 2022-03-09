@@ -206,7 +206,7 @@ class ReconstructLayerNorm(DFPatternCallback):
         beta = node_map[self.beta][0]
 
         try:
-            eps = node_map[self.eps][0].data.asnumpy().item()
+            eps = node_map[self.eps][0].data.numpy().item()
         except TVMError: # Does not have epsilon addition
             eps = 0
 
