@@ -130,35 +130,35 @@ class BudaRuntime : public JSONRuntimeBase {
     //   memcpy(data_entry_[outputs_[0].id_]->data , ret_value->data, numel * sizeof(float));      
   }
  private:
-  std::map <uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> id_to_tensor_;
+   std::map <uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> id_to_tensor_;
   Graph* graph_;
   int buda_node_id_ = 0;
 
-  const Shape MakeBudaShape(std::vector<int64_t> shape) {
-    std::vector<int> shape_4d;
-    for (size_t i = 0; i < shape.size(); i++) {
-      shape_4d.push_back(static_cast<int>(shape[i]));
-    }
-    while (shape_4d.size() < 4) {
-      shape_4d.insert(shape_4d.begin(), 1);
-    }
+  // const Shape MakeBudaShape(std::vector<int64_t> shape) {
+  //   std::vector<int> shape_4d;
+  //   for (size_t i = 0; i < shape.size(); i++) {
+  //     shape_4d.push_back(static_cast<int>(shape[i]));
+  //   }
+  //   while (shape_4d.size() < 4) {
+  //     shape_4d.insert(shape_4d.begin(), 1);
+  //   }
 
-    for (uint i = 2; i < shape_4d.size(); i++) {
-        if (shape_4d[i] % 32 != 0){
-          shape_4d[i] = (shape_4d[i] / 32 + 1) * 32;
-        }
-    }
-    const Shape buda_shape = Shape(shape_4d);
-    return buda_shape;
-  }
+  //   for (uint i = 2; i < shape_4d.size(); i++) {
+  //       if (shape_4d[i] % 32 != 0){
+  //         shape_4d[i] = (shape_4d[i] / 32 + 1) * 32;
+  //       }
+  //   }
+  //   const Shape buda_shape = Shape(shape_4d);
+  //   return buda_shape;
+  // }
 
-  void PrintMap() {
-    std::cout << "id_to_tensor_ entries:" << std::endl;
-    for (std::pair<uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> entry : id_to_tensor_) {
-      std::cout << "  " << entry.first << ", " << std::get<0>(entry.second) << ", " << std::get<1>(entry.second) 
-        <<  ", " << std::get<2>(entry.second) <<   ", " << std::get<3>(entry.second) << std::endl;
-    }
-  }
+  // void PrintMap() {
+  //   std::cout << "id_to_tensor_ entries:" << std::endl;
+  //   for (std::pair<uint32_t, std::tuple<tt::graphlib::NodeId, std::string, int, Shape>> entry : id_to_tensor_) {
+  //     std::cout << "  " << entry.first << ", " << std::get<0>(entry.second) << ", " << std::get<1>(entry.second) 
+  //       <<  ", " << std::get<2>(entry.second) <<   ", " << std::get<3>(entry.second) << std::endl;
+  //   }
+  // }
   // Build up the engine based on the input graph.
   void BuildEngine() {
     // std::cout << "BudaRuntime::Build" << std::endl;
@@ -297,25 +297,25 @@ class BudaRuntime : public JSONRuntimeBase {
     // graph_->register_module_outputs(module_outputs);
   }
 
-  void PopulateHSliceAttrs(const size_t& nid, std::vector<int> *attributes) {
-    auto shape = nodes_[nid].GetOpShape()[0];
-    const Shape buda_shape = MakeBudaShape(shape);
-    attributes->push_back(buda_shape[1]);
-  }
+  // void PopulateHSliceAttrs(const size_t& nid, std::vector<int> *attributes) {
+  //   auto shape = nodes_[nid].GetOpShape()[0];
+  //   const Shape buda_shape = MakeBudaShape(shape);
+  //   attributes->push_back(buda_shape[1]);
+  // }
 
-  void PopulateHStackAttrs(const size_t& nid, std::vector<int> *attributes) {
-    auto inputs = nodes_[nid].GetInputs();
-    ICHECK_EQ(inputs.size(), 1) << "HStack can only have one input";
+  // void PopulateHStackAttrs(const size_t& nid, std::vector<int> *attributes) {
+  //   auto inputs = nodes_[nid].GetInputs();
+  //   ICHECK_EQ(inputs.size(), 1) << "HStack can only have one input";
     
-    auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
-    const Shape buda_shape = MakeBudaShape(input_shape);
-    attributes->push_back(buda_shape[1]);
-  }
+  //   auto input_shape = nodes_[inputs[0].id_].GetOpShape()[0];
+  //   const Shape buda_shape = MakeBudaShape(input_shape);
+  //   attributes->push_back(buda_shape[1]);
+  // }
 
-  void PopulateReduceAttrs(const size_t& nid, std::vector<int> *attributes) {
-    std::string axis = nodes_[nid].GetAttr<std::vector<std::string>>("axis")[0];
-    attributes->push_back(std::stoi(axis));
-  }
+  // void PopulateReduceAttrs(const size_t& nid, std::vector<int> *attributes) {
+  //   std::string axis = nodes_[nid].GetAttr<std::vector<std::string>>("axis")[0];
+  //   attributes->push_back(std::stoi(axis));
+  // }
 
   void ExpandCompoundOps(const size_t& nid, std::vector<int> *attributes) {
     // const auto* expand_compound_ops = Registry::Get("expand_compound_ops");
