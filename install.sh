@@ -12,7 +12,7 @@ cd $ROOT
 make python_env
 source build/python_env/bin/activate
 export TVM_HOME=$ROOT/third_party/tvm
-export PYTHONPATH=.:$TVM_HOME/python:${PYTHONPATH}
+export PYTHONPATH=$ROOT:$TVM_HOME/python:${PYTHONPATH}
 
 # Download / untar LLVM
 cd $ROOT/third_party
