@@ -34,14 +34,15 @@ cd $TVM_HOME/build
 LLVM_LINK=$ROOT/third_party/llvm/bin/llvm-config
 sed -i "s#/usr/bin/llvm-config#$LLVM_LINK#g" $TVM_HOME/build/config.cmake
 
-if [ "$CONFIG" == "ci" ] || [ "$CONFIG" == "" ] || [ "$CONFIG" == "release" ]; then   
+if [ "$CONFIG" == "ci" ] || [ "$CONFIG" == "" ] || [ "$CONFIG" == "release" ]; then
   export TVM_BUILD_CONFIG="Release"
-else   
+else
   export TVM_BUILD_CONFIG="Debug"
 fi
 
 echo $TVM_BUILD_CONFIG
 cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
-make -j8
+make -j$(shell nproc)
+
 echo "TVM Built Successful"
 cd $ROOT
