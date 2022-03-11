@@ -43,6 +43,5 @@ fi
 echo $TVM_BUILD_CONFIG
 cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
 make -j8
-pip install tensorflow
 echo "TVM Built Successful"
 cd $ROOT
