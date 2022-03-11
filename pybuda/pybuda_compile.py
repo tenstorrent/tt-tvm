@@ -7,11 +7,12 @@ import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import (
     convert_variables_to_constants_v2,
 )
-from tvm.contrib import graph_executor 
+from tvm.contrib import graph_executor
 
 
 from ctypes import c_void_p
 import copy
+import json
 
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
@@ -26,6 +27,22 @@ def retrieve_json_graph(*args):
     json_graph["graph"] = t[1]
     json_graph["param_names"] = t[2]
 
+def clean_names(json_graph, buda_params):
+    clean_names = []
+    for idx, name in enumerate(json_graph["param_names"]):
+        if "tvmgen_default_buda_main_0_" in name:
+            clean_names.append(str(json_graph["param_names"][idx]).replace("tvmgen_default_buda_main_0_", ""))
+
+    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
+    graph = json.loads(json_graph["graph"])
+
+    for node in graph["nodes"]:
+        if "tvmgen_default_buda_main_0_" in node["name"]:
+            node["name"] = node["name"].replace("tvmgen_default_buda_main_0_", "")
+
+    json_graph["graph"] = json.dumps(graph)
+
+    return json_graph
 
 def compile_tf_for_buda(tfmod, *inputs):
     @tf.function
@@ -42,7 +59,7 @@ def compile_tf_for_buda(tfmod, *inputs):
     _, buda_params = compile_tvm_for_buda(mod, params, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
-    return copy.deepcopy(json_graph)
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
 def compile_pytorch_for_buda(torchmod, *inputs):
@@ -54,7 +71,7 @@ def compile_pytorch_for_buda(torchmod, *inputs):
     _, buda_params = compile_tvm_for_buda(mod, params, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
-    return copy.deepcopy(json_graph)
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 def compile_tvm_for_buda(mod, params, return_params=False):
     target = "llvm"
@@ -62,7 +79,7 @@ def compile_tvm_for_buda(mod, params, return_params=False):
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod)
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
-    
+
     with tvm.transform.PassContext(opt_level=5):
         func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
@@ -118,7 +135,7 @@ def retrieve_pybuda_graph(*args):
 #     for _type, _name, _data in zip(input_type, node_name, inputs):
 #         if _type == "parameter":
 #             param = pybuda.Parameter(
-#                 *_data.shape, 
+#                 *_data.shape,
 #                 requires_grad=True,
 #                 name=_name,
 #                 value=_data,
@@ -169,7 +186,7 @@ def expand_compound_ops(*args):
 #     acts = []
 #     for i in range(num_inputs):
 #         acts.append(Tensor.create_from_torch(torch.rand(shapes[0])))
-    
+
 #     acts = tuple(acts)
 #     graph, _ = tt0.generate_graph(*acts, return_intermediate=False)
 #     vp = c_void_p(cast_graph_to_c_void_p(graph))
