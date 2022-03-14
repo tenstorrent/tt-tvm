@@ -37,6 +37,7 @@ _register_external_op_helper("sqrt")
 _register_external_op_helper("reciprocal")
 _register_external_op_helper("gelu")
 _register_external_op_helper("layernorm")
+_register_external_op_helper("nn.relu")
 
 
 def nn_layernorm_to_buda_layernorm():
@@ -466,6 +467,18 @@ class EstimateWhere(DFPatternCallback):
         act = post.args[1]
         return tvm.relay.add(act, mask)
 
+class DecomposeRsqrt(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.in_a = wildcard()
+
+        self.pattern = is_op('rsqrt')(self.in_a)
+
+    def callback(self, pre, post, node_map):
+        sqrt = tvm.relay.sqrt(post.args[0])
+        rsqrt = tvm.relay.reciprocal(sqrt)
+        return rsqrt
+
 class InvertDivide(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -539,6 +552,10 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(DecomposePower(), mod["main"])
         if print_all:
             print("After DecomposePower")
+            print(mod.functions)
+        mod["main"] = rewrite(DecomposeRsqrt(), mod["main"])
+        if print_all:
+            print("After DecomposeRsqrt")
             print(mod.functions)
         mod["main"] = rewrite(InvertDivide(), mod["main"])
         if print_all:
