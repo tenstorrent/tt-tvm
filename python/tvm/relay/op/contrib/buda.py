@@ -156,6 +156,50 @@ def pattern_table():
     return buda_patterns
 
 
+class DecomposeMultiAxisTranspose(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.transpose = is_op("transpose")(self.act)
+        self.pattern = self.transpose
+
+    def callback(self, pre, post, node_map):
+
+        transpose_axes = post.attrs.axes
+        acts = node_map[self.act][0]
+        trans = node_map[self.transpose][0]
+
+        if transpose_axes == None:
+            return post
+
+        changed_axis = []
+
+        for i, axis in enumerate(transpose_axes):
+            if i != axis:
+                changed_axis.append([i, axis])
+
+
+        assert len(changed_axis) >= 2, "Transpose op has at least 2 axes changed"
+        if len(changed_axis) == 2:
+            return post
+
+        ndim = len(trans.type_args[0].shape)
+        total_permute = list(transpose_axes)
+        total_permute = [int(x) for x in total_permute]
+        no_permute = list(range(ndim))
+        output = acts
+
+        for i in range(ndim):
+            if total_permute[i] != i:
+                new_order = total_permute.copy()
+                new_order[i + 1 :] = no_permute[i + 1 :]
+                new_order[new_order[i]] = i
+
+                total_permute = [new_order[i] for i in total_permute]
+                output = tvm.relay.transpose(output, axes=new_order)
+
+        return output
+
 
 class DecomposePower(DFPatternCallback):
     def __init__(self):
@@ -602,9 +646,12 @@ def partition_for_buda(mod):
             print("After ReconstructPyTorchLayerNorm")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
-
         if print_all:
             print("After FoldConstant")
+            print(mod.functions)
+        mod["main"] = rewrite(DecomposeMultiAxisTranspose(), mod["main"])
+        if print_all:
+            print("After DecomposeMultiAxisTranspose")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
         if print_all:
