@@ -28,17 +28,24 @@ def retrieve_json_graph(*args):
     json_graph["param_names"] = t[2]
 
 def clean_names(json_graph, buda_params):
+    if len(json_graph["param_names"]) == 0:
+        return json_graph
+
     clean_names = []
+
+    precursor = "tvmgen_default_buda_main_"
+    fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
+    precursor = f"tvmgen_default_buda_main_{fn_number}_"
     for idx, name in enumerate(json_graph["param_names"]):
-        if "tvmgen_default_buda_main_0_" in name:
-            clean_names.append(str(json_graph["param_names"][idx]).replace("tvmgen_default_buda_main_0_", ""))
+        if precursor in name:
+            clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
 
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
     graph = json.loads(json_graph["graph"])
 
     for node in graph["nodes"]:
-        if "tvmgen_default_buda_main_0_" in node["name"]:
-            node["name"] = node["name"].replace("tvmgen_default_buda_main_0_", "")
+        if precursor in node["name"]:
+            node["name"] = node["name"].replace(precursor, "")
 
     json_graph["graph"] = json.dumps(graph)
 
