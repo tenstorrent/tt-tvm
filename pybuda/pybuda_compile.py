@@ -53,10 +53,10 @@ def clean_names(json_graph, buda_params):
 
 def compile_tf_for_buda(tfmod, *inputs):
     @tf.function
-    def trace(inputs):
+    def trace(*inputs):
         return tfmod(*inputs, training=False)
 
-    full_model = trace.get_concrete_function(inputs)
+    full_model = trace.get_concrete_function(*inputs)
 
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def()
