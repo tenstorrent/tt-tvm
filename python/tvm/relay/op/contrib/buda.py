@@ -511,6 +511,18 @@ class EstimateWhere(DFPatternCallback):
         act = post.args[1]
         return tvm.relay.add(act, mask)
 
+class DecomposeNegative(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.in_a = wildcard()
+
+        self.pattern = is_op('negative')(self.in_a)
+
+    def callback(self, pre, post, node_map):
+        negative_one = tvm.relay.const(-1.0, dtype=post.checked_type.dtype)
+        mul = tvm.relay.multiply(post.args[0], negative_one)
+        return mul
+
 class DecomposeRsqrt(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -596,6 +608,10 @@ def partition_for_buda(mod):
         mod["main"] = rewrite(DecomposePower(), mod["main"])
         if print_all:
             print("After DecomposePower")
+            print(mod.functions)
+        mod["main"] = rewrite(DecomposeNegative(), mod["main"])
+        if print_all:
+            print("After DecomposeNegative")
             print(mod.functions)
         mod["main"] = rewrite(DecomposeRsqrt(), mod["main"])
         if print_all:
