@@ -65,6 +65,7 @@ bool EinsumRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   ICHECK(tensor_tuple->fields[0].as<TensorTypeNode>());
   const auto& first = Downcast<TensorType>(tensor_tuple->fields[0]);
   const DataType dtype = first->dtype;
+  DataType ctype = dtype;
   std::vector<Array<PrimExpr>> input_shapes;
   for (const Type& ele : tensor_tuple->fields) {
     if (ele.as<IncompleteTypeNode>()) {
@@ -75,7 +76,10 @@ bool EinsumRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
 
     const DataType& e_dtype = e->dtype;
     if (e_dtype != dtype) {
-      throw Error("relay.einsum requires all tensors have the same dtype");
+      if (ctype.is_int() && e_dtype.is_float()) {
+        ctype = e_dtype;
+      }
+      // throw Error("relay.einsum requires all tensors have the same dtype");
     }
     input_shapes.push_back(e->shape);
   }
@@ -83,7 +87,7 @@ bool EinsumRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   // Calculate output shape
   Array<IndexExpr> oshape = topi::InferEinsumShape(param->equation, input_shapes);
 
-  auto rtype = TensorType(oshape, dtype);
+  auto rtype = TensorType(oshape, ctype);
   reporter->Assign(types[1], rtype);
   return true;
 }
@@ -92,7 +96,18 @@ Array<te::Tensor> EinsumCompute(const Attrs& attrs, const Array<te::Tensor>& inp
                                 const Type& out_type) {
   const EinsumAttrs* param = attrs.as<EinsumAttrs>();
   ICHECK(param != nullptr);
-  return Array<te::Tensor>{topi::einsum(param->equation, inputs)};
+  const auto* out_ttype = out_type.as<TensorTypeNode>();
+
+  Array<te::Tensor> cast_inputs;
+  for (auto input : inputs) {
+    if (input->dtype != out_ttype->dtype) {
+      cast_inputs.push_back(topi::cast(input, out_ttype->dtype));
+    }
+    else {
+      cast_inputs.push_back(input);
+    }
+  }
+  return Array<te::Tensor>{topi::einsum(param->equation, cast_inputs)};
 }
 
 Expr MakeEinsum(Expr data, String equation) {

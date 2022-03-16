@@ -702,7 +702,6 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             bld_mod._set_params(params)
         context = PassContext().current()
         compiler_config = make_compilation_config(context,target)
-        # import pdb; pdb.set_trace()
         if print_all:
             print("Before Compiling")
             print(relay_module.functions)
