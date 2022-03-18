@@ -25,20 +25,22 @@ def _register_external_op_helper(op_name, supported=True):
         return supported
     return _func_wrapper
 
-_register_external_op_helper("transpose")
 _register_external_op_helper("add")
-_register_external_op_helper("subtract")
-_register_external_op_helper("multiply")
-_register_external_op_helper("reshape")
-_register_external_op_helper("mean")
-_register_external_op_helper("nn.batch_matmul")
-_register_external_op_helper("nn.softmax")
-_register_external_op_helper("sqrt")
-_register_external_op_helper("reciprocal")
 _register_external_op_helper("gelu")
 _register_external_op_helper("layernorm")
+_register_external_op_helper("log")
+_register_external_op_helper("mean")
+_register_external_op_helper("multiply")
+_register_external_op_helper("nn.batch_matmul")
+_register_external_op_helper("nn.conv2d")
+_register_external_op_helper("nn.max_pool2d")
 _register_external_op_helper("nn.relu")
-
+_register_external_op_helper("nn.softmax")
+_register_external_op_helper("reciprocal")
+_register_external_op_helper("reshape")
+_register_external_op_helper("sqrt")
+_register_external_op_helper("subtract")
+_register_external_op_helper("transpose")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -145,6 +147,27 @@ def transpose_reshape_to_hstack():
     act = wildcard()
     act_t = is_op("transpose")(act)
     return is_op("reshape")(act_t)
+
+# def is_stack_reshape_squeeze_to_hstack(call):
+#     dim = len(call.checked_type.shape)
+#     squeeze_axis = call.attrs.axis
+#     assert len(squeeze_axis) == 1, "TODO"
+#     squeeze_axis = squeeze_axis[0].value
+
+#     if squeeze_axis < 0:
+#         squeeze_axis = squeeze_axis + dim
+#     stack_axis = call.args[0].args[0].attrs.axis.value
+#     if stack_axis < 0:
+#         stack_axis = stack_axis + dim
+
+#     return squeeze_axis == dim and stack_axis == (dim - 1)
+
+# def stack_reshape_squeeze_to_hstack():
+#     act = is_tuple(None)
+#     stack = is_op("stack")(act)
+#     rshp = is_op("reshape")(stack)
+#     return is_op("squeeze")(rshp)
+
 
 @register_pattern_table("buda")
 def pattern_table():
