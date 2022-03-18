@@ -8,7 +8,7 @@ from tensorflow.python.framework.convert_to_constants import (
     convert_variables_to_constants_v2,
 )
 from tvm.contrib import graph_executor
-
+from loguru import logger
 
 from ctypes import c_void_p
 import copy
@@ -51,7 +51,21 @@ def clean_names(json_graph, buda_params):
 
     return json_graph
 
+def calculate_pcc(a, b):
+    return np.min(
+            np.ma.corrcoef(
+                np.ma.masked_invalid(torch.squeeze(a).detach().numpy()).flatten(), 
+                np.ma.masked_invalid(torch.squeeze(b).detach().numpy()).flatten()
+        ))
+
+
 def compile_tf_for_buda(tfmod, *inputs):
+    framework_outputs = tfmod(*inputs)
+    if not isinstance(framework_outputs, (list, tuple)):
+        framework_outputs = [framework_outputs]
+
+    framework_outputs = [x.numpy() for x in framework_outputs]
+
     @tf.function
     def trace(*inputs):
         return tfmod(*inputs, training=False)
@@ -63,26 +77,68 @@ def compile_tf_for_buda(tfmod, *inputs):
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, return_params=True)
+    np_inputs = [x.numpy() for x in inputs if x is not None]
+    _, buda_params, relay_outputs = compile_tvm_for_buda(mod, params, np_inputs, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+
+    # Verify TVM Compile
+    verify_tvm_compile(framework_outputs, relay_outputs)
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
 def compile_pytorch_for_buda(torchmod, *inputs):
+    torchmod.eval()
+    framework_outputs = torchmod(*inputs)
+    if not isinstance(framework_outputs, (list, tuple)):
+        framework_outputs = [framework_outputs]
+
+    framework_outputs = [x.detach().numpy() for x in framework_outputs]
     traced_model = torch.jit.trace(torchmod, inputs)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, return_params=True)
+    np_inputs = [x.numpy() for x in inputs]
+    _, buda_params, relay_outputs = compile_tvm_for_buda(mod, params, np_inputs, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+
+    # Verify TVM Compile
+    verify_tvm_compile(framework_outputs, relay_outputs)
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
-def compile_tvm_for_buda(mod, params, return_params=False):
+def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04, pcc=None):
+    if len(framework_outputs) != len(relay_outputs):
+        logger.error(f"Different number of outputs. Framework: {len(framework_outputs)}, TVM: {len(relay_outputs)}")
+
+    for i, (fr_out, tvm_out) in enumerate(zip(framework_outputs, relay_outputs)):
+
+        if pcc is None:
+            ok = np.allclose(fr_out, tvm_out, rtol=rtol, atol=atol, equal_nan=True)
+        else:
+            pcc_value = calculate_pcc(fr_out, tvm_out)
+            ok = pcc_value >= pcc
+
+        if not ok:
+            logger.error(f"Tensor mismatch on output {i}")
+            logger.trace(f"Golden: (shape = {fr_out.shape}")
+            logger.trace(fr_out)
+            logger.trace(f"Calculated: (shape = {tvm_out.shape}")
+            logger.trace(tvm_out)
+            raise RuntimeError
+
+    logger.info(f"Verified TVM Relay outputs against framework outputs")
+
+
+def compile_tvm_for_buda(mod, params, inputs, return_params=False):
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params)
+
+    relay_outputs = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()(*inputs)
+    if not isinstance(relay_outputs, (list, tuple)):
+        relay_outputs = [relay_outputs]
+
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod)
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
@@ -91,7 +147,7 @@ def compile_tvm_for_buda(mod, params, return_params=False):
         func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
     if return_params:
-        return func, buda_params
+        return func, buda_params, [x.numpy() for x in relay_outputs]
     else:
         return func
 
