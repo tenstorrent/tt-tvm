@@ -4313,6 +4313,7 @@ class PyTorchOpConverter:
             "aten::linalg_vector_norm": self.linalg_vector_norm,
             "aten::scaled_dot_product_attention": self.scaled_dot_product_attention,
             "aten::tile": self.tile,
+            "aten::copy_": self.identity,
         }
 
     def update_convert_map(self, custom_map):
