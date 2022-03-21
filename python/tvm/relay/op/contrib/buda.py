@@ -1,6 +1,7 @@
 import logging
 
 import tvm
+from tvm import relay
 from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
 from tvm.relay import transform
@@ -610,55 +611,217 @@ class UpdateConstants(DFPatternCallback):
         self.const_idx += 1
         return post
 
-def partition_for_buda(mod):
-    print_all = False
-    with tvm.transform.PassContext(opt_level=3):
-        if print_all:
-            print("At Entry")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
-        if print_all:
-            print("After MergeComposite")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
-        if print_all:
-            print("After ReconstructPyTorchGelu")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
-        if print_all:
-            print("After ReconstructTFGelu")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
-        if print_all:
-            print("After ReconstructTFLayerNorm")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
-        if print_all:
-            print("After ReconstructPyTorchLayerNorm")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
-        if print_all:
-            print("After FoldConstant")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
-        if print_all:
-            print("After AnnotateTarget")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
-        if print_all:
-            print("After MergeCompilerRegions")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
-        if print_all:
-            print("After PartitionGraph")
-            print(mod.functions)
-        assert len(mod.get_global_vars()) == 2
+def run_relay_compile_passes(relay_module, print_all=False):
 
-        constant_updator = UpdateConstants()
-        rewrite(constant_updator, mod[mod.get_global_vars()[1]])
-        params = constant_updator.params
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.RemoveUnusedFunctions()])(relay_module)
+    if print_all:
+        print("After RemoveUnusedFunctions")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.ToBasicBlockNormalForm()])(relay_module)
+    if print_all:
+        print("After ToBasicBlockNormalForm")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.Legalize()])(relay_module)
+    if print_all:
+        print("After Legalize")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.SimplifyInference()])(relay_module)
+    if print_all:
+        print("After SimplifyInference")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.DynamicToStatic()])(relay_module)
+    if print_all:
+        print("After DynamicToStatic")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr()])(relay_module)
+    if print_all:
+        print("After EliminateCommonSubexpr")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.SimplifyExpr()])(relay_module)
+    if print_all:
+        print("After SimplifyExpr")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.CombineParallelConv2D(3)])(relay_module)
+    if print_all:
+        print("After CombineParallelConv2D")
+        print(relay_module.functions)
+
+    # relay_module = tvm.transform.Sequential([transform.CombineParallelDense(3)])(relay_module)
+    # if print_all:
+    #     print("After CombineParallelDense")
+    #     print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.CombineParallelBatchMatmul(3)])(relay_module)
+    if print_all:
+        print("After CombineParallelBatchMatmul")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+    if print_all:
+        print("After FoldConstant")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
+    if print_all:
+        print("After FoldScaleAxis")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
+    if print_all:
+        print("After CanonicalizeCast")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
+    if print_all:
+        print("After CanonicalizeOps")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+    if print_all:
+        print("After FoldConstant")
+        print(relay_module.functions)
+
+    # relay_module = tvm.transform.Sequential([transform.transform.FuseOps()])(relay_module)
+    # if print_all:
+    #     print("After FuseOps")
+    #     print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.Inline()])(relay_module)
+    if print_all:
+        print("After Inline")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+
+    relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
+    if print_all:
+        print("After FoldConstant")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
+    if print_all:
+        print("After CanonicalizeOps")
+        print(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
+
+    return relay_module
+
+
+def run_buda_compile_passes(relay_module, print_all=False):
+    relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
+    if print_all:
+        print("After DecomposeVariance")
+        print(relay_module.functions)
+    if print_all:
+        print("After CanonicalizeOps")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
+    if print_all:
+        print("After LiftLinearSplit")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
+    if print_all:
+        print("After DenseWeightTranspose")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
+    if print_all:
+        print("After DecomposePower")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
+    if print_all:
+        print("After DecomposeNegative")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
+    if print_all:
+        print("After DecomposeRsqrt")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
+    if print_all:
+        print("After InvertDivide")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
+    if print_all:
+        print("After ExplicateTranspose")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
+    if print_all:
+        print("After ExplicateHSliceTranspose")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
+    if print_all:
+        print("After DecomposeMultiAxisTranspose")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
+    if print_all:
+        print("After EstimateWhere")
+        print(relay_module.functions)
+
+    return relay_module
+
+
+def reconstruct_ops_for_buda(mod):
+    print_all = False
+    if print_all:
+        print("reconstruct_ops_for_buda:: At Entry")
+        print(mod.functions)
+    mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
+    if print_all:
+        print("After ReconstructPyTorchGelu")
+        print(mod.functions)
+    mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
+    if print_all:
+        print("After ReconstructTFGelu")
+        print(mod.functions)
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+    if print_all:
+        print("After InferType")
+        print(mod.functions)
+    mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
+    if print_all:
+        print("After ReconstructTFLayerNorm")
+        print(mod.functions)
+    mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
+    if print_all:
+        print("After ReconstructPyTorchLayerNorm")
+        print(mod.functions)
+
         
-    return mod, params
+    return mod
 
 
 def compile_for_buda(relay_module, target='llvm', params=None):
@@ -693,179 +856,46 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             print("Before Compiling")
             print(relay_module.functions)
 
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.RemoveUnusedFunctions()])(relay_module)
-        if print_all:
-            print("After RemoveUnusedFunctions")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.ToBasicBlockNormalForm()])(relay_module)
-        if print_all:
-            print("After ToBasicBlockNormalForm")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.Legalize()])(relay_module)
-        if print_all:
-            print("After Legalize")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.SimplifyInference()])(relay_module)
-        if print_all:
-            print("After SimplifyInference")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.DynamicToStatic()])(relay_module)
-        if print_all:
-            print("After DynamicToStatic")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr()])(relay_module)
-        if print_all:
-            print("After EliminateCommonSubexpr")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.SimplifyExpr()])(relay_module)
-        if print_all:
-            print("After SimplifyExpr")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.CombineParallelConv2D(3)])(relay_module)
-        if print_all:
-            print("After CombineParallelConv2D")
-            print(relay_module.functions)
-
-        # relay_module = tvm.transform.Sequential([transform.CombineParallelDense(3)])(relay_module)
-        # if print_all:
-        #     print("After CombineParallelDense")
-        #     print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.CombineParallelBatchMatmul(3)])(relay_module)
-        if print_all:
-            print("After CombineParallelBatchMatmul")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-        if print_all:
-            print("After FoldConstant")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
-        if print_all:
-            print("After FoldScaleAxis")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
-        if print_all:
-            print("After CanonicalizeCast")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
-        if print_all:
-            print("After CanonicalizeOps")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-        if print_all:
-            print("After FoldConstant")
-            print(relay_module.functions)
-
-        # relay_module = tvm.transform.Sequential([transform.transform.FuseOps()])(relay_module)
-        # if print_all:
-        #     print("After FuseOps")
-        #     print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.Inline()])(relay_module)
-        if print_all:
-            print("After Inline")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
-        if print_all:
-            print("After DecomposeVariance")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-        if print_all:
-            print("After FoldConstant")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
-        if print_all:
-            print("After CanonicalizeOps")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
-        if print_all:
-            print("After LiftLinearSplit")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
-        if print_all:
-            print("After DenseWeightTranspose")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
-        if print_all:
-            print("After DecomposePower")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
-        if print_all:
-            print("After DecomposeNegative")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
-        if print_all:
-            print("After DecomposeRsqrt")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
-        if print_all:
-            print("After InvertDivide")
-            print(relay_module.functions)
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
-        if print_all:
-            print("After ExplicateTranspose")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
-        if print_all:
-            print("After ExplicateHSliceTranspose")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
-        if print_all:
-            print("After DecomposeMultiAxisTranspose")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
-        if print_all:
-            print("After EstimateWhere")
-            print(relay_module.functions)
-        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-        if print_all:
-            print("After InferType")
-            print(relay_module.functions)
-
-        compiled_relay_module = relay_module
+        relay_module = run_relay_compile_passes(relay_module, print_all=print_all)
+        compiled_relay_module = run_buda_compile_passes(relay_module, print_all=print_all)
 
     return compiled_relay_module, params
+
+
+def partition_for_buda(mod):
+    print_all = False
+    with tvm.transform.PassContext(opt_level=5):
+        if print_all:
+            print("partition_for_buda:: At Entry")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        if print_all:
+            print("After InferType")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
+        if print_all:
+            print("After MergeComposite")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
+        if print_all:
+            print("After FoldConstant")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
+        if print_all:
+            print("After AnnotateTarget")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
+        if print_all:
+            print("After MergeCompilerRegions")
+            print(mod.functions)
+        mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
+        if print_all:
+            print("After PartitionGraph")
+            print(mod.functions)
+        assert len(mod.get_global_vars()) == 2
+
+        constant_updator = UpdateConstants()
+        rewrite(constant_updator, mod[mod.get_global_vars()[1]])
+        params = constant_updator.params
+        
+    return mod, params

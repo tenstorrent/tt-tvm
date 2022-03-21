@@ -75,11 +75,8 @@ def compile_tf_for_buda(tfmod, *inputs):
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     np_inputs = [x.numpy() for x in inputs if x is not None]
-    _, buda_params, relay_outputs = compile_tvm_for_buda(mod, params, np_inputs, return_params=True)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs,framework_outputs, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
-
-    # Verify TVM Compile
-    verify_tvm_compile(framework_outputs, relay_outputs)
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
@@ -97,11 +94,8 @@ def compile_pytorch_for_buda(torchmod, *inputs):
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     np_inputs = [x.numpy() for x in inputs]
-    _, buda_params, relay_outputs = compile_tvm_for_buda(mod, params, np_inputs, return_params=True)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
-
-    # Verify TVM Compile
-    verify_tvm_compile(framework_outputs, relay_outputs)
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
@@ -128,14 +122,20 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
     logger.info(f"Verified TVM Relay outputs against framework outputs")
 
 
-def compile_tvm_for_buda(mod, params, inputs, return_params=False):
+def compile_tvm_for_buda(mod, params, inputs, golden_outputs, return_params=False):
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params)
 
     relay_outputs = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()(*inputs)
     if not isinstance(relay_outputs, (list, tuple)):
         relay_outputs = [relay_outputs]
+    relay_outputs = [x.numpy() for x in relay_outputs]
 
+    # Verify compile passes (original relay passes + buda passes)
+    verify_tvm_compile(golden_outputs, relay_outputs)
+
+    # Reconstruct Ops + export buda graph
+    mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod)
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
@@ -144,7 +144,7 @@ def compile_tvm_for_buda(mod, params, inputs, return_params=False):
         func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
     if return_params:
-        return func, buda_params, [x.numpy() for x in relay_outputs]
+        return func, buda_params
     else:
         return func
 
