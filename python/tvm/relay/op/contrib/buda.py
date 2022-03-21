@@ -620,6 +620,14 @@ def partition_for_buda(mod):
         if print_all:
             print("After MergeComposite")
             print(mod.functions)
+        mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
+        if print_all:
+            print("After ReconstructPyTorchGelu")
+            print(mod.functions)
+        mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
+        if print_all:
+            print("After ReconstructTFGelu")
+            print(mod.functions)
         mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
         if print_all:
             print("After ReconstructTFLayerNorm")
@@ -631,10 +639,6 @@ def partition_for_buda(mod):
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         if print_all:
             print("After FoldConstant")
-            print(mod.functions)
-        mod["main"] = rewrite(DecomposeMultiAxisTranspose(), mod["main"])
-        if print_all:
-            print("After DecomposeMultiAxisTranspose")
             print(mod.functions)
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
         if print_all:
@@ -849,13 +853,9 @@ def compile_for_buda(relay_module, target='llvm', params=None):
         if print_all:
             print("After ExplicateHSliceTranspose")
             print(relay_module.functions)
-        relay_module["main"] = rewrite(ReconstructPyTorchGelu(), relay_module["main"])
+        relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
         if print_all:
-            print("After ReconstructPyTorchGelu")
-            print(relay_module.functions)
-        relay_module["main"] = rewrite(ReconstructTFGelu(), relay_module["main"])
-        if print_all:
-            print("After ReconstructTFGelu")
+            print("After DecomposeMultiAxisTranspose")
             print(relay_module.functions)
         relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
         if print_all:
