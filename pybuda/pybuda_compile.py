@@ -14,6 +14,9 @@ from ctypes import c_void_p
 import copy
 import json
 
+from pybuda.op.eval.common import calculate_pcc
+
+
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
     return passed_to_buda
@@ -51,12 +54,6 @@ def clean_names(json_graph, buda_params):
 
     return json_graph
 
-def calculate_pcc(a, b):
-    return np.min(
-            np.ma.corrcoef(
-                np.ma.masked_invalid(torch.squeeze(a).detach().numpy()).flatten(), 
-                np.ma.masked_invalid(torch.squeeze(b).detach().numpy()).flatten()
-        ))
 
 
 def compile_tf_for_buda(tfmod, *inputs):
@@ -121,10 +118,10 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
             ok = pcc_value >= pcc
 
         if not ok:
-            logger.error(f"Tensor mismatch on output {i}")
-            logger.trace(f"Golden: (shape = {fr_out.shape}")
+            logger.error(f"Tensor mismatch on output {i} between framework and TVM.")
+            logger.trace(f"Framework: (shape = {fr_out.shape}")
             logger.trace(fr_out)
-            logger.trace(f"Calculated: (shape = {tvm_out.shape}")
+            logger.trace(f"TVM: (shape = {tvm_out.shape}")
             logger.trace(tvm_out)
             raise RuntimeError
 

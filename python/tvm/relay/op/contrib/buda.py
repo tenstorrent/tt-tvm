@@ -616,62 +616,6 @@ def partition_for_buda(mod):
         if print_all:
             print("At Entry")
             print(mod.functions)
-        mod = tvm.transform.Sequential([transform.CanonicalizeOps()])(mod)
-        if print_all:
-            print("After CanonicalizeOps")
-            print(mod.functions)
-        mod["main"] = rewrite(LiftLinearSplit(), mod["main"])
-        if print_all:
-            print("After LiftLinearSplit")
-            print(mod.functions)
-        mod["main"] = rewrite(DenseWeightTranspose(), mod["main"])
-        if print_all:
-            print("After DenseWeightTranspose")
-            print(mod.functions)
-        mod["main"] = rewrite(DecomposePower(), mod["main"])
-        if print_all:
-            print("After DecomposePower")
-            print(mod.functions)
-        mod["main"] = rewrite(DecomposeNegative(), mod["main"])
-        if print_all:
-            print("After DecomposeNegative")
-            print(mod.functions)
-        mod["main"] = rewrite(DecomposeRsqrt(), mod["main"])
-        if print_all:
-            print("After DecomposeRsqrt")
-            print(mod.functions)
-        mod["main"] = rewrite(InvertDivide(), mod["main"])
-        if print_all:
-            print("After InvertDivide")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.InferType()])(mod)
-        if print_all:
-            print("After InferType")
-            print(mod.functions)
-        mod["main"] = rewrite(ExplicateTranspose(), mod["main"])
-        if print_all:
-            print("After ExplicateTranspose")
-            print(mod.functions)
-        mod["main"] = rewrite(ExplicateHSliceTranspose(), mod["main"])
-        if print_all:
-            print("After ExplicateHSliceTranspose")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
-        if print_all:
-            print("After ReconstructPyTorchGelu")
-            print(mod.functions)
-        mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
-        if print_all:
-            print("After ReconstructTFGelu")
-            print(mod.functions)
-        mod["main"] = rewrite(EstimateWhere(), mod["main"])
-        if print_all:
-            print("After EstimateWhere")
-            print(mod.functions)
-        mod = tvm.transform.Sequential([transform.InferType()])(mod)
-        if print_all:
-            print("After InferType")
-            print(mod.functions)
         mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
         if print_all:
             print("After MergeComposite")
@@ -860,6 +804,63 @@ def compile_for_buda(relay_module, target='llvm', params=None):
             print("After FoldConstant")
             print(relay_module.functions)
 
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+
+        relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
+        if print_all:
+            print("After CanonicalizeOps")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
+        if print_all:
+            print("After LiftLinearSplit")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
+        if print_all:
+            print("After DenseWeightTranspose")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
+        if print_all:
+            print("After DecomposePower")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
+        if print_all:
+            print("After DecomposeNegative")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
+        if print_all:
+            print("After DecomposeRsqrt")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
+        if print_all:
+            print("After InvertDivide")
+            print(relay_module.functions)
+        relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+        if print_all:
+            print("After InferType")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
+        if print_all:
+            print("After ExplicateTranspose")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
+        if print_all:
+            print("After ExplicateHSliceTranspose")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(ReconstructPyTorchGelu(), relay_module["main"])
+        if print_all:
+            print("After ReconstructPyTorchGelu")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(ReconstructTFGelu(), relay_module["main"])
+        if print_all:
+            print("After ReconstructTFGelu")
+            print(relay_module.functions)
+        relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
+        if print_all:
+            print("After EstimateWhere")
+            print(relay_module.functions)
         relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
         if print_all:
             print("After InferType")
