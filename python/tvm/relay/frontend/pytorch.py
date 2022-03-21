@@ -4018,6 +4018,7 @@ class PyTorchOpConverter:
             "aten::__rshift__": self.make_elemwise("right_shift"),
             "aten::multinomial": self.multinomial,
             "aten::_weight_norm": self.weight_norm,
+            "aten::copy_": self.identity,
         }
 
     def update_convert_map(self, custom_map):

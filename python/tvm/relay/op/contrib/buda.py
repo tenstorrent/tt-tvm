@@ -27,6 +27,7 @@ def _register_external_op_helper(op_name, supported=True):
     return _func_wrapper
 
 _register_external_op_helper("add")
+_register_external_op_helper("exp")
 _register_external_op_helper("gelu")
 _register_external_op_helper("layernorm")
 _register_external_op_helper("log")
@@ -386,7 +387,6 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         act_part = is_op("multiply")(weight, self.act)
         sub_1 = is_op("subtract")(self.beta, mean_part)
         layernorm = is_op("add")(sub_1, act_part)
-        # import pdb; pdb.set_trace()
         self.pattern = layernorm
 
     def callback(self, pre, post, node_map):
@@ -598,6 +598,53 @@ class ExplicateTranspose(DFPatternCallback):
             
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
+class LowerAdaptivePool(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('nn.adaptive_avg_pool2d')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        #TODO: Decompose arbitrary adaptive pools thusly:
+        # Stride = (input_size//output_size)
+        # Kernel size = input_size - (output_size-1)*stride
+        # Padding = 0
+        output_size = [int(dim) for dim in post.attrs.output_size]
+        assert all(dim == 1 for dim in output_size)
+
+        reduce_dims = range(-1, -1 * (len(output_size) + 1), -1)
+        input_op = post.args[0]
+        for dim in reduce_dims:
+            input_op = tvm.relay.mean(input_op, axis=dim, keepdims=True)
+
+        return input_op
+
+class LowerSqueezeToReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('squeeze')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        return tvm.relay.reshape(post.args[0], newshape=post.checked_type.shape)
+
+class LowerSigmoidToExp(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('sigmoid')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        one = tvm.relay.const(1.0, dtype=post.checked_type.dtype)
+        negative_one = tvm.relay.const(-1.0, dtype=post.checked_type.dtype)
+        mul = tvm.relay.multiply(post.args[0], negative_one)
+        exp = tvm.relay.exp(mul)
+        exp_plus_one = tvm.relay.add(exp, one)
+        return tvm.relay.reciprocal(exp_plus_one)
+
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -789,6 +836,18 @@ def run_buda_compile_passes(relay_module, print_all=False):
     relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
     if print_all:
         print("After EstimateWhere")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(LowerAdaptivePool(), relay_module["main"])
+    if print_all:
+        print("After LowerAdaptivePool")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
+    if print_all:
+        print("After LowerSqueezeToReshape")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(LowerSigmoidToExp(), relay_module["main"])
+    if print_all:
+        print("After LowerSigmoidToExp")
         print(relay_module.functions)
 
     return relay_module
