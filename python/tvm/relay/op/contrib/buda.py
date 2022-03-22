@@ -40,7 +40,9 @@ _register_external_op_helper("nn.relu")
 _register_external_op_helper("nn.softmax")
 _register_external_op_helper("reciprocal")
 _register_external_op_helper("reshape")
+_register_external_op_helper("sigmoid")
 _register_external_op_helper("sqrt")
+_register_external_op_helper("strided_slice")
 _register_external_op_helper("subtract")
 _register_external_op_helper("transpose")
 
@@ -149,26 +151,6 @@ def transpose_reshape_to_hstack():
     act = wildcard()
     act_t = is_op("transpose")(act)
     return is_op("reshape")(act_t)
-
-# def is_stack_reshape_squeeze_to_hstack(call):
-#     dim = len(call.checked_type.shape)
-#     squeeze_axis = call.attrs.axis
-#     assert len(squeeze_axis) == 1, "TODO"
-#     squeeze_axis = squeeze_axis[0].value
-
-#     if squeeze_axis < 0:
-#         squeeze_axis = squeeze_axis + dim
-#     stack_axis = call.args[0].args[0].attrs.axis.value
-#     if stack_axis < 0:
-#         stack_axis = stack_axis + dim
-
-#     return squeeze_axis == dim and stack_axis == (dim - 1)
-
-# def stack_reshape_squeeze_to_hstack():
-#     act = is_tuple(None)
-#     stack = is_op("stack")(act)
-#     rshp = is_op("reshape")(stack)
-#     return is_op("squeeze")(rshp)
 
 
 @register_pattern_table("buda")
@@ -630,21 +612,31 @@ class LowerSqueezeToReshape(DFPatternCallback):
     def callback(self, pre, post, node_map):
         return tvm.relay.reshape(post.args[0], newshape=post.checked_type.shape)
 
-class LowerSigmoidToExp(DFPatternCallback):
+class CStridedSliceToRStridedSlice(DFPatternCallback):
     def __init__(self):
         super().__init__()
         self.input_tensor = wildcard()
-
-        self.pattern = is_op('sigmoid')(wildcard())
+        self.pattern = is_op('strided_slice')(wildcard())
 
     def callback(self, pre, post, node_map):
-        one = tvm.relay.const(1.0, dtype=post.checked_type.dtype)
-        negative_one = tvm.relay.const(-1.0, dtype=post.checked_type.dtype)
-        mul = tvm.relay.multiply(post.args[0], negative_one)
-        exp = tvm.relay.exp(mul)
-        exp_plus_one = tvm.relay.add(exp, one)
-        return tvm.relay.reciprocal(exp_plus_one)
+        strides = [int(stride) for stride in post.attrs.strides]
+        begin = [int(begin) for begin in post.attrs.begin]
+        end = [int(end) for end in post.attrs.end]
 
+        is_cslice = all([stride == 1 for stride in strides[:-1]])
+        if not is_cslice:
+            return post
+
+        strides[-1], strides[-2] = strides[-2], strides[-1]
+        begin[-1], begin[-2] = begin[-2], begin[-1]
+        end[-1], end[-2] = end[-2], end[-1]
+
+        taxes = list(range(len(strides)))
+        taxes[-1], taxes[-2] = taxes[-2], taxes[-1]
+        t = tvm.relay.transpose(post.args[0], axes=taxes)
+        rslice = tvm.relay.strided_slice(t, begin=begin, end=end, strides=strides)
+        trslice = tvm.relay.transpose(rslice, axes=taxes)
+        return trslice
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -845,9 +837,9 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After LowerSqueezeToReshape")
         print(relay_module.functions)
-    relay_module["main"] = rewrite(LowerSigmoidToExp(), relay_module["main"])
+    relay_module["main"] = rewrite(CStridedSliceToRStridedSlice(), relay_module["main"])
     if print_all:
-        print("After LowerSigmoidToExp")
+        print("After CStridedSliceToRStridedSlice")
         print(relay_module.functions)
 
     return relay_module
@@ -951,7 +943,7 @@ def partition_for_buda(mod):
         if print_all:
             print("After PartitionGraph")
             print(mod.functions)
-        assert len(mod.get_global_vars()) == 2
+        assert len(mod.get_global_vars()) == 2, mod["main"]
 
         constant_updator = UpdateConstants()
         rewrite(constant_updator, mod[mod.get_global_vars()[1]])
