@@ -152,6 +152,24 @@ def transpose_reshape_to_hstack():
     act_t = is_op("transpose")(act)
     return is_op("reshape")(act_t)
 
+def is_stack_reshape_reshape_to_binary_stack(call):
+    dim = len(call.checked_type.shape)
+    stack_axis = call.args[0].args[0].attrs.axis.value
+    if stack_axis < 0:
+        stack_axis = stack_axis + dim
+
+    input_shape = [int(dim) for dim in call.args[0].args[0].args[0][0].checked_type.shape]
+    output_shape = [int(dim) for dim in call.checked_type.shape]
+
+    works = all([i == o or (dim == stack_axis and o == 2 * i) for dim, (i, o) in enumerate(zip(input_shape, output_shape))])
+    return works
+
+def stack_reshape_reshape_to_binary_stack():
+    act = is_tuple(None)
+    stack = is_op("stack")(act)
+    rshp = is_op("reshape")(stack)
+    return is_op("reshape")(rshp)
+
 
 @register_pattern_table("buda")
 def pattern_table():
@@ -159,7 +177,8 @@ def pattern_table():
     hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
     hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
     layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
-    buda_patterns = [hstack, hslice, matmul]
+    binary_stack = ("buda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
+    buda_patterns = [hstack, hslice, matmul, binary_stack]
     return buda_patterns
 
 
