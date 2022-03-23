@@ -642,7 +642,7 @@ class CStridedSliceToRStridedSlice(DFPatternCallback):
         begin = [int(begin) for begin in post.attrs.begin]
         end = [int(end) for end in post.attrs.end]
 
-        is_cslice = all([stride == 1 for stride in strides[:-1]])
+        is_cslice = all([stride == 1 for stride in strides[:-1]]) and strides[-1] != 1
         if not is_cslice:
             return post
 
