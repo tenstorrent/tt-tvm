@@ -100,6 +100,7 @@ def compile_pytorch_for_buda(torchmod, *inputs):
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04, pcc=None):
+    allowed_to_fail = False
     if len(framework_outputs) != len(relay_outputs):
         logger.error(f"Different number of outputs. Framework: {len(framework_outputs)}, TVM: {len(relay_outputs)}")
 
@@ -117,7 +118,8 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
             logger.trace(fr_out)
             logger.trace(f"TVM: (shape = {tvm_out.shape}")
             logger.trace(tvm_out)
-            raise RuntimeError
+            if not allowed_to_fail:
+                raise RuntimeError
 
     logger.info(f"Verified TVM Relay outputs against framework outputs")
 

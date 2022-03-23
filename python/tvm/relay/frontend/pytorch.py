@@ -278,7 +278,7 @@ class PyTorchOpConverter:
         def elemwise(inputs, input_types):
             if name == "divide":
                 # https://pytorch.org/docs/stable/generated/torch.div.html#torch.div
-                # None - default behavior. Performs no rounding and, if both input and
+                # None - default behavior. Performs no rounding and, if both input and 
                 # other are integer types, promotes the inputs to the default scalar type.
                 if all(["int" in input_type for input_type in input_types[:2]]):
                     input_types[:2] = ["float32"] * 2
