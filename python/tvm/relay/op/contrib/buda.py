@@ -209,7 +209,7 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
         if len(changed_axis) == 2:
             return post
 
-        ndim = len(trans.type_args[0].shape)
+        ndim = len(trans.args[0].checked_type.shape)
         total_permute = list(transpose_axes)
         total_permute = [int(x) for x in total_permute]
         no_permute = list(range(ndim))
@@ -225,6 +225,44 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
                 output = tvm.relay.transpose(output, axes=new_order)
 
         return output
+
+
+class ReformatTFConv2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.weight = is_constant()
+        conv = is_op("nn.conv2d")(self.act, self.weight)
+
+        self.pattern = conv
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.data_layout == 'NHWC' and post.attrs.kernel_layout == 'HWIO':
+            # convert TF channel-last to channel-first
+            conv2d_shape = node_map[self.pattern][0].checked_type.shape
+            act = node_map[self.act][0]
+            weight = node_map[self.weight][0]
+            act_shape = act.checked_type.shape
+            weight_shape = weight.checked_type.shape
+
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+            channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+
+            new_conv2d = tvm.relay.op.nn.conv2d(
+                channel_first_act,
+                channel_first_weight,
+                strides=post.attrs.strides,
+                padding=post.attrs.padding,
+                groups=post.attrs.groups,
+                channels=post.attrs.channels,
+                kernel_size=post.attrs.kernel_size,
+                data_layout="NCHW",
+                kernel_layout="OIHW",
+            )
+            out_reshape = tvm.relay.transpose(new_conv2d, axes=[0,2,3,1])
+            return out_reshape
+        else:
+            return post
 
 
 class DecomposePower(DFPatternCallback):
@@ -840,6 +878,14 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After ExplicateHSliceTranspose")
         print(relay_module.functions)
+    relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
+    if print_all:
+        print("After ReformatTFConv2d")
+        print(relay_module.functions)
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    if print_all:
+        print("After InferType")
+        print(relay_module.functions)
     relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
     if print_all:
         print("After DecomposeMultiAxisTranspose")
@@ -890,7 +936,6 @@ def reconstruct_ops_for_buda(mod):
         print("After ReconstructPyTorchLayerNorm")
         print(mod.functions)
 
-        
     return mod
 
 
