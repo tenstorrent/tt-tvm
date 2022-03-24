@@ -81,7 +81,7 @@ def compile_tf_for_buda(tfmod, *inputs):
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
-def compile_pytorch_for_buda(torchmod, *inputs):
+def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs):
     torchmod.eval()
     framework_outputs = torchmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
@@ -91,7 +91,10 @@ def compile_pytorch_for_buda(torchmod, *inputs):
     traced_model = torch.jit.trace(torchmod, inputs)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
-    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+    if consteval_in_pybuda:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+    else:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     np_inputs = [x.numpy() for x in inputs]
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, return_params=True)
@@ -128,7 +131,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, return_params=Fals
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params)
 
-    relay_outputs = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()(*inputs)
+    relay_outputs = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm", params=params).evaluate()(*inputs)
     if not isinstance(relay_outputs, (list, tuple)):
         relay_outputs = [relay_outputs]
     relay_outputs = [x.numpy() for x in relay_outputs]

@@ -360,8 +360,8 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
-        self.gamma = is_constant()
-        self.beta = is_constant()
+        self.gamma = wildcard()
+        self.beta = wildcard()
         self.eps = is_constant()
 
         mean_act = is_op("mean")(self.act)
@@ -391,12 +391,11 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
             eps = 0
 
         act_shape = list(act.checked_type.shape)
-
-        assert len(gamma.data.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+        assert len(gamma.checked_type.shape) == 1, "TVM Layernorm only supports single dim layernorm"
         axis = None
         # Find the last dimension of the specific size
         for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma.data.shape[0]:
+            if dim == gamma.checked_type.shape[0]:
                 axis = (i * -1) - 1 # i == 0 means axis = -1
                 break
 
@@ -707,6 +706,24 @@ class CStridedSliceToRStridedSlice(DFPatternCallback):
         rslice = tvm.relay.strided_slice(t, begin=begin, end=end, strides=strides)
         trslice = tvm.relay.transpose(rslice, axes=taxes)
         return trslice
+        
+class PopulateTransposeAxes(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('transpose')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.axes is not None:
+            return post
+
+        post = run_infer_type(post)
+        transpose_dims = len(post.checked_type.shape)
+        last_dim = -transpose_dims - 1
+        taxes = list(range(-1, last_dim, -1))
+
+        return tvm.relay.transpose(post.args[0], axes=taxes)
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -806,11 +823,6 @@ def run_relay_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After FoldConstant")
         print(relay_module.functions)
-
-    # relay_module = tvm.transform.Sequential([transform.transform.FuseOps()])(relay_module)
-    # if print_all:
-    #     print("After FuseOps")
-    #     print(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
     if print_all:
@@ -935,6 +947,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After CStridedSliceToRStridedSlice")
         print(relay_module.functions)
+    relay_module["main"] = rewrite(PopulateTransposeAxes(), relay_module["main"])
+    if print_all:
+        print("After PopulateTransposeAxes")
+        print(relay_module.functions)
 
     return relay_module
 
@@ -1012,26 +1028,32 @@ def partition_for_buda(mod):
         if print_all:
             print("partition_for_buda:: At Entry")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         if print_all:
             print("After InferType")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
         if print_all:
             print("After MergeComposite")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         if print_all:
             print("After FoldConstant")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
         if print_all:
             print("After AnnotateTarget")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
         if print_all:
             print("After MergeCompilerRegions")
             print(mod.functions)
+
         mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
         if print_all:
             print("After PartitionGraph")
