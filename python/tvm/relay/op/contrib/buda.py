@@ -83,8 +83,8 @@ def is_squeeze(call):
     return False
 
 def is_superfluous_reshape(call):
-    input_shape = call.type_args[0].shape
-    output_shape = call.attrs.newshape
+    input_shape = call.args[0].checked_type.shape
+    output_shape = call.checked_type.shape
 
     joint_size = min(len(input_shape), len(output_shape))
 
@@ -102,8 +102,8 @@ def is_superfluous_reshape(call):
     return superfluous_reshape
             
 def is_reshape_hslice(call):
-    r_input_shape = call.type_args[0].shape
-    r_newshape = call.attrs.newshape
+    r_input_shape = call.args[0].type_args[0].shape
+    r_newshape = call.args[0].checked_type.shape
 
     if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
     or not (r_input_shape[-2].value == r_newshape[-3].value) 
@@ -122,7 +122,7 @@ def is_transpose_hslice(call):
     return True
 
 def is_reshape_transpose_hslice(call):
-    return is_reshape_hslice(call.args[0]) and is_transpose_hslice(call)
+    return is_reshape_hslice(call) and is_transpose_hslice(call)
 
 def is_transpose_reshape_hstack(call):
     t_axes = call.args[0].attrs.axes
@@ -531,38 +531,25 @@ class ExplicateHSliceTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         act = wildcard()
-        act_r = is_op("reshape")(act)
-        self.pattern = act_r
+        act_r = is_op('reshape')(act)
+        self.pattern = is_op('transpose')(act_r)
 
     def callback(self, pre, post, node_map):
-        if not is_reshape_hslice(post):
+        if is_reshape_transpose_hslice(post) or not is_reshape_hslice(post):
             return post
 
-        rt = tvm.relay.transpose(post, axes=[0, 2, 1, 3])
-        rtt = tvm.relay.transpose(rt, axes=[0, 2, 1, 3])
+        t_axes = post.attrs.axes
+        hslicet_t_taxes = [0, 2, 3, 1]
+        
+        if not (len(t_axes) == 4 and all([hslicet_t_taxes[i] == t_axes[i] for i in range(4)])):
+            return post
+
+        act = post.args[0].args[0]
+        r = tvm.relay.reshape(act, newshape=post.args[0].attrs.newshape)
+        rt = tvm.relay.transpose(r, axes=[0, 2, 1, 3])
+        rtt = tvm.relay.transpose(rt, axes=[0, 1, 3, 2])
 
         return rtt
-
-        
-
-class RemoveRedundantTranspose(DFPatternCallback):
-    def __init__(self):
-        super().__init__(rewrite_once=True)
-        act = is_op("reshape")(wildcard())
-        act_t = is_op("transpose")(act)
-        act_tt = is_op("transpose")(act_t)
-        act_ttt = is_op("transpose")(act_tt)
-        self.pattern = act_ttt
-
-    def callback(self, pre, post, node_map):
-        ttt_axes = [int(dim) for dim in post.attrs.axes]
-        tt_axes = [int(dim) for dim in post.args[0].attrs.axes]
-        t_axes = [int(dim) for dim in post.args[0].args[0].attrs.axes]
-
-        if all([tt == ttt for tt, ttt in zip(tt_axes, ttt_axes)]):
-            return post.args[0].args[0]
-            
-        return post
 
 
 class EstimateWhere(DFPatternCallback):
@@ -868,52 +855,41 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After DecomposeVariance")
         print(relay_module.functions)
-
+    if print_all:
+        print("After CanonicalizeOps")
+        print(relay_module.functions)
     relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
     if print_all:
         print("After LiftLinearSplit")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
     if print_all:
         print("After DenseWeightTranspose")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
     if print_all:
         print("After DecomposePower")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
     if print_all:
         print("After DecomposeNegative")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
     if print_all:
         print("After DecomposeRsqrt")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
     if print_all:
         print("After InvertDivide")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
     if print_all:
         print("After ExplicateTranspose")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
     if print_all:
         print("After ExplicateHSliceTranspose")
         print(relay_module.functions)
-
-    relay_module["main"] = rewrite(RemoveRedundantTranspose(), relay_module["main"])
-    if print_all:
-        print("After RemoveRedundantTranspose")
-        print(relay_module.functions)
-        
     relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
     if print_all:
         print("After ReformatTFConv2d")
@@ -922,27 +898,22 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After InferType")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
     if print_all:
         print("After DecomposeMultiAxisTranspose")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
     if print_all:
         print("After EstimateWhere")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(LowerAdaptivePool(), relay_module["main"])
     if print_all:
         print("After LowerAdaptivePool")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
     if print_all:
         print("After LowerSqueezeToReshape")
         print(relay_module.functions)
-
     relay_module["main"] = rewrite(CStridedSliceToRStridedSlice(), relay_module["main"])
     if print_all:
         print("After CStridedSliceToRStridedSlice")
