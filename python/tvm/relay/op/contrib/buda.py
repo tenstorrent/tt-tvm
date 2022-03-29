@@ -226,6 +226,29 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
 
         return output
 
+class DecomposeMultiAxisMean(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.mean = is_op("mean")(self.act)
+        self.pattern = self.mean
+
+    def callback(self, pre, post, node_map):
+        reduce_axes = list(post.attrs.axis)
+        if len(reduce_axes) == 1:
+            return post
+
+        acts = node_map[self.act][0]
+        out = node_map[self.mean][0]
+        keepdims = bool(post.attrs.keepdims)
+        output_shape = list(out.checked_type.shape)
+
+        for axis in reduce_axes:
+            acts = tvm.relay.mean(acts, axis=int(axis), keepdims=True)
+        
+        if keepdims == False:
+            acts = tvm.relay.reshape(acts, newshape=output_shape)
+        return acts    
 
 class ReformatTFConv2d(DFPatternCallback):
     def __init__(self):
@@ -724,6 +747,27 @@ class UpdateConstants(DFPatternCallback):
         self.const_idx += 1
         return post
 
+class ConvertExpandDimsToReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.pattern = is_op('expand_dims')(self.act)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        axis = int(post.attrs.axis)
+        num_new_axes = int(post.attrs.num_newaxis)
+
+        if act.op.name == "reshape":
+            target_shape = list(act.attrs.newshape)
+        else:
+            target_shape = list(act.checked_type.shape)
+
+        for i in range(num_new_axes):
+            target_shape.insert(axis, 1)
+
+        return tvm.relay.reshape(act, newshape=target_shape)
+
 def run_relay_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
@@ -922,7 +966,14 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After PopulateTransposeAxes")
         print(relay_module.functions)
-
+    relay_module["main"] = rewrite(ConvertExpandDimsToReshape(), relay_module["main"])
+    if print_all:
+        print("After ConvertExpandDimsToReshape")
+        print(relay_module.functions)
+    relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
+    if print_all:
+        print("After DecomposeMultiAxisMean")
+        print(relay_module.functions)
     return relay_module
 
 
@@ -1029,6 +1080,7 @@ def partition_for_buda(mod):
         if print_all:
             print("After PartitionGraph")
             print(mod.functions)
+
         assert len(mod.get_global_vars()) == 2, mod["main"]
 
         constant_updator = UpdateConstants()
