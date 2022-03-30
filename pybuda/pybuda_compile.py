@@ -14,6 +14,7 @@ from ctypes import c_void_p
 import copy
 import json
 
+from collections import OrderedDict
 from pybuda.op.eval.common import calculate_pcc
 
 
@@ -85,10 +86,15 @@ def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs):
     torchmod.eval()
     framework_outputs = torchmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
-        framework_outputs = [framework_outputs]
+        if isinstance(framework_outputs, torch.Tensor):
+            framework_outputs = [framework_outputs]
+        elif isinstance(framework_outputs, OrderedDict):
+            framework_outputs = framework_outputs.to_tuple()
+        else:
+            assert False, "Don't know what to do with this"
 
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
-    traced_model = torch.jit.trace(torchmod, inputs)
+    traced_model = torch.jit.trace(torchmod, inputs, strict=False)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     if consteval_in_pybuda:
