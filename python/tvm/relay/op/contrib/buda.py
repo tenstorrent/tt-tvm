@@ -171,6 +171,11 @@ def stack_reshape_reshape_to_binary_stack():
     return is_op("reshape")(rshp)
 
 
+def decompose_concat_input_tuple():
+    act = is_tuple(None)
+    return is_op("concatenate")(act)
+
+
 @register_pattern_table("buda")
 def pattern_table():
     matmul = ("buda.matmul", dense_to_matmul())
@@ -178,7 +183,8 @@ def pattern_table():
     hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
     layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
     binary_stack = ("buda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
-    buda_patterns = [hstack, hslice, matmul, binary_stack]
+    concatenate = ("buda.concatenate", decompose_concat_input_tuple())
+    buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate]
     return buda_patterns
 
 
