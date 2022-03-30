@@ -4036,6 +4036,7 @@ class PyTorchOpConverter:
             "prim::RaiseException",
             "prim::If",
             "prim::Loop",
+            "prim::DictConstruct",
         ]
         known_ops += list(self.convert_map.keys())
         known_ops += list(qnn_torch.convert_map.keys())
@@ -4260,6 +4261,11 @@ class PyTorchOpConverter:
                 unpacked_names = _get_output_names(op_node)
                 assert len(loop_out) == len(unpacked_names)
                 outputs.update(zip(unpacked_names, set_span(loop_out, self.source_map[op_node])))
+
+            elif operator == "prim::DictConstruct":
+                assert len(inputs) % 2 == 0, "Expected even number of inputs to unpack"
+                # Just turn into tuple for now
+                return _expr.Tuple(inputs[1::2])
             else:
                 if operator not in self.convert_map:
                     # At this point, the only possible ops that are not in convert_map are
