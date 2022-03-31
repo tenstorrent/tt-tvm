@@ -45,6 +45,7 @@ _register_external_op_helper("sqrt")
 _register_external_op_helper("strided_slice")
 _register_external_op_helper("subtract")
 _register_external_op_helper("transpose")
+_register_external_op_helper("where")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -502,59 +503,30 @@ class DenseWeightTranspose(DFPatternCallback):
         return tvm.relay.nn.dense(act, wt2)
 
 
-class LiftLinearSplit(DFPatternCallback):
+class LowerSplitToStridedSlice(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         act = wildcard()
-        self.dense_weight = is_constant()
-        self.add_bias = is_constant()
-        self.dense = is_op("nn.dense")(act, self.dense_weight)
-        self.add = is_op("add")(self.dense, self.add_bias)
-        self.reshape = is_op("reshape")(self.add)
-        self.pattern = is_op('split')(self.reshape)
+        self.split = is_op("split")(act)
+
+        self.pattern = is_tuple_get_item(wildcard())
 
     def callback(self, pre, post, node_map):
-        weight = node_map[self.dense_weight][0].data.numpy()
-        bias = node_map[self.add_bias][0].data.numpy()
+        split = post.tuple_value().op
 
-        indices_or_sections = post.attrs.indices_or_sections
-        if isinstance(indices_or_sections, tvm.tir.expr.IntImm):
-            # Convert to list of split positions
-            num_parts = int(indices_or_sections)
-            split_idx = np.linspace(0, weight.shape[axis], num_parts + 1).astype(np.int)[1:-1]
-            indices_or_sections = tuple(split_idx)
-    
-        ios = np.array(indices_or_sections).astype(int)
-        axis = post.attrs.axis
-
-        input_shape = node_map[self.dense][0].checked_type.shape
-        output_shape = node_map[self.reshape][0].checked_type.shape
-
-        newshape = list(output_shape)
-        newshape[axis] = -1
-
-        if (is_unsqueeze(node_map[self.reshape][0])):
-            # Weight should be transposed in nn.dense, so if splitting
-            # along the final output axis, split along the first weight
-            if axis == len(output_shape) - 1:
-                assert output_shape[axis] == weight.shape[0]
-                axis = 0
-
-        act = node_map[self.dense][0].args[0]
-
-        split_weights = np.split(weight, ios, axis)
-        split_biases = np.split(bias, ios, len(bias.shape) - 1)
-
-        outputs = []
-        for split_weight, split_bias in zip(split_weights, split_biases):
-            dense_out = tvm.relay.nn.dense(act, tvm.relay.Constant(tvm.nd.array(split_weight)))
-            add_out = tvm.relay.add(dense_out, tvm.relay.Constant(tvm.nd.array(split_bias)))
-            reshape_out = tvm.relay.reshape(add_out, newshape=newshape)
-            outputs.append(reshape_out)
-
-        return tvm.relay.expr.Tuple(outputs)
-
+        if not self.split.match(split):
+            return post
         
+        act = split.args[0]
+        axis = split.attrs.axis
+        ios = [int(dim) for dim in split.attrs.indices_or_sections]
+        ios.append(act.checked_type.shape[axis])
+
+        begin = 0 if post.index == 0 else ios[post.index - 1]
+        end = ios[post.index]
+
+        sliced_act = tvm.relay.strided_slice(act, (begin,), (end,), axes=(axis,))
+        return sliced_act
 
 class ExplicateHSliceTranspose(DFPatternCallback):
     def __init__(self):
@@ -723,6 +695,33 @@ class CStridedSliceToRStridedSlice(DFPatternCallback):
         trslice = tvm.relay.transpose(rslice, axes=taxes)
         return trslice
         
+class PopulateStridedSliceAxes(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('strided_slice')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.axes is not None:
+            return post
+
+        post = run_infer_type(post)
+        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
+        output_shape = [int(dim) for dim in post.checked_type.shape]
+
+        begin = [int(dim) for dim in post.attrs.begin]
+        end = [int(dim) for dim in post.attrs.end]
+        stride = [int(dim) for dim in post.attrs.strides]
+
+        act = post.args[0]
+        for dim, (in_dim, out_dim) in enumerate(zip(input_shape, output_shape)):
+            if in_dim != out_dim:
+                act = tvm.relay.strided_slice(act, begin=(begin[dim],), end=(end[dim],), strides=(stride[dim],),axes=(dim,), slice_mode=post.attrs.slice_mode)
+
+        return act
+
+        
 class PopulateTransposeAxes(DFPatternCallback):
     def __init__(self, rewrite_once=True):
         super().__init__()
@@ -740,6 +739,7 @@ class PopulateTransposeAxes(DFPatternCallback):
         taxes = list(range(-1, last_dim, -1))
 
         return tvm.relay.transpose(post.args[0], axes=taxes)
+
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -905,81 +905,102 @@ def run_buda_compile_passes(relay_module, print_all=False):
     if print_all:
         print("After DecomposeVariance")
         print(relay_module.functions)
+        
+    relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
     if print_all:
-        print("After CanonicalizeOps")
+        print("After LowerSplitToStridedSlice")
         print(relay_module.functions)
-    relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
-    if print_all:
-        print("After LiftLinearSplit")
-        print(relay_module.functions)
+
     relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
     if print_all:
         print("After DenseWeightTranspose")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
     if print_all:
         print("After DecomposePower")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
     if print_all:
         print("After DecomposeNegative")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
     if print_all:
         print("After DecomposeRsqrt")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
     if print_all:
         print("After InvertDivide")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
     if print_all:
         print("After ExplicateTranspose")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
     if print_all:
         print("After ExplicateHSliceTranspose")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
     if print_all:
         print("After ReformatTFConv2d")
         print(relay_module.functions)
+
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
     if print_all:
         print("After InferType")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
     if print_all:
         print("After DecomposeMultiAxisTranspose")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
     if print_all:
         print("After EstimateWhere")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(LowerAdaptivePool(), relay_module["main"])
     if print_all:
         print("After LowerAdaptivePool")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
     if print_all:
         print("After LowerSqueezeToReshape")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(CStridedSliceToRStridedSlice(), relay_module["main"])
     if print_all:
         print("After CStridedSliceToRStridedSlice")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(PopulateTransposeAxes(), relay_module["main"])
     if print_all:
         print("After PopulateTransposeAxes")
         print(relay_module.functions)
+
+    relay_module["main"] = rewrite(PopulateStridedSliceAxes(), relay_module["main"])
+    if print_all:
+        print("After PopulateStridedSliceAxes")
+        print(relay_module.functions)
+
     relay_module["main"] = rewrite(ConvertExpandDimsToReshape(), relay_module["main"])
     if print_all:
         print("After ConvertExpandDimsToReshape")
         print(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
     if print_all:
         print("After DecomposeMultiAxisMean")
         print(relay_module.functions)
+
     return relay_module
 
 
