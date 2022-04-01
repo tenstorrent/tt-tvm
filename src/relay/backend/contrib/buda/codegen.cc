@@ -40,7 +40,9 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       auto comp = fn->GetAttr<String>(attr::kComposite);
       ICHECK(comp.defined()) << "Buda JSON runtime only supports composite functions.";
       name = comp.value();
-
+      if (name == "buda.select") {
+        call = GetRootCall(fn->body.as<CallNode>(), 0, {"strided_slice"});
+      }
       // if (name == "buda.matmul") {
       //   call = GetRootCall(fn->body.as<CallNode>(), 1, {"transpose", "nn.dense"});
       //   ICHECK(call->op.as<OpNode>()) << "Not op node";
