@@ -18,7 +18,7 @@ import math
 import numpy as np
 from tvm.relay.dataflow_pattern import *
 
-logger = logging.getLogger("Buda")
+from loguru import logger
 
 def _register_external_op_helper(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.buda")
@@ -777,258 +777,214 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
 def run_relay_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.RemoveUnusedFunctions()])(relay_module)
-    if print_all:
-        print("After RemoveUnusedFunctions")
-        print(relay_module.functions)
+    logger.trace("After RemoveUnusedFunctions")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.ToBasicBlockNormalForm()])(relay_module)
-    if print_all:
-        print("After ToBasicBlockNormalForm")
-        print(relay_module.functions)
+    logger.trace("After ToBasicBlockNormalForm")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.Legalize()])(relay_module)
-    if print_all:
-        print("After Legalize")
-        print(relay_module.functions)
+    logger.trace("After Legalize")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.SimplifyInference()])(relay_module)
-    if print_all:
-        print("After SimplifyInference")
-        print(relay_module.functions)
+    logger.trace("After SimplifyInference")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.DynamicToStatic()])(relay_module)
-    if print_all:
-        print("After DynamicToStatic")
-        print(relay_module.functions)
+    logger.trace("After DynamicToStatic")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr()])(relay_module)
-    if print_all:
-        print("After EliminateCommonSubexpr")
-        print(relay_module.functions)
+    logger.trace("After EliminateCommonSubexpr")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.SimplifyExpr()])(relay_module)
-    if print_all:
-        print("After SimplifyExpr")
-        print(relay_module.functions)
+    logger.trace("After SimplifyExpr")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CombineParallelConv2D(3)])(relay_module)
-    if print_all:
-        print("After CombineParallelConv2D")
-        print(relay_module.functions)
+    logger.trace("After CombineParallelConv2D")
+    logger.trace(relay_module.functions)
 
     # relay_module = tvm.transform.Sequential([transform.CombineParallelDense(3)])(relay_module)
     # if print_all:
-    #     print("After CombineParallelDense")
-    #     print(relay_module.functions)
+    # logger.trace("After CombineParallelDense")
+    # logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CombineParallelBatchMatmul(3)])(relay_module)
-    if print_all:
-        print("After CombineParallelBatchMatmul")
-        print(relay_module.functions)
+    logger.trace("After CombineParallelBatchMatmul")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-    if print_all:
-        print("After FoldConstant")
-        print(relay_module.functions)
+    logger.trace("After FoldConstant")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
-    if print_all:
-        print("After FoldScaleAxis")
-        print(relay_module.functions)
+    logger.trace("After FoldScaleAxis")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
-    if print_all:
-        print("After CanonicalizeCast")
-        print(relay_module.functions)
+    logger.trace("After CanonicalizeCast")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
-    if print_all:
-        print("After CanonicalizeOps")
-        print(relay_module.functions)
+    logger.trace("After CanonicalizeOps")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-    if print_all:
-        print("After FoldConstant")
-        print(relay_module.functions)
+    logger.trace("After FoldConstant")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.Inline()])(relay_module)
-    if print_all:
-        print("After Inline")
-        print(relay_module.functions)
+    logger.trace("After Inline")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
-
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
-    if print_all:
-        print("After FoldConstant")
-        print(relay_module.functions)
+    logger.trace("After FoldConstant")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CanonicalizeOps()])(relay_module)
-    if print_all:
-        print("After CanonicalizeOps")
-        print(relay_module.functions)
+    logger.trace("After CanonicalizeOps")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     return relay_module
 
 
 def run_buda_compile_passes(relay_module, print_all=False):
     relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
-    if print_all:
-        print("After DecomposeVariance")
-        print(relay_module.functions)
+    logger.trace("After DecomposeVariance")
+    logger.trace(relay_module.functions)
         
     relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
-    if print_all:
-        print("After LowerSplitToStridedSlice")
-        print(relay_module.functions)
+    logger.trace("After LowerSplitToStridedSlice")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
-    if print_all:
-        print("After DenseWeightTranspose")
-        print(relay_module.functions)
+    logger.trace("After DenseWeightTranspose")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
-    if print_all:
-        print("After DecomposePower")
-        print(relay_module.functions)
+    logger.trace("After DecomposePower")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
-    if print_all:
-        print("After DecomposeNegative")
-        print(relay_module.functions)
+    logger.trace("After DecomposeNegative")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
-    if print_all:
-        print("After DecomposeRsqrt")
-        print(relay_module.functions)
+    logger.trace("After DecomposeRsqrt")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
-    if print_all:
-        print("After InvertDivide")
-        print(relay_module.functions)
+    logger.trace("After InvertDivide")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
-    if print_all:
-        print("After ExplicateTranspose")
-        print(relay_module.functions)
+    logger.trace("After ExplicateTranspose")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
-    if print_all:
-        print("After ExplicateHSliceTranspose")
-        print(relay_module.functions)
+    logger.trace("After ExplicateHSliceTranspose")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
-    if print_all:
-        print("After ReformatTFConv2d")
-        print(relay_module.functions)
+    logger.trace("After ReformatTFConv2d")
+    logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    if print_all:
-        print("After InferType")
-        print(relay_module.functions)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
-    if print_all:
-        print("After DecomposeMultiAxisTranspose")
-        print(relay_module.functions)
+    logger.trace("After DecomposeMultiAxisTranspose")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
-    if print_all:
-        print("After EstimateWhere")
-        print(relay_module.functions)
+    logger.trace("After EstimateWhere")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerAdaptivePool(), relay_module["main"])
-    if print_all:
-        print("After LowerAdaptivePool")
-        print(relay_module.functions)
+    logger.trace("After LowerAdaptivePool")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
-    if print_all:
-        print("After LowerSqueezeToReshape")
-        print(relay_module.functions)
+    logger.trace("After LowerSqueezeToReshape")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(CStridedSliceToRStridedSlice(), relay_module["main"])
-    if print_all:
-        print("After CStridedSliceToRStridedSlice")
-        print(relay_module.functions)
+    logger.trace("After CStridedSliceToRStridedSlice")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(PopulateTransposeAxes(), relay_module["main"])
-    if print_all:
-        print("After PopulateTransposeAxes")
-        print(relay_module.functions)
+    logger.trace("After PopulateTransposeAxes")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(PopulateStridedSliceAxes(), relay_module["main"])
-    if print_all:
-        print("After PopulateStridedSliceAxes")
-        print(relay_module.functions)
+    logger.trace("After PopulateStridedSliceAxes")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ConvertExpandDimsToReshape(), relay_module["main"])
-    if print_all:
-        print("After ConvertExpandDimsToReshape")
-        print(relay_module.functions)
+    logger.trace("After ConvertExpandDimsToReshape")
+    logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
-    if print_all:
-        print("After DecomposeMultiAxisMean")
-        print(relay_module.functions)
+    logger.trace("After DecomposeMultiAxisMean")
+    logger.trace(relay_module.functions)
 
     return relay_module
 
 
 def reconstruct_ops_for_buda(mod):
     print_all = False
-    if print_all:
-        print("reconstruct_ops_for_buda:: At Entry")
-        print(mod.functions)
+
+    logger.trace("reconstruct_ops_for_buda:: At Entry")
+    logger.trace(mod.functions)
     mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
-    if print_all:
-        print("After ReconstructPyTorchGelu")
-        print(mod.functions)
+
+    logger.trace("After ReconstructPyTorchGelu")
+    logger.trace(mod.functions)
     mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
-    if print_all:
-        print("After ReconstructTFGelu")
-        print(mod.functions)
+
+    logger.trace("After ReconstructTFGelu")
+    logger.trace(mod.functions)
     mod = tvm.transform.Sequential([transform.InferType()])(mod)
-    if print_all:
-        print("After InferType")
-        print(mod.functions)
+
+    logger.trace("After InferType")
+    logger.trace(mod.functions)
     mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
-    if print_all:
-        print("After ReconstructTFLayerNorm")
-        print(mod.functions)
+
+    logger.trace("After ReconstructTFLayerNorm")
+    logger.trace(mod.functions)
     mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
-    if print_all:
-        print("After ReconstructPyTorchLayerNorm")
-        print(mod.functions)
+
+    logger.trace("After ReconstructPyTorchLayerNorm")
+    logger.trace(mod.functions)
 
     return mod
 
@@ -1054,59 +1010,50 @@ def compile_for_buda(relay_module, target='llvm', params=None):
     else:
         tophub_context = tvm.autotvm.utils.EmptyContext()
 
-    print_all = False
     with tophub_context, tvm.transform.PassContext(opt_level=5):
         bld_mod = BuildModule()
         if params:
             bld_mod._set_params(params)
         context = PassContext().current()
         compiler_config = make_compilation_config(context,target)
-        if print_all:
-            print("Before Compiling")
-            print(relay_module.functions)
 
-        relay_module = run_relay_compile_passes(relay_module, print_all=print_all)
-        compiled_relay_module = run_buda_compile_passes(relay_module, print_all=print_all)
+        logger.trace("Before Compiling")
+        logger.trace(relay_module.functions)
+
+        relay_module = run_relay_compile_passes(relay_module)
+        compiled_relay_module = run_buda_compile_passes(relay_module)
 
     return compiled_relay_module, params
 
 
 def partition_for_buda(mod):
-    print_all = False
     with tvm.transform.PassContext(opt_level=5):
-        if print_all:
-            print("partition_for_buda:: At Entry")
-            print(mod.functions)
+        logger.trace("partition_for_buda:: At Entry")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
-        if print_all:
-            print("After InferType")
-            print(mod.functions)
+        logger.trace("After InferType")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
-        if print_all:
-            print("After MergeComposite")
-            print(mod.functions)
+        logger.trace("After MergeComposite")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
-        if print_all:
-            print("After FoldConstant")
-            print(mod.functions)
+        logger.trace("After FoldConstant")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
-        if print_all:
-            print("After AnnotateTarget")
-            print(mod.functions)
+        logger.trace("After AnnotateTarget")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.MergeCompilerRegions()])(mod)
-        if print_all:
-            print("After MergeCompilerRegions")
-            print(mod.functions)
+        logger.trace("After MergeCompilerRegions")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
-        if print_all:
-            print("After PartitionGraph")
-            print(mod.functions)
+        logger.trace("After PartitionGraph")
+        logger.trace(mod.functions)
 
         assert len(mod.get_global_vars()) == 2, mod["main"]
 
