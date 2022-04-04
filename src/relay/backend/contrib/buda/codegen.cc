@@ -42,6 +42,8 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       name = comp.value();
       if (name == "buda.select") {
         call = GetRootCall(fn->body.as<CallNode>(), 0, {"strided_slice"});
+      } else if (name == "buda.concatenate") {
+        call = GetRootCall(fn->body.as<CallNode>(), 0, {"concatenate"});
       }
       // if (name == "buda.matmul") {
       //   call = GetRootCall(fn->body.as<CallNode>(), 1, {"transpose", "nn.dense"});
