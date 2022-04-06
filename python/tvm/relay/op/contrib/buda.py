@@ -788,7 +788,7 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         axis = int(post.attrs.axis)
         num_new_axes = int(post.attrs.num_newaxis)
 
-        if act.op.name == "reshape":
+        if not isinstance(act, tvm.relay.expr.Var) and act.op.name == "reshape":
             target_shape = list(act.attrs.newshape)
         else:
             target_shape = list(act.checked_type.shape)
