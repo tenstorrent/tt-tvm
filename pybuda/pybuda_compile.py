@@ -15,12 +15,17 @@ import copy
 import json
 
 from collections import OrderedDict
+import pybuda
 from pybuda.op.eval.common import calculate_pcc
+
+from json import JSONEncoder
+from os.path import exists as file_exists
 
 
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
     return passed_to_buda
+
 
 json_graph = {}
 @tvm.register_func
@@ -31,55 +36,73 @@ def retrieve_json_graph(*args):
     json_graph["graph"] = t[1]
     json_graph["param_names"] = t[2]
 
-def clean_names(json_graph, buda_params):
-    if len(json_graph["param_names"]) == 0:
-        return json_graph
 
-    clean_names = []
+def load_tvm_graph(inputs, torchmod, compiler_cfg):
+    """
+    Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
+    run whole compilation process from specific framewrk to the PyBuda graph representation, or
+    skip this compilation process and load serilized TVM graph which is already ported to PyBuda
+    by initial invocation.
 
-    precursor = "tvmgen_default_buda_main_"
-    fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
-    precursor = f"tvmgen_default_buda_main_{fn_number}_"
-    for idx, name in enumerate(json_graph["param_names"]):
-        if precursor in name:
-            clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
+    Parameters
+    ----------
+    inputs: Tuple[Tensor, ...]
+        Input tensors
 
-    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
-    graph = json.loads(json_graph["graph"])
+    torchmod: Module(PyTorchModule or TFModule)
+        Module that contains workload which can be assigned to a single device.
 
-    for node in graph["nodes"]:
-        if precursor in node["name"]:
-            node["name"] = node["name"].replace(precursor, "")
+    compiler_cfg: CompilerConfig
+        Compiler configurations
+        
+    Returns
+    -------
+    Dictionary, OrderedDict, Tuple, Boolean
+        TVM ported graph, Weights, Input tensors, Constant evaluation
+    """
+    if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
+        logger.warning(f"TVM serilization logic will be skipped as both store and load paths are provided")
 
-    json_graph["graph"] = json.dumps(graph)
+    json_graph = compile_tvm_graph(inputs, torchmod, compiler_cfg)
+    
+    pytorch_inputs, weights = format_tvm_graph_weights(inputs, torchmod, compiler_cfg)
+
+    serilize_and_store_tvm_graph(json_graph, compiler_cfg)
+
+    return json_graph, pytorch_inputs, weights
+
+
+def compile_tvm_graph(inputs, torchmod, compiler_cfg):
+    """
+    Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
+    run whole compilation process or only load serilized TVM graph and thus increase test performance.
+
+    Parameters
+    ----------
+    inputs: Tuple[Tensor, ...]
+        Input tensors
+    
+    torchmod: Module(PyTorchModule or TFModule)
+        Module that contains workload which can be assigned to a single device
+
+    compiler_cfg: CompilerConfig
+        Compiler configurations
+
+    Returns
+    -------
+    Dictionary
+        TVM ported graph
+    """
+    if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
+        json_graph = load_serilized_tvm_graph(compiler_cfg.tvm_graph_load_path)
+    elif isinstance(torchmod, pybuda.module.PyTorchModule):
+        json_graph = compile_pytorch_for_buda(torchmod.module, compiler_cfg.enable_consteval, *inputs)
+    elif isinstance(torchmod, pybuda.module.TFModule):
+        json_graph = compile_tf_for_buda(torchmod.module, *inputs)
+    else:
+        raise RuntimeError(f"Unsupported module type {type(torchmod)}")
 
     return json_graph
-
-
-
-def compile_tf_for_buda(tfmod, *inputs):
-    framework_outputs = tfmod(*inputs)
-    if not isinstance(framework_outputs, (list, tuple)):
-        framework_outputs = [framework_outputs]
-
-    framework_outputs = [x.numpy() for x in framework_outputs]
-
-    @tf.function
-    def trace(*inputs):
-        return tfmod(*inputs, training=False)
-
-    full_model = trace.get_concrete_function(*inputs)
-
-    frozen_func = convert_variables_to_constants_v2(full_model)
-    graph_def = frozen_func.graph.as_graph_def()
-    mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
-    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
-
-    np_inputs = [x.numpy() for x in inputs if x is not None]
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs,framework_outputs, return_params=True)
-    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
-
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
 def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs):
@@ -108,30 +131,6 @@ def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs):
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
-def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04, pcc=None):
-    allowed_to_fail = False
-    if len(framework_outputs) != len(relay_outputs):
-        logger.error(f"Different number of outputs. Framework: {len(framework_outputs)}, TVM: {len(relay_outputs)}")
-
-    for i, (fr_out, tvm_out) in enumerate(zip(framework_outputs, relay_outputs)):
-
-        if pcc is None:
-            ok = np.allclose(fr_out, tvm_out, rtol=rtol, atol=atol, equal_nan=True)
-        else:
-            pcc_value = calculate_pcc(fr_out, tvm_out)
-            ok = pcc_value >= pcc
-
-        if not ok:
-            logger.error(f"Tensor mismatch on output {i} between framework and TVM.")
-            logger.trace(f"Framework: (shape = {fr_out.shape}")
-            logger.trace(fr_out)
-            logger.trace(f"TVM: (shape = {tvm_out.shape}")
-            logger.trace(tvm_out)
-            if not allowed_to_fail:
-                raise RuntimeError
-
-    logger.info(f"Verified TVM Relay outputs against framework outputs")
-
 
 def compile_tvm_for_buda(mod, params, inputs, golden_outputs, return_params=False):
     target = "llvm"
@@ -158,6 +157,182 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, return_params=Fals
         return func, buda_params
     else:
         return func
+
+
+def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04, pcc=None):
+    allowed_to_fail = False
+    if len(framework_outputs) != len(relay_outputs):
+        logger.error(f"Different number of outputs. Framework: {len(framework_outputs)}, TVM: {len(relay_outputs)}")
+
+    for i, (fr_out, tvm_out) in enumerate(zip(framework_outputs, relay_outputs)):
+
+        if pcc is None:
+            ok = np.allclose(fr_out, tvm_out, rtol=rtol, atol=atol, equal_nan=True)
+        else:
+            pcc_value = calculate_pcc(fr_out, tvm_out)
+            ok = pcc_value >= pcc
+
+        if not ok:
+            logger.error(f"Tensor mismatch on output {i} between framework and TVM.")
+            logger.trace(f"Framework: (shape = {fr_out.shape}")
+            logger.trace(fr_out)
+            logger.trace(f"TVM: (shape = {tvm_out.shape}")
+            logger.trace(tvm_out)
+            if not allowed_to_fail:
+                raise RuntimeError
+
+    logger.info(f"Verified TVM Relay outputs against framework outputs")
+
+
+def clean_names(json_graph, buda_params):
+    if len(json_graph["param_names"]) == 0:
+        return json_graph
+
+    clean_names = []
+
+    precursor = "tvmgen_default_buda_main_"
+    fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
+    precursor = f"tvmgen_default_buda_main_{fn_number}_"
+    for idx, name in enumerate(json_graph["param_names"]):
+        if precursor in name:
+            clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
+
+    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
+    graph = json.loads(json_graph["graph"])
+
+    for node in graph["nodes"]:
+        if precursor in node["name"]:
+            node["name"] = node["name"].replace(precursor, "")
+
+    json_graph["graph"] = json.dumps(graph)
+
+    return json_graph
+
+
+def compile_tf_for_buda(tfmod, *inputs):
+    framework_outputs = tfmod(*inputs)
+    if not isinstance(framework_outputs, (list, tuple)):
+        framework_outputs = [framework_outputs]
+
+    framework_outputs = [x.numpy() for x in framework_outputs]
+
+    @tf.function
+    def trace(*inputs):
+        return tfmod(*inputs, training=False)
+
+    full_model = trace.get_concrete_function(*inputs)
+
+    frozen_func = convert_variables_to_constants_v2(full_model)
+    graph_def = frozen_func.graph.as_graph_def()
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
+    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+
+    np_inputs = [x.numpy() for x in inputs if x is not None]
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs,framework_outputs, return_params=True)
+    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+
+
+def load_serilized_tvm_graph(full_file_path):
+    """
+    Loads serilized TVM graph representation ported to PyBuda in form of python dictionary.
+
+    Parameters
+    ----------
+    full_file_path: String
+        Full source path where serilized TVM graph is stored
+        
+    Returns
+    -------
+    Dictionary
+        Deserialized TVM graph
+    """
+    if not file_exists(full_file_path):
+        raise RuntimeError(f"Serilized TVM model doesn't exist: {full_file_path}")
+
+    with open(full_file_path, "r") as file:
+        serilized_graph_str = json.load(file)
+
+    serilized_dict = {}
+    serilized_dict["graph"] = json.dumps(serilized_graph_str["graph"])
+    serilized_dict["params"] = serilized_graph_str["params"]
+
+    logger.debug(f"Successfully load serilized TVM graph from {full_file_path} path")
+
+    return serilized_dict
+
+
+def format_tvm_graph_weights(inputs, torchmod, compiler_cfg):
+    """
+    Formats model weights based on specific framework.
+
+    Parameters
+    ----------
+    inputs: Tuple[Tensor, ...]
+        Input tensors
+
+    torchmod: Module(PyTorchModule or TFModule)
+        Module that contains workload which can be assigned to a single device.
+
+    compiler_cfg: CompilerConfig
+        Compiler configurations
+        
+    Returns
+    -------
+    OrderedDict, Boolean, Tuple
+        Weights, Constant evaluation, Input tensors
+    """
+    if isinstance(torchmod, pybuda.module.PyTorchModule):
+        weights = torchmod.module.state_dict()
+    elif isinstance(torchmod, pybuda.module.TFModule):
+        weights = {weight.name: weight.value for weight in torchmod.module.weights}
+        inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
+        compiler_cfg.enable_consteval = False
+    else:
+        raise RuntimeError(f"Unsupported module type {type(torchmod)}")
+
+    return inputs, weights
+
+
+def serilize_and_store_tvm_graph(json_graph, compiler_cfg):
+    """
+    Serilizes TVM graph representation ported to PyBuda in form of JSON and stores it 
+    on the desired destination.
+
+    Parameters
+    ----------
+    json_graph: Dictionary
+        Previously compiled TVM graph pored to PyBuda representation
+
+    compiler_cfg: CompilerConfig
+        Compiler configurations
+
+    Returns
+    -------
+    """
+    class NumpyArrayEncoder(JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return JSONEncoder.default(self, obj)
+
+    if compiler_cfg.tvm_graph_store_path == "" or compiler_cfg.tvm_graph_load_path != "" or not compiler_cfg.enable_consteval:
+        return
+
+    graph_dict = json.loads(json_graph["graph"])
+    params_dict = json_graph["params"]
+
+    serilized_dict = {}
+    serilized_dict["graph"] = graph_dict
+    serilized_dict["params"] = params_dict
+    serilized_str = json.dumps(serilized_dict, cls=NumpyArrayEncoder, indent=2)
+    
+    with open(compiler_cfg.tvm_graph_store_path, 'w') as file:
+        file.write(serilized_str)
+
+    logger.debug(f"Successfully serilized TVM graph from {compiler_cfg.tvm_graph_store_path} path")
+
 
 @tvm.register_func
 def retrieve_pybuda_graph(*args):
