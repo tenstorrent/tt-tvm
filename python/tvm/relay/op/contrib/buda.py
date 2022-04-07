@@ -544,6 +544,8 @@ class LowerSplitToStridedSlice(DFPatternCallback):
         
         act = split.args[0]
         axis = split.attrs.axis
+        if axis < 0:
+            axis += len(act.checked_type.shape)
         ios = [int(dim) for dim in split.attrs.indices_or_sections]
         ios.append(act.checked_type.shape[axis])
 
@@ -928,6 +930,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
     logger.trace("After InvertDivide")
+    logger.trace(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    logger.trace("After InferType")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
