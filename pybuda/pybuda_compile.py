@@ -102,7 +102,7 @@ def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs):
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    np_inputs = [x.numpy() for x in inputs]
+    np_inputs = [x.detach().numpy() for x in inputs]
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, return_params=True)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
