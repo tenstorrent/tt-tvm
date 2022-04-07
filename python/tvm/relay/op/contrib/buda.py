@@ -46,6 +46,7 @@ _register_external_op_helper("strided_slice")
 _register_external_op_helper("subtract")
 _register_external_op_helper("transpose")
 _register_external_op_helper("where")
+_register_external_op_helper("nn.conv2d_transpose")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
