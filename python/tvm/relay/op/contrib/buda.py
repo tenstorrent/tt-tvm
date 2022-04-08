@@ -1086,7 +1086,8 @@ def partition_for_buda(mod):
         logger.trace("After PartitionGraph")
         logger.trace(mod.functions)
 
-        assert len(mod.get_global_vars()) == 2, mod["main"]
+        assert len(mod.global_var_map_) == 2, mod["main"]
+        assert isinstance(mod["main"].body.op, tvm.ir.expr.GlobalVar), mod["main"]
 
         constant_updator = UpdateConstants()
         rewrite(constant_updator, mod[mod.get_global_vars()[1]])
