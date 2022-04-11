@@ -178,29 +178,6 @@ def decompose_concat_input_tuple():
     act = is_tuple(None)
     return is_op("concatenate")(act)
 
-def is_strided_slice_to_select(call):
-
-    input_shape = call.args[0].checked_type.shape
-    begin_slice = call.attrs.begin
-    end_slice = call.attrs.end
-    axes = list(call.attrs.axes)
-    assert len(axes) == 1, "Strided slice should be decomposed into single axis"
-    dim = int(axes[0])
-    strides = call.attrs.strides
-    
-    if not all([int(x) == 1 for x in strides]):
-        return False
-
-    assert dim is not None, "Cannot find strided slice dim"
-    if dim >= 0:
-        dim -= len(input_shape)
-    return (int(begin_slice[0]) % 32 == 0 and int(end_slice[0]) % 32 == 0) or dim == -3 or dim == -4
-
-def strided_slice_to_select():
-    act = wildcard()
-    select = is_op("strided_slice")(act)
-
-    return select
 
 @register_pattern_table("buda")
 def pattern_table():
@@ -210,8 +187,7 @@ def pattern_table():
     layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
     binary_stack = ("buda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
     concatenate = ("buda.concatenate", decompose_concat_input_tuple())
-    select = ("buda.select", strided_slice_to_select(), is_strided_slice_to_select)
-    buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate, select]
+    buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate]
     return buda_patterns
 
 
@@ -989,10 +965,6 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
     logger.trace("After LowerSqueezeToReshape")
-    logger.trace(relay_module.functions)
-
-    relay_module["main"] = rewrite(CStridedSliceToRStridedSlice(), relay_module["main"])
-    logger.trace("After CStridedSliceToRStridedSlice")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(PopulateTransposeAxes(), relay_module["main"])
