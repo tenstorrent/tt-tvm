@@ -194,7 +194,7 @@ def is_strided_slice_to_select(call):
     assert dim is not None, "Cannot find strided slice dim"
     if dim >= 0:
         dim -= len(input_shape)
-    return (int(begin_slice[0]) % 32 == 0 and int(end_slice[0]) % 32 == 0) or dim == -3
+    return (int(begin_slice[0]) % 32 == 0 and int(end_slice[0]) % 32 == 0) or dim == -3 or dim == -4
 
 def strided_slice_to_select():
     act = wildcard()
@@ -579,6 +579,28 @@ class ExplicateHSliceTranspose(DFPatternCallback):
         rtt = tvm.relay.transpose(rt, axes=[0, 1, 3, 2])
 
         return rtt
+
+class RemoveRedundantTake(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.indices = is_constant()
+        self.pattern = is_op("take")(self.input_tensor, self.indices)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input_tensor][0]
+        act_shape = list(act.checked_type.shape)
+        indices = node_map[self.indices][0].data.numpy().item()
+        axis = post.attrs.axis
+
+        if act_shape[int(axis)] == 1 and indices == 0:
+            newshape = act_shape
+            del newshape[int(axis)]
+
+            out = tvm.relay.reshape(act, newshape=newshape)
+            return out
+
+        return post
 
 
 class EstimateWhere(DFPatternCallback):
@@ -987,6 +1009,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
     logger.trace("After DecomposeMultiAxisMean")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(RemoveRedundantTake(), relay_module["main"])
+    logger.trace("After RemoveRedundantTake")
     logger.trace(relay_module.functions)
 
     return relay_module
