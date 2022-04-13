@@ -41,8 +41,8 @@ else
 fi
 
 echo $TVM_BUILD_CONFIG
-cmake -j$(shell nproc) -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
-make -j$(shell nproc)
+cmake -j$(nproc) -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
+make -j$(nproc)
 
 echo "TVM Built Successful"
 cd $ROOT
