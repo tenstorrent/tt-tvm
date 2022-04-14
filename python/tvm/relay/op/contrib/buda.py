@@ -48,6 +48,7 @@ _register_external_op_helper("transpose")
 _register_external_op_helper("where")
 _register_external_op_helper("nn.conv2d_transpose")
 _register_external_op_helper("image.resize2d")
+_register_external_op_helper("nn.avg_pool2d")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -690,19 +691,26 @@ class LowerAdaptivePool(DFPatternCallback):
         self.pattern = is_op('nn.adaptive_avg_pool2d')(wildcard())
 
     def callback(self, pre, post, node_map):
-        #TODO: Decompose arbitrary adaptive pools thusly:
-        # Stride = (input_size//output_size)
-        # Kernel size = input_size - (output_size-1)*stride
-        # Padding = 0
-        output_size = [int(dim) for dim in post.attrs.output_size]
-        assert all(dim == 1 for dim in output_size)
+        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
+        output_shape = [int(dim) for dim in post.checked_type.shape]
 
-        reduce_dims = range(-1, -1 * (len(output_size) + 1), -1)
-        input_op = post.args[0]
-        for dim in reduce_dims:
-            input_op = tvm.relay.mean(input_op, axis=dim, keepdims=True)
+        assert input_shape[-1] == input_shape[-2], "Only support same factor of the input for H and W"
+        assert output_shape[-1] == output_shape[-2], "Only support same factor of the output for H and W"
 
-        return input_op
+        input_size = input_shape[-1]
+        output_size = output_shape[-1]
+
+        stride = input_size // output_size
+        kernel = input_size - (output_size - 1) * stride
+        padding = 0
+
+        return tvm.relay.nn.avg_pool2d(
+            post.args[0],
+            pool_size=kernel,
+            strides=stride,
+            padding=padding,
+        )
+
 
 class LowerSqueezeToReshape(DFPatternCallback):
     def __init__(self):
