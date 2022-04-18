@@ -683,17 +683,17 @@ class ExplicateTranspose(DFPatternCallback):
             
         return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
 
-class LowerAdaptivePool(DFPatternCallback):
+class LowerAdaptiveAvgPool(DFPatternCallback):
     def __init__(self):
         super().__init__()
         self.input_tensor = wildcard()
-
         self.pattern = is_op('nn.adaptive_avg_pool2d')(wildcard())
 
     def callback(self, pre, post, node_map):
         input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
         output_shape = [int(dim) for dim in post.checked_type.shape]
 
+        assert post.attrs.layout == "NCHW"
         assert input_shape[-1] == input_shape[-2], "Only support same factor of the input for H and W"
         assert output_shape[-1] == output_shape[-2], "Only support same factor of the output for H and W"
 
@@ -705,6 +705,35 @@ class LowerAdaptivePool(DFPatternCallback):
         padding = 0
 
         return tvm.relay.nn.avg_pool2d(
+            post.args[0],
+            pool_size=kernel,
+            strides=stride,
+            padding=padding,
+        )
+
+
+class LowerAdaptiveMaxPool(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+        self.pattern = is_op('nn.adaptive_max_pool2d')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
+        output_shape = [int(dim) for dim in post.checked_type.shape]
+
+        assert post.attrs.layout == "NCHW"
+        assert input_shape[-1] == input_shape[-2], "Only support same factor of the input for H and W"
+        assert output_shape[-1] == output_shape[-2], "Only support same factor of the output for H and W"
+
+        input_size = input_shape[-1]
+        output_size = output_shape[-1]
+
+        stride = input_size // output_size
+        kernel = input_size - (output_size - 1) * stride
+        padding = 0
+
+        return tvm.relay.nn.max_pool2d(
             post.args[0],
             pool_size=kernel,
             strides=stride,
@@ -990,8 +1019,12 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After EstimateWhere")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(LowerAdaptivePool(), relay_module["main"])
-    logger.trace("After LowerAdaptivePool")
+    relay_module["main"] = rewrite(LowerAdaptiveAvgPool(), relay_module["main"])
+    logger.trace("After LowerAdaptiveAvgPool")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(LowerAdaptiveMaxPool(), relay_module["main"])
+    logger.trace("After LowerAdaptiveMaxPool")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
