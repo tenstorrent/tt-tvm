@@ -630,6 +630,13 @@ class DecomposeEinsum(DFPatternCallback):
 
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=True, transpose_b=False)
             return result
+        elif equation == "bts,bcs->bct":
+            assert len(node_map[self.act][0]) == 2
+            srcB = node_map[self.act][0][0]
+            srcA = node_map[self.act][0][1]
+
+            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
+            return result
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
