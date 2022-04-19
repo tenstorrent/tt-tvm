@@ -807,7 +807,13 @@ class PopulateStridedSliceAxes(DFPatternCallback):
         act = post.args[0]
         for dim, (in_dim, out_dim) in enumerate(zip(input_shape, output_shape)):
             if in_dim != out_dim:
-                act = tvm.relay.strided_slice(act, begin=(begin[dim],), end=(end[dim],), strides=(stride[dim],),axes=(dim,), slice_mode=post.attrs.slice_mode)
+                if post.attrs.slice_mode == "size":
+                    final_stride = None
+                    final_end = (begin[dim] + end[dim], )
+                else:
+                    final_stride = (stride[dim],)
+                    final_end = (end[dim], )
+                act = tvm.relay.strided_slice(act, begin=(begin[dim],), end=final_end, strides=final_stride,axes=(dim,), slice_mode="end")
 
         return act
 
