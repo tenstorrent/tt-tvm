@@ -612,6 +612,25 @@ class DecomposeNegative(DFPatternCallback):
         mul = tvm.relay.multiply(post.args[0], negative_one)
         return mul
 
+class DecomposeEinsum(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = is_tuple(None)
+
+        self.pattern = is_op('einsum')(self.act)
+
+    def callback(self, pre, post, node_map):
+        equation = str(post.attrs.equation)
+        if equation == "bct,bcs->bts":
+            assert len(node_map[self.act][0]) == 2
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=True, transpose_b=False)
+            return result
+        else:
+            assert False, f"TVM einsum decomposition does not support {equation} yet."
+
 class DecomposeRsqrt(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -906,7 +925,11 @@ def run_buda_compile_passes(relay_module, print_all=False):
     relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
     logger.trace("After DecomposeVariance")
     logger.trace(relay_module.functions)
-        
+
+    relay_module["main"] = rewrite(DecomposeEinsum(), relay_module["main"])
+    logger.trace("After DecomposeEinsum")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
     logger.trace("After LowerSplitToStridedSlice")
     logger.trace(relay_module.functions)
