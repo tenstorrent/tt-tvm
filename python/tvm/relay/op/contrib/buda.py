@@ -2,6 +2,7 @@ import logging
 
 import tvm
 from tvm import relay
+from tvm.relay.expr_functor import ExprVisitor, ExprMutator
 from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
 from tvm.relay import transform
@@ -835,6 +836,20 @@ class UpdateConstants(DFPatternCallback):
         self.const_idx += 1
         return post
 
+
+class AllowUnsupportedOps(ExprMutator):
+    def __init__(self):
+        super().__init__()
+
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.ir.Op):
+            if call.op.get_attr("target.buda") is None:
+                def _func_wrapper(expr):
+                    return True
+                tvm.ir.register_op_attr(call.op.name, "target.buda", _func_wrapper)
+
+        return super().visit_call(call)
+
 class ConvertExpandDimsToReshape(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1120,7 +1135,7 @@ def compile_for_buda(relay_module, target='llvm', params=None):
     return compiled_relay_module, params
 
 
-def partition_for_buda(mod):
+def partition_for_buda(mod, allow_unsupported=False):
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
@@ -1132,6 +1147,11 @@ def partition_for_buda(mod):
         mod = tvm.transform.Sequential([transform.MergeComposite(pattern_table())])(mod)
         logger.trace("After MergeComposite")
         logger.trace(mod.functions)
+
+        if allow_unsupported:
+            mod["main"] = AllowUnsupportedOps().visit(mod["main"])
+            logger.trace("After AllowUnsupportedOps")
+            logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         logger.trace("After FoldConstant")
