@@ -1109,12 +1109,15 @@ def partition_for_buda(mod):
         logger.trace(mod.functions)
 
         assert len(mod.global_var_map_) == 2, mod["main"]
-        if isinstance(mod["main"].body, tvm.relay.expr.Tuple):
-            main_body_call_node = mod["main"].body[0]
+        if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
+            main_body_call_node = [mod["main"].body]
         else:
             main_body_call_node = mod["main"].body
-        assert isinstance(main_body_call_node.op, tvm.ir.expr.GlobalVar), mod["main"]
-        assert main_body_call_node.op in mod.global_var_map_.values(), mod["main"]
+
+        for item in main_body_call_node:
+            if isinstance(item, tvm.relay.expr.Call):
+                assert isinstance(item.op, tvm.ir.expr.GlobalVar), mod["main"]
+                assert item.op in mod.global_var_map_.values(), mod["main"]
 
         constant_updator = UpdateConstants()
         rewrite(constant_updator, mod[mod.get_global_vars()[1]])
