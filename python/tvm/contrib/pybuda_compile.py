@@ -16,7 +16,6 @@ import json
 
 from collections import OrderedDict
 import pybuda
-from pybuda.op.eval.common import calculate_pcc
 
 from json import JSONEncoder
 from os.path import exists as file_exists
@@ -171,7 +170,10 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
         if pcc is None:
             ok = np.allclose(fr_out, tvm_out, rtol=rtol, atol=atol, equal_nan=True)
         else:
-            pcc_value = calculate_pcc(fr_out, tvm_out)
+            pcc_value = np.min(np.ma.corrcoef(
+                    np.ma.masked_invalid(fr_out.flatten()),
+                    np.ma.masked_invalid(tvm_out.flatten())
+                    ))
             ok = pcc_value >= pcc
 
         if not ok:
