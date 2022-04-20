@@ -8,5 +8,7 @@ fi
 
 echo $ROOT
 export TVM_HOME=$ROOT/third_party/tvm
-export PYTHONPATH=$TVM_HOME/python:${PYTHONPATH}
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TVM_HOME/build
+pip install -e third_party/tvm/python
 
+cd $ROOT
