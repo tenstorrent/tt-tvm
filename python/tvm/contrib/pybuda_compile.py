@@ -97,21 +97,22 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported):
         if isinstance(torchmod, pybuda.module.PyTorchModule):
             torchmod.module.eval()
     elif isinstance(torchmod, pybuda.module.PyTorchModule):
-        json_graph = compile_pytorch_for_buda(torchmod.module, compiler_cfg.enable_consteval, *inputs, allow_unsupported=allow_unsupported)
+        json_graph = compile_pytorch_for_buda(torchmod.module, *inputs, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
     elif isinstance(torchmod, pybuda.module.TFModule):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graph = compile_tf_for_buda(torchmod.module, *tf_inputs, allow_unsupported=allow_unsupported)
+
+        json_graph = compile_tf_for_buda(torchmod.module, *tf_inputs, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
     else:
         raise RuntimeError(f"Unsupported module type {type(torchmod)}")
 
     return json_graph
 
 
-def compile_pytorch_for_buda(torchmod, consteval_in_pybuda, *inputs, allow_unsupported):
+def compile_pytorch_for_buda(torchmod, *inputs, allow_unsupported, consteval_in_pybuda):
     torchmod.eval()
     framework_outputs = torchmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
@@ -193,32 +194,32 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
     logger.info(f"Verified TVM Relay outputs against framework outputs")
 
 
-def clean_names(json_graph, buda_params):
-    if len(json_graph["param_names"]) == 0:
-        return json_graph
-
+def clean_names(json_graph, buda_params, param_name_lookup=None):
     clean_names = []
 
     precursor = "tvmgen_default_buda_main_"
-    fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
-    precursor = f"tvmgen_default_buda_main_{fn_number}_"
-    for idx, name in enumerate(json_graph["param_names"]):
-        if precursor in name:
-            clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
+    if len(json_graph["param_names"]) > 0:
+        fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
+        precursor = f"tvmgen_default_buda_main_{fn_number}_"
+        for idx, name in enumerate(json_graph["param_names"]):
+            if precursor in name:
+                clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
 
-    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
+        json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
     graph = json.loads(json_graph["graph"])
 
     for node in graph["nodes"]:
         if precursor in node["name"]:
             node["name"] = node["name"].replace(precursor, "")
+        elif param_name_lookup is not None and node["name"] in param_name_lookup:
+            node["name"] = param_name_lookup[node["name"]]
 
     json_graph["graph"] = json.dumps(graph)
 
     return json_graph
 
 
-def compile_tf_for_buda(tfmod, *inputs, allow_unsupported):
+def compile_tf_for_buda(tfmod, *inputs, consteval_in_pybuda, allow_unsupported):
     framework_outputs = tfmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
         framework_outputs = [framework_outputs]
@@ -234,13 +235,34 @@ def compile_tf_for_buda(tfmod, *inputs, allow_unsupported):
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def()
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
-    mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+
+    if consteval_in_pybuda:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+    else:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     np_inputs = [x.numpy() for x in inputs if x is not None]
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs,framework_outputs, return_params=True, allow_unsupported=allow_unsupported)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, return_params=True, allow_unsupported=allow_unsupported)
+
+    param_name_lookup = {}
+
+    # TODO: Destupidify this! 
+    for (bad_name, value), weight in zip(params.items(), tfmod.weights):
+        if (weight.value().numpy() == value.numpy()).all():
+            param_name_lookup[bad_name] = weight.name.replace(":", ".")
+        else:
+            logger.warning("Iterating through tf weights, this is probably very slow")
+            weight_found = False
+            for tf_weight in tfmod.weights:
+                if list(value.shape) == tf_weight.shape.as_list() and (tf_weight.value().numpy() == value.numpy()).all():
+                    param_name_lookup[bad_name] = weight.name.replace(":", ".")
+                    weight_found = True
+            
+            assert weight_found
+
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 
 
 def load_serilized_tvm_graph(full_file_path):
@@ -272,7 +294,7 @@ def load_serilized_tvm_graph(full_file_path):
     return serilized_dict
 
 
-def format_tvm_graph_weights(inputs, torchmod, compiler_cfg):
+def format_tvm_graph_weights(inputs, module, compiler_cfg):
     """
     Formats model weights based on specific framework.
 
@@ -281,7 +303,7 @@ def format_tvm_graph_weights(inputs, torchmod, compiler_cfg):
     inputs: Tuple[Tensor, ...]
         Input tensors
 
-    torchmod: Module(PyTorchModule or TFModule)
+    module: Module(PyTorchModule or TFModule)
         Module that contains workload which can be assigned to a single device.
 
     compiler_cfg: CompilerConfig
@@ -292,15 +314,16 @@ def format_tvm_graph_weights(inputs, torchmod, compiler_cfg):
     OrderedDict, Boolean, Tuple
         Weights, Constant evaluation, Input tensors
     """
-    if isinstance(torchmod, pybuda.module.PyTorchModule):
-        weights = torchmod.module.state_dict()
-    elif isinstance(torchmod, pybuda.module.TFModule):
-        weights = {weight.name: weight.value for weight in torchmod.module.weights}
+    if isinstance(module, pybuda.module.PyTorchModule):
+        torch_weights = module.module.state_dict()
+        named_params = dict(module.module.named_parameters())
+        weights = {key: (value.numpy(), named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
+    elif isinstance(module, pybuda.module.TFModule):
+        weights = {weight.name.replace(":", "."): (weight.value().numpy(), True) for weight in module.module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
-        compiler_cfg.enable_consteval = False
     else:
-        raise RuntimeError(f"Unsupported module type {type(torchmod)}")
+        raise RuntimeError(f"Unsupported module type {type(module)}")
 
     return inputs, weights
 
