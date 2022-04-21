@@ -99,7 +99,12 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported):
     elif isinstance(torchmod, pybuda.module.PyTorchModule):
         json_graph = compile_pytorch_for_buda(torchmod.module, compiler_cfg.enable_consteval, *inputs, allow_unsupported=allow_unsupported)
     elif isinstance(torchmod, pybuda.module.TFModule):
-        json_graph = compile_tf_for_buda(torchmod.module, *inputs, allow_unsupported=allow_unsupported)
+        # convert pytorch tensors to tf tensors
+        if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
+            tf_inputs = tuple(tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
+        else:
+            tf_inputs = inputs
+        json_graph = compile_tf_for_buda(torchmod.module, *tf_inputs, allow_unsupported=allow_unsupported)
     else:
         raise RuntimeError(f"Unsupported module type {type(torchmod)}")
 
@@ -291,7 +296,8 @@ def format_tvm_graph_weights(inputs, torchmod, compiler_cfg):
         weights = torchmod.module.state_dict()
     elif isinstance(torchmod, pybuda.module.TFModule):
         weights = {weight.name: weight.value for weight in torchmod.module.weights}
-        inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
+        if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
+            inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
         compiler_cfg.enable_consteval = False
     else:
         raise RuntimeError(f"Unsupported module type {type(torchmod)}")
