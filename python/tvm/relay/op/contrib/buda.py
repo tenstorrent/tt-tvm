@@ -262,13 +262,60 @@ class DecomposeMultiAxisMean(DFPatternCallback):
             acts = tvm.relay.reshape(acts, newshape=output_shape)
         return acts    
 
+class DecomposeConv1DToConv2D(DFPatternCallback):
+    def __init__(self): 
+        super().__init__(rewrite_once=True)
+        
+        self.act = wildcard()
+        self.weight = wildcard()
+        self.conv_pattern = is_op("nn.conv1d")(self.act, self.weight)
+        self.pattern = self.conv_pattern
+
+    def callback(self, pre, post, node_map):
+        
+        if post.attrs.data_layout == 'NWC' and post.attrs.kernel_layout == 'WIO':
+            assert False, "Conv1d from TF is not supported yet"
+            # TODO: converting TF conv1d - channel-last to channel-first Conv2d
+        else:
+            assert post.attrs.kernel_size[0] == 1, "Conv2d only support square kernels, since Conv1d is decomposed to Conv2d, it can only have kernel size of 1"
+            assert post.attrs.padding[0] == 0, "Paddings are not support for conv1d"
+            # reshape activation and reshape weight 
+            expected_output_shape = node_map[self.pattern][0].checked_type.shape
+            acts = node_map[self.act][0]
+            acts_shape = acts.checked_type.shape
+            weights = node_map[self.weight][0]
+            weights_shape = weights.checked_type.shape
+            
+            acts_shape = [acts_shape[0], acts_shape[1], acts_shape[2], 1]
+            weights_shape = [weights_shape[0], weights_shape[1], weights_shape[2], 1]
+            reshaped_acts = tvm.relay.reshape(acts, newshape=acts_shape)
+            reshaped_weights = tvm.relay.reshape(weights, newshape=weights_shape)
+            
+            new_conv2d = tvm.relay.op.nn.conv2d(
+                reshaped_acts, 
+                reshaped_weights,
+                strides=[post.attrs.strides[0], 1],
+                padding=[post.attrs.padding[0], 0, post.attrs.padding[0], 0],
+                groups=post.attrs.groups,
+                channels=post.attrs.channels,
+                kernel_size=[post.attrs.kernel_size[0], 1],
+                data_layout="NCHW",
+                kernel_layout="OIHW",
+            )
+
+            # reshape back result 
+            reshaped_back_result = tvm.relay.reshape(new_conv2d, newshape=expected_output_shape)
+            return reshaped_back_result
+
+
+
+
 class ReformatTFConv2d(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
         self.weight = is_constant()
         conv = is_op("nn.conv2d")(self.act, self.weight)
-
         self.pattern = conv
 
     def callback(self, pre, post, node_map):
@@ -760,6 +807,7 @@ class LowerSqueezeToReshape(DFPatternCallback):
     def callback(self, pre, post, node_map):
         return tvm.relay.reshape(post.args[0], newshape=post.checked_type.shape)
 
+
 class CStridedSliceToRStridedSlice(DFPatternCallback):
     def __init__(self):
         super().__init__()
@@ -1032,6 +1080,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After ExplicateHSliceTranspose")
     logger.trace(relay_module.functions)
 
+    relay_module["main"] = rewrite(DecomposeConv1DToConv2D(), relay_module["main"])
+    logger.trace("After DecomposeConv1DtoConv2D")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
     logger.trace("After ReformatTFConv2d")
     logger.trace(relay_module.functions)
@@ -1079,6 +1131,8 @@ def run_buda_compile_passes(relay_module, print_all=False):
     relay_module["main"] = rewrite(RemoveRedundantTake(), relay_module["main"])
     logger.trace("After RemoveRedundantTake")
     logger.trace(relay_module.functions)
+
+    
 
     return relay_module
 
