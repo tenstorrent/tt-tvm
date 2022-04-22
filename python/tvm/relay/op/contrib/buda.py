@@ -50,6 +50,7 @@ _register_external_op_helper("where")
 _register_external_op_helper("nn.conv2d_transpose")
 _register_external_op_helper("image.resize2d")
 _register_external_op_helper("nn.avg_pool2d")
+_register_external_op_helper("clip")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
