@@ -119,7 +119,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, allow_unsupported, consteval_in_
         if isinstance(framework_outputs, torch.Tensor):
             framework_outputs = [framework_outputs]
         elif isinstance(framework_outputs, OrderedDict):
-            framework_outputs = framework_outputs.to_tuple()
+            framework_outputs = tuple(framework_outputs.values())
         else:
             assert False, "Don't know what to do with this"
 
