@@ -122,6 +122,14 @@ def compile_pytorch_for_buda(torchmod, *inputs, allow_unsupported, consteval_in_
             framework_outputs = tuple(framework_outputs.values())
         else:
             assert False, "Don't know what to do with this"
+    elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
+        output_list = []
+        for sublist in framework_outputs:
+            if isinstance(sublist, (list, tuple)):
+                output_list.extend(sublist)
+            else:
+                output_list.append(sublist)
+        framework_outputs = output_list
 
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
