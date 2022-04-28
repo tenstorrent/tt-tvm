@@ -54,6 +54,7 @@ _register_external_op_helper("clip")
 _register_external_op_helper("abs")
 _register_external_op_helper("cos")
 _register_external_op_helper("sin")
+_register_external_op_helper("nn.pad")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()

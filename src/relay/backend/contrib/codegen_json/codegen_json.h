@@ -105,6 +105,20 @@ class OpAttrExtractor : public AttrVisitor {
         } else if (const auto* str = (*an)[i].as<StringObj>()) {
           String s = GetRef<String>(str);
           attr.push_back(s);
+        } else if (const auto* array = (*an)[i].as<ArrayNode>()) {
+          std::string s(key);
+          if (s != "pad_width") {
+              LOG(FATAL) << "Not supported type: " << (*an)[i]->GetTypeKey();
+          }
+
+          for (auto elem = array->begin(); elem != array->end(); elem++) {
+              const auto* row = (*elem).as<IntImmNode>();
+              if (row == NULL) {
+                  LOG(FATAL) << "Elements within a runtime::ArrayNode is not Int!";
+              } else {
+                  attr.push_back(std::to_string(row->value));
+              }
+          }
         } else {
           LOG(FATAL) << "Not supported type: " << (*an)[i]->GetTypeKey();
         }
