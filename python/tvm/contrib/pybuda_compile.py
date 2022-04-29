@@ -39,8 +39,8 @@ def retrieve_json_graph(*args):
 def load_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported=False):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
-    run whole compilation process from specific framewrk to the PyBuda graph representation, or
-    skip this compilation process and load serilized TVM graph which is already ported to PyBuda
+    run whole compilation process from specific framework to the PyBuda graph representation, or
+    skip this compilation process and load serialize TVM graph which is already ported to PyBuda
     by initial invocation.
 
     Parameters
@@ -60,13 +60,13 @@ def load_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported=False):
         TVM ported graph, Weights, Input tensors, Constant evaluation
     """
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
-        logger.warning(f"TVM serilization logic will be skipped as both store and load paths are provided")
+        logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
     json_graph = compile_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported=allow_unsupported)
     
     pytorch_inputs, weights = format_tvm_graph_weights(inputs, torchmod, compiler_cfg)
 
-    serilize_and_store_tvm_graph(json_graph, compiler_cfg)
+    serialize_and_store_tvm_graph(json_graph, compiler_cfg)
 
     return json_graph, pytorch_inputs, weights
 
@@ -93,7 +93,7 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, allow_unsupported):
         TVM ported graph
     """
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
-        json_graph = load_serilized_tvm_graph(compiler_cfg.tvm_graph_load_path)
+        json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
         if isinstance(torchmod, pybuda.module.PyTorchModule):
             torchmod.module.eval()
     elif isinstance(torchmod, pybuda.module.PyTorchModule):
@@ -274,14 +274,14 @@ def compile_tf_for_buda(tfmod, *inputs, consteval_in_pybuda, allow_unsupported):
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 
 
-def load_serilized_tvm_graph(full_file_path):
+def load_serialized_tvm_graph(full_file_path):
     """
-    Loads serilized TVM graph representation ported to PyBuda in form of python dictionary.
+    Loads serialized TVM graph representation ported to PyBuda in form of python dictionary.
 
     Parameters
     ----------
     full_file_path: String
-        Full source path where serilized TVM graph is stored
+        Full source path where serialized TVM graph is stored
         
     Returns
     -------
@@ -289,18 +289,18 @@ def load_serilized_tvm_graph(full_file_path):
         Deserialized TVM graph
     """
     if not file_exists(full_file_path):
-        raise RuntimeError(f"Serilized TVM model doesn't exist: {full_file_path}")
+        raise RuntimeError(f"Serialized TVM model doesn't exist: {full_file_path}")
 
     with open(full_file_path, "r") as file:
-        serilized_graph_str = json.load(file)
+        serialized_graph_str = json.load(file)
 
-    serilized_dict = {}
-    serilized_dict["graph"] = json.dumps(serilized_graph_str["graph"])
-    serilized_dict["params"] = serilized_graph_str["params"]
+    serialized_dict = {}
+    serialized_dict["graph"] = json.dumps(serialized_graph_str["graph"])
+    serialized_dict["params"] = serialized_graph_str["params"]
 
-    logger.debug(f"Successfully load serilized TVM graph from {full_file_path} path")
+    logger.debug(f"Successfully load serialized TVM graph from {full_file_path} path")
 
-    return serilized_dict
+    return serialized_dict
 
 
 def format_tvm_graph_weights(inputs, module, compiler_cfg):
@@ -324,6 +324,12 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
         Weights, Constant evaluation, Input tensors
     """
     if isinstance(module, pybuda.module.PyTorchModule):
+        if compiler_cfg.enable_training:
+            module.module.train()
+
+            for param in module.module.parameters():
+                param.requires_grad = True
+
         torch_weights = module.module.state_dict()
         named_params = dict(module.module.named_parameters())
         weights = {key: (value.numpy(), named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
@@ -337,9 +343,9 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
     return inputs, weights
 
 
-def serilize_and_store_tvm_graph(json_graph, compiler_cfg):
+def serialize_and_store_tvm_graph(json_graph, compiler_cfg):
     """
-    Serilizes TVM graph representation ported to PyBuda in form of JSON and stores it 
+    Serializes TVM graph representation ported to PyBuda in form of JSON and stores it 
     on the desired destination.
 
     Parameters
