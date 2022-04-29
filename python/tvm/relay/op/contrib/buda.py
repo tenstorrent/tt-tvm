@@ -318,7 +318,7 @@ class ReformatTFConv2d(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
-        self.weight = is_constant()
+        self.weight = wildcard()
         conv = is_op("nn.conv2d")(self.act, self.weight)
         self.pattern = conv
 
