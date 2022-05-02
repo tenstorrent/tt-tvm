@@ -254,15 +254,15 @@ def compile_tf_for_buda(tfmod, *inputs, consteval_in_pybuda, allow_unsupported):
 
     param_name_lookup = {}
 
-    # TODO: Destupidify this! 
+    # TODO: Destupidify this!
     for (bad_name, value), weight in zip(params.items(), tfmod.weights):
-        if (weight.value().numpy() == value.numpy()).all():
+        if np.array_equal(weight.value().numpy(), value.numpy()):
             param_name_lookup[bad_name] = weight.name.replace(":", ".")
         else:
-            logger.warning("Iterating through tf weights, this is probably very slow")
+            # logger.warning("Iterating through tf weights, this is probably very slow")
             weight_found = False
             for tf_weight in tfmod.weights:
-                if list(value.shape) == tf_weight.shape.as_list() and (tf_weight.value().numpy() == value.numpy()).all():
+                if np.array_equal(tf_weight.value().numpy(), value.numpy()):
                     param_name_lookup[bad_name] = weight.name.replace(":", ".")
                     weight_found = True
             
