@@ -4,12 +4,6 @@ if(USE_BUDA_CODEGEN STREQUAL "ON")
   tvm_file_glob(GLOB Buda_RELAY_CONTRIB_SRC src/relay/backend/contrib/buda/*.cc)
   list(APPEND COMPILER_SRCS ${Buda_RELAY_CONTRIB_SRC})
 
-  SET(BUDA_LIB_PATH ${CMAKE_SOURCE_DIR}/../../build/lib)
-  find_library(EXTERN_LIBRARY_CORE pybuda_csrc PATHS ${BUDA_LIB_PATH} NO_DEFAULT_PATH) 
-  message(STATUS "EXTERN_LIBRARY_CORE: " ${EXTERN_LIBRARY_CORE})
-
-  list(APPEND TVM_RUNTIME_LINKER_LIBS ${EXTERN_LIBRARY_CORE})
-
   #SET(Torch_DIR ${CMAKE_SOURCE_DIR}/../libtorch/share/cmake/Torch)
   #message(STATUS "Torch_DIR: " ${Torch_DIR})
   #find_package(Torch REQUIRED)
