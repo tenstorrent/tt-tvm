@@ -210,7 +210,7 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
         transpose_axes = post.attrs.axes
         acts = node_map[self.act][0]
         trans = node_map[self.transpose][0]
-
+        trans = run_infer_type(trans)
         if transpose_axes == None:
             return post
 
@@ -350,6 +350,32 @@ class ReformatTFConv2d(DFPatternCallback):
         else:
             return post
 
+class ReformatTFMaxpool(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        maxpool = is_op("nn.max_pool2d")(self.act,)
+        self.pattern = maxpool
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.layout == 'NHWC':
+            # convert TF channel-last to channel-first
+            act = node_map[self.act][0]
+
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+
+            new_pool = tvm.relay.op.nn.max_pool2d(
+                channel_first_act,
+                pool_size=post.attrs.pool_size,
+                strides=post.attrs.strides,
+                padding=post.attrs.padding,
+                layout="NCHW",
+                ceil_mode=post.attrs.ceil_mode,
+            )
+            out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
+            return out_reshape
+        else:
+            return post
 
 class DecomposePower(DFPatternCallback):
     def __init__(self):
@@ -1130,6 +1156,14 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
     logger.trace("After ReformatTFConv2d")
+    logger.trace(relay_module.functions)
+
+    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(ReformatTFMaxpool(), relay_module["main"])
+    logger.trace("After ReformatTFMaxpool")
     logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
