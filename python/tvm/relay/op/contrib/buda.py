@@ -937,6 +937,46 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
 
         return tvm.relay.reshape(act, newshape=target_shape)
 
+
+class TransposePad(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.pattern = is_op('nn.pad')(wildcard(), is_constant())
+
+    def callback(self, pre, post, node_map):
+        pad_width = [[int(pad) for pad in dim] for dim in post.attrs.pad_width]
+
+        transpose_axes = []
+
+        non_zero_dims = [idx for idx, pad in enumerate(pad_width) if pad != [0, 0]]
+        available_zero_dims = [idx for idx, pad in enumerate(pad_width) if pad == [0, 0] and idx >= len(pad_width) - 2]
+        zdi = 0
+
+        assert len(non_zero_dims) <= 2
+
+        for dim in non_zero_dims:
+            if dim < len(pad_width) - 2:
+                permute = list(range(len(pad_width)))
+                permute[dim], permute[available_zero_dims[zdi]] = permute[available_zero_dims[zdi]], permute[dim]
+                pad_width[dim], pad_width[available_zero_dims[zdi]] = pad_width[available_zero_dims[zdi]], pad_width[dim]
+                zdi += 1
+                transpose_axes.append(permute)
+
+        if len(transpose_axes) == 0:
+            return post
+
+        arg = post.args[0]
+        for axes in transpose_axes:
+            arg = tvm.relay.transpose(arg, axes=axes)
+
+        arg = tvm.relay.nn.pad(arg, pad_width=pad_width, pad_value=post.args[1])
+
+        for axes in transpose_axes:
+            arg = tvm.relay.transpose(arg, axes=axes)
+
+        return arg
+
+
 def run_relay_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
@@ -1136,6 +1176,9 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After RemoveRedundantTake")
     logger.trace(relay_module.functions)
 
+    relay_module["main"] = rewrite(TransposePad(), relay_module["main"])
+    logger.trace("After TransposePad")
+    logger.trace(relay_module.functions)
     
 
     return relay_module
