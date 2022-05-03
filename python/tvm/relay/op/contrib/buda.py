@@ -45,6 +45,7 @@ _register_external_op_helper("sigmoid")
 _register_external_op_helper("sqrt")
 _register_external_op_helper("strided_slice")
 _register_external_op_helper("subtract")
+_register_external_op_helper("take")
 _register_external_op_helper("transpose")
 _register_external_op_helper("where")
 _register_external_op_helper("nn.conv2d_transpose")
@@ -651,6 +652,7 @@ class RemoveRedundantTake(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         act = node_map[self.input_tensor][0]
+        act = run_infer_type(act)
         act_shape = list(act.checked_type.shape)
         indices = node_map[self.indices][0].data.numpy().item()
         axis = post.attrs.axis
@@ -665,6 +667,33 @@ class RemoveRedundantTake(DFPatternCallback):
         return post
 
 
+class DecomposeMultiRangeTake(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.indices = is_constant()
+        self.pattern = is_op("take")(self.input_tensor, self.indices)
+
+    def callback(self, pre, post, node_map):
+        """ 
+            The goal here is to decompose an original take op to multiple take ops where 
+            the new ops, each represent a single continouos range. 
+            tvm.take can have a list of arbitrary indices. 
+        """
+        act = node_map[self.input_tensor][0]
+        act = run_infer_type(act)
+        act_shape = list(act.checked_type.shape)
+        try:
+            indices = node_map[self.indices][0].data.numpy().item()
+        except ValueError as v:
+            assert False, "we only support take with a single index currently"
+        
+        
+        axis = post.attrs.axis
+        
+        return post
+
+        
 class EstimateWhere(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1220,6 +1249,9 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After TransposePad")
     logger.trace(relay_module.functions)
     
+    relay_module["main"] = rewrite(DecomposeMultiRangeTake(), relay_module["main"])
+    logger.trace("After RemoveRedundantTake")
+    logger.trace(relay_module.functions)
 
     return relay_module
 
