@@ -603,7 +603,13 @@ class LowerSplitToStridedSlice(DFPatternCallback):
         axis = split.attrs.axis
         if axis < 0:
             axis += len(act.checked_type.shape)
-        ios = [int(dim) for dim in split.attrs.indices_or_sections]
+
+        if isinstance(split.attrs.indices_or_sections, tvm.tir.expr.IntImm):
+            sections = int(split.attrs.indices_or_sections)
+            total_length = int(act.checked_type.shape[axis])
+            ios = list(range(total_length//sections, total_length, total_length//sections))
+        else:
+            ios = [int(dim) for dim in split.attrs.indices_or_sections]
         ios.append(act.checked_type.shape[axis])
 
         begin = 0 if post.index == 0 else ios[post.index - 1]
