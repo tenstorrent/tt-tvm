@@ -45,7 +45,6 @@ _register_external_op_helper("sigmoid")
 _register_external_op_helper("sqrt")
 _register_external_op_helper("strided_slice")
 _register_external_op_helper("subtract")
-_register_external_op_helper("take")
 _register_external_op_helper("transpose")
 _register_external_op_helper("where")
 _register_external_op_helper("nn.conv2d_transpose")
@@ -652,7 +651,7 @@ class RemoveRedundantTake(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         act = node_map[self.input_tensor][0]
-        act = run_infer_type(act)
+        
         act_shape = list(act.checked_type.shape)
         indices = node_map[self.indices][0].data.numpy().item()
         axis = post.attrs.axis
@@ -662,9 +661,36 @@ class RemoveRedundantTake(DFPatternCallback):
             del newshape[int(axis)]
 
             out = tvm.relay.reshape(act, newshape=newshape)
+            act = run_infer_type(act)
             return out
 
         return post
+
+
+class LowerTakeToStridedSlice(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.indices = is_constant()
+        self.pattern = is_op("take")(self.input_tensor, self.indices)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input_tensor][0]
+        
+        act_shape = list(act.checked_type.shape)
+
+        try:
+            indices = node_map[self.indices][0].data.numpy().item()
+        except ValueError as v:
+            assert False, "we only support take with a single index currently"
+        
+        axis = post.attrs.axis
+        strided_slice = tvm.relay.strided_slice(act, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
+        newshape = act_shape
+        del newshape[int(axis)]
+        reshape = tvm.relay.reshape(strided_slice, newshape=newshape)
+        act = run_infer_type(act)
+        return reshape
 
 
 class DecomposeMultiRangeTake(DFPatternCallback):
@@ -682,18 +708,13 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         """
         act = node_map[self.input_tensor][0]
         act = run_infer_type(act)
-        act_shape = list(act.checked_type.shape)
         try:
             indices = node_map[self.indices][0].data.numpy().item()
         except ValueError as v:
             assert False, "we only support take with a single index currently"
         
-        
-        axis = post.attrs.axis
-        
         return post
 
-        
 class EstimateWhere(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1248,9 +1269,13 @@ def run_buda_compile_passes(relay_module, print_all=False):
     relay_module["main"] = rewrite(TransposePad(), relay_module["main"])
     logger.trace("After TransposePad")
     logger.trace(relay_module.functions)
-    
+
     relay_module["main"] = rewrite(DecomposeMultiRangeTake(), relay_module["main"])
-    logger.trace("After RemoveRedundantTake")
+    logger.trace("After DecomposeMultiRangeTake")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(LowerTakeToStridedSlice(), relay_module["main"])
+    logger.trace("After LowerTakeToStridedSlice")
     logger.trace(relay_module.functions)
 
     return relay_module
