@@ -81,16 +81,6 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   std::string graph_json = serializer.GetJSON();
   auto params = serializer.GetParams();
 
-  std::ofstream out_file; 
-  out_file.open ("buda_graph.json");
-  out_file << graph_json;
-  out_file.close();
-
-  out_file.open ("buda_params.json");
-  out_file << params;
-  out_file.close();
-
-
   // std::cout << "Buda json: " << std::endl << graph_json << std::endl;
   const auto* jgr = runtime::Registry::Get("retrieve_json_graph");
   ICHECK(jgr != nullptr) << "Cannot find retrieve_json_graph";
