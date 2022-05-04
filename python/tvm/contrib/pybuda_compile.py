@@ -232,7 +232,8 @@ def compile_tf_for_buda(tfmod, *inputs, consteval_in_pybuda, allow_unsupported):
     if not isinstance(framework_outputs, (list, tuple)):
         framework_outputs = [framework_outputs]
 
-    framework_outputs = [x.numpy() for x in framework_outputs]
+    supported_outputs = (tf.Tensor, torch.Tensor)
+    framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)]
 
     @tf.function
     def trace(*inputs):
