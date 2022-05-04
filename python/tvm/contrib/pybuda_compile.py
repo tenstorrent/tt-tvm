@@ -325,8 +325,6 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
     """
     if isinstance(module, pybuda.module.PyTorchModule):
         if compiler_cfg.enable_training:
-            module.module.train()
-
             for param in module.module.parameters():
                 param.requires_grad = True
 

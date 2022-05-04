@@ -494,7 +494,6 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
-        act = run_infer_type(act)
         gamma = node_map[self.gamma][0]
         beta = node_map[self.beta][0]
 
