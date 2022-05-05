@@ -116,6 +116,7 @@ def is_reshape_hslice(call):
     r_newshape = call.args[0].checked_type.shape
 
     if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
+    or len(r_input_shape) < 2
     or not (r_input_shape[-2].value == r_newshape[-3].value) 
     or is_superfluous_reshape(call)):
             return False
@@ -798,6 +799,130 @@ class InvertDivide(DFPatternCallback):
         rep = tvm.relay.reciprocal(post.args[1])
         return tvm.relay.multiply(post.args[0], rep)
 
+class DecomposeLayoutTransform(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.input_tensor = wildcard()
+
+        self.pattern = is_op('layout_transform')(self.input_tensor)
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.src_layout == "NHWC" and post.attrs.dst_layout == "NCHW":
+            act = node_map[self.input_tensor][0]
+
+            axes = [0, 3, 1, 2]
+            return tvm.relay.transpose(act, axes=axes)
+        elif post.attrs.src_layout == "NCHW" and post.attrs.dst_layout == "NHWC":
+            act = node_map[self.input_tensor][0]
+
+            axes = [0, 2, 3, 1]
+            return tvm.relay.transpose(act, axes=axes)
+        else:
+            return post
+
+
+class ConvertLayout(DFPatternCallback):
+    def __init__(self, ):
+        super().__init__()
+
+        self.input = wildcard()
+        self.conv2d = is_op('nn.conv2d')(self.input, wildcard())
+        self.max_pool2d = is_op('nn.max_pool2d')(self.input)
+        self.avg_pool2d = is_op('nn.avg_pool2d')(self.input)
+        self.conv2d_tran = is_op('nn.conv2d_transpose')(self.input, wildcard())
+        self.globalmax_pool2d = is_op('nn.global_max_pool2d')(self.input)
+        self.globalavg_pool2d = is_op('nn.global_avg_pool2d')(self.input)
+        self.adaptivemax_pool2d = is_op('nn.adaptive_max_pool2d')(self.input)
+        self.adaptiveavg_pool2d = is_op('nn.adaptive_avg_pool2d')(self.input)
+
+        self.pattern = (
+            self.conv2d
+            | self.max_pool2d
+            | self.avg_pool2d
+            | self.conv2d_tran
+            | self.globalmax_pool2d
+            | self.globalavg_pool2d
+            | self.adaptivemax_pool2d
+            | self.adaptiveavg_pool2d
+        )
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input][0]
+
+        if node_map[self.pattern][0].op.name == "nn.conv2d" and node_map[self.conv2d][0].attrs.data_layout == "NHWC":
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+            weight = node_map[self.conv2d][0].args[1]
+            channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+            new_conv2d = tvm.relay.op.nn.conv2d(
+                channel_first_act,
+                channel_first_weight,
+                strides=post.attrs.strides,
+                padding=post.attrs.padding,
+                groups=post.attrs.groups,
+                channels=post.attrs.channels,
+                kernel_size=post.attrs.kernel_size,
+                data_layout="NCHW",
+                kernel_layout="OIHW",
+            )
+            out_reshape = tvm.relay.transpose(new_conv2d, axes=[0,2,3,1])
+            return out_reshape
+
+        elif node_map[self.pattern][0].op.name == "nn.conv2d_transpose" and node_map[self.conv2d_tran][0].attrs.data_layout == "NHWC":
+            raise NotImplementedError
+            # channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+            # weight = node_map[self.conv2d][0].args[1]
+            # channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+            # new_conv2d = tvm.relay.op.nn.conv2d(
+            #     channel_first_act,
+            #     channel_first_weight,
+            #     strides=post.attrs.strides,
+            #     padding=post.attrs.padding,
+            #     groups=post.attrs.groups,
+            #     channels=post.attrs.channels,
+            #     kernel_size=post.attrs.kernel_size,
+            #     data_layout="NCHW",
+            #     kernel_layout="OIHW",
+            # )
+            # out_reshape = tvm.relay.transpose(new_conv2d, axes=[0,2,3,1])
+            # return out_reshape
+        elif node_map[self.pattern][0].op.name == "nn.max_pool2d" and node_map[self.max_pool2d][0].attrs.layout == "NHWC":
+
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+
+            new_pool = tvm.relay.op.nn.max_pool2d(
+                channel_first_act,
+                pool_size=post.attrs.pool_size,
+                strides=post.attrs.strides,
+                padding=post.attrs.padding,
+                layout="NCHW",
+                ceil_mode=post.attrs.ceil_mode,
+            )
+            out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
+            return out_reshape
+        elif node_map[self.pattern][0].op.name == "nn.avg_pool2d" and node_map[self.avg_pool2d][0].attrs.layout == "NHWC":
+
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+
+            new_pool = tvm.relay.op.nn.avg_pool2d(
+                channel_first_act,
+                pool_size=post.attrs.pool_size,
+                strides=post.attrs.strides,
+                padding=post.attrs.padding,
+                layout="NCHW",
+                ceil_mode=post.attrs.ceil_mode,
+            )
+            out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
+            return out_reshape
+        elif node_map[self.pattern][0].op.name == "nn.global_max_pool2d" and node_map[self.globalmax_pool2d][0].attrs.layout == "NHWC":
+            raise NotImplementedError
+        elif node_map[self.pattern][0].op.name == "nn.global_avg_pool2d" and node_map[self.globalavg_pool2d][0].attrs.layout == "NHWC":
+            raise NotImplementedError
+        elif node_map[self.pattern][0].op.name == "nn.adaptive_max_pool2d" and node_map[self.adaptivemax_pool2d][0].attrs.layout == "NHWC":
+            raise NotImplementedError
+        elif node_map[self.pattern][0].op.name == "nn.adaptive_avg_pool2d" and node_map[self.adaptiveavg_pool2d][0].attrs.layout == "NHWC":
+            raise NotImplementedError
+        else:
+            return post
 
 class ExplicateTranspose(DFPatternCallback):
     def __init__(self):
@@ -1162,12 +1287,21 @@ def run_relay_compile_passes(relay_module, print_all=False):
 
 
 def run_buda_compile_passes(relay_module, print_all=False):
+
+    relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
+    logger.trace("After ConvertLayout")
+    logger.trace(relay_module.functions)
+
     relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
     logger.trace("After DecomposeVariance")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeEinsum(), relay_module["main"])
     logger.trace("After DecomposeEinsum")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeLayoutTransform(), relay_module["main"])
+    logger.trace("After DecomposeLayoutTransform")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
@@ -1208,18 +1342,6 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(DecomposeConv1DToConv2D(), relay_module["main"])
     logger.trace("After DecomposeConv1DtoConv2D")
-    logger.trace(relay_module.functions)
-
-    relay_module["main"] = rewrite(ReformatTFConv2d(), relay_module["main"])
-    logger.trace("After ReformatTFConv2d")
-    logger.trace(relay_module.functions)
-
-    relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
-    logger.trace("After InferType")
-    logger.trace(relay_module.functions)
-
-    relay_module["main"] = rewrite(ReformatTFMaxpool(), relay_module["main"])
-    logger.trace("After ReformatTFMaxpool")
     logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
