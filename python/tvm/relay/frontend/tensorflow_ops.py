@@ -2988,6 +2988,12 @@ def _dense_bincount():
 
     return _impl
 
+def _einsum():
+    def _impl(inputs, attr, params, mod):
+        equation = attr['equation'].decode('ascii')
+        data = inputs
+        return _op.einsum(data, equation)
+    return _impl
 
 # _convert_map defines maps of name to converter functor(callable)
 # for 1 to 1 mapping, use Renamer if nothing but name is different
