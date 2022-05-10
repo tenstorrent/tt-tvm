@@ -256,16 +256,21 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
     param_name_lookup = {}
 
     # TODO: Destupidify this!
+    found_weights = []
     for (bad_name, value), weight in zip(params.items(), tfmod.weights):
-        if np.array_equal(weight.value().numpy(), value.numpy()):
+
+        if np.array_equal(weight.value().numpy(), value.numpy()) and weight.name not in found_weights:
             param_name_lookup[bad_name] = weight.name.replace(":", ".")
+            found_weights.append(weight.name)
         else:
             # logger.warning("Iterating through tf weights, this is probably very slow")
             weight_found = False
             for tf_weight in tfmod.weights:
-                if np.array_equal(tf_weight.value().numpy(), value.numpy()):
-                    param_name_lookup[bad_name] = weight.name.replace(":", ".")
+                if np.array_equal(tf_weight.value().numpy(), value.numpy()) and tf_weight.name not in found_weights:
+                    param_name_lookup[bad_name] = tf_weight.name.replace(":", ".")
                     weight_found = True
+                    found_weights.append(tf_weight.name)
+                    break
             
             assert weight_found
 
