@@ -12,6 +12,7 @@ from tvm.relay import function as _function
 from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
+from .reportify import dump_graph
 
 from tvm.relay.testing import run_infer_type
 import numpy as np
@@ -1433,7 +1434,7 @@ def reconstruct_ops_for_buda(mod):
     return mod
 
 
-def compile_for_buda(relay_module, target='llvm', params=None):
+def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
 
     if not isinstance(relay_module, (IRModule, _function.Function)):
         raise ValueError("Type of input parameter mod must be tvm.IRModule")
@@ -1464,13 +1465,17 @@ def compile_for_buda(relay_module, target='llvm', params=None):
         logger.trace("Before Compiling")
         logger.trace(relay_module.functions)
 
+        dump_graph(relay_module, graph_name, "before_compiling")
+
         relay_module = run_relay_compile_passes(relay_module)
+        dump_graph(relay_module, graph_name, "after_relay_passes")
         compiled_relay_module = run_buda_compile_passes(relay_module)
+        dump_graph(relay_module, graph_name, "after_buda_passes")
 
     return compiled_relay_module, params
 
 
-def partition_for_buda(mod, allow_unsupported=False):
+def partition_for_buda(mod, graph_name, allow_unsupported=False):
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
