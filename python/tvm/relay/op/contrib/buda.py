@@ -203,6 +203,32 @@ def pattern_table():
     buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate]
     return buda_patterns
 
+class DecomposeStack(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+
+        # This occurs when compiling tf.stack
+        self.act1 = wildcard()
+        self.act2 = wildcard()
+        self.exp_dims1 = is_op("expand_dims")(self.act1)
+        self.exp_dims2 = is_op("expand_dims")(self.act2)
+        
+        self.tup = is_tuple([self.exp_dims1, self.exp_dims2])
+        self.concatenate = is_op("concatenate")(self.tup)
+        self.r4 = is_op("reshape")(self.concatenate)
+        self.pattern = self.r4
+        
+    
+    def callback(self, pre: Expr, post: Expr, node_map: tvm.ir.container.Map) -> Expr:
+        # replacing concat op with stack, as is done in the pytorch decomposition
+        act1 = node_map[self.act1][0]
+        act2 = node_map[self.act2][0]
+        tup = tvm.relay.Tuple([act1, act2])
+        stacked = tvm.relay.stack(tup, axis=-1)
+        r = tvm.relay.reshape(stacked, newshape=[0, 0, 0, -1, 1])
+        output = tvm.relay.squeeze(r, axis=[4])
+
+        return output
 
 class DecomposeMultiAxisTranspose(DFPatternCallback):
     def __init__(self):
@@ -1321,6 +1347,8 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
     logger.trace("After ConvertLayout")
+    relay_module["main"] = rewrite(DecomposeStack(), relay_module["main"])
+    logger.trace("After DecomposeStack")
     logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
