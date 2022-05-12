@@ -782,11 +782,22 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         
         return post
 
-class EstimateWhere(DFPatternCallback):
+class EstimateWhereInCasualMask(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
+        self.act1 = wildcard()
+        self.act2 = wildcard()
+        self.matmul = is_op("nn.batch_matmul")(self.act1, self.act2)
+        self.reshape = is_op("reshape")(self.matmul)
+        self.reciprocal = is_op("reciprocal")(is_constant())
+        self.strided_slice = is_op("strided_slice")(wildcard())
+        self.multiply = is_op("multiply")(self.reshape, self.reciprocal)
 
-        self.pattern = is_op('where')(wildcard(), wildcard(), wildcard())
+        self.gpt2_pattern = is_op('where')(self.strided_slice, self.multiply, wildcard())
+        self.gptj_pattern = is_op('where')(self.strided_slice, self.reshape, wildcard())
+        self.gptneo_pattern = self.gptj_pattern # They're the same, this is for readability purposes
+
+        self.pattern = self.gptj_pattern | self.gpt2_pattern | self.gptneo_pattern
         
     def callback(self, pre, post, node_map):
         # by assuming the masked value is >> activation, this allows
@@ -1427,7 +1438,7 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After DecomposeMultiAxisTranspose")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(EstimateWhere(), relay_module["main"])
+    relay_module["main"] = rewrite(EstimateWhereInCasualMask(), relay_module["main"])
     logger.trace("After EstimateWhere")
     logger.trace(relay_module.functions)
 
