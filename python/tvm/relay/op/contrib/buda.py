@@ -203,6 +203,16 @@ def pattern_table():
     buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate]
     return buda_patterns
 
+class RemoveCast(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.pattern = is_op("cast")(self.act)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        return act
+
 class DecomposeStack(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1347,6 +1357,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
     logger.trace("After ConvertLayout")
+    relay_module["main"] = rewrite(RemoveCast(), relay_module["main"])
+    logger.trace("After RemoveCast")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeStack(), relay_module["main"])
     logger.trace("After DecomposeStack")
     logger.trace(relay_module.functions)
