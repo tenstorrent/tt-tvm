@@ -287,8 +287,8 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
 
     # TODO: Destupidify this!
     found_weights = []
+    weights_not_found = 0
     for (bad_name, value), weight in zip(params.items(), tfmod.weights):
-
         if np.array_equal(weight.value().numpy(), value.numpy()) and weight.name not in found_weights:
             param_name_lookup[bad_name] = weight.name.replace(":", ".")
             found_weights.append(weight.name)
@@ -301,8 +301,8 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
                     weight_found = True
                     found_weights.append(tf_weight.name)
                     break
-            
-            assert weight_found
+            weights_not_found += not weight_found
+    assert weights_not_found == len(params) - len(tfmod.weights) or 0 == len(tfmod.weights)
 
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
