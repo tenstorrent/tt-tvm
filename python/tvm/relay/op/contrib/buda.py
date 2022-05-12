@@ -1371,6 +1371,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
     logger.trace("After ConvertLayout")
+    relay_module["main"] = rewrite(RemoveCast(), relay_module["main"])
+    logger.trace("After RemoveCast")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeStack(), relay_module["main"])
     logger.trace("After DecomposeStack")
     logger.trace(relay_module.functions)
