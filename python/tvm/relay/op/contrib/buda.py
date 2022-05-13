@@ -782,7 +782,7 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         
         return post
 
-class EstimateWhereInCasualMask(DFPatternCallback):
+class EstimateWhereInCausalMask(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act1 = wildcard()
@@ -793,11 +793,14 @@ class EstimateWhereInCasualMask(DFPatternCallback):
         self.strided_slice = is_op("strided_slice")(wildcard())
         self.multiply = is_op("multiply")(self.reshape, self.reciprocal)
 
-        self.gpt2_pattern = is_op('where')(self.strided_slice, self.multiply, wildcard())
-        self.gptj_pattern = is_op('where')(self.strided_slice, self.reshape, wildcard())
-        self.gptneo_pattern = self.gptj_pattern # They're the same, this is for readability purposes
+        self.gpt2_pattern_pytorch = is_op('where')(self.strided_slice, self.multiply, wildcard())
+        self.gptj_pattern_pytorch = is_op('where')(self.strided_slice, self.reshape, wildcard())
+        self.gptneo_pattern_pytorch = self.gptj_pattern_pytorch # They're the same, this is for readability purposes
 
-        self.pattern = self.gptj_pattern | self.gpt2_pattern | self.gptneo_pattern
+        self.gptj_pattern_tf = is_op('where')(is_constant(), self.reshape, is_constant())
+
+        self.pattern = self.gptj_pattern_pytorch | self.gpt2_pattern_pytorch | self.gptneo_pattern_pytorch \
+                        | self.gptj_pattern_tf
         
     def callback(self, pre, post, node_map):
         # by assuming the masked value is >> activation, this allows
@@ -1438,8 +1441,8 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After DecomposeMultiAxisTranspose")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(EstimateWhereInCasualMask(), relay_module["main"])
-    logger.trace("After EstimateWhere")
+    relay_module["main"] = rewrite(EstimateWhereInCausalMask(), relay_module["main"])
+    logger.trace("After EstimateWhereInCausalMask")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerAdaptiveAvgPool(), relay_module["main"])
