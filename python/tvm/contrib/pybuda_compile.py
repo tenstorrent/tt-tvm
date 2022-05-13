@@ -20,7 +20,6 @@ import pybuda
 from json import JSONEncoder
 from os.path import exists as file_exists
 
-
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
     return passed_to_buda
@@ -275,37 +274,33 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
     graph_def = frozen_func.graph.as_graph_def()
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
 
+    # TODO: Destupidify this! (Maybe we can sort by a substring of the weight names to make this more efficient)
+    found_weights = []
+    param_name_lookup = {}
+    non_weight_params = {} # Some parameters (like causal mask) are not weights
+
+    for (bad_name, value) in params.items():
+        weight_found = False
+        for tf_weight in tfmod.weights:
+            if np.array_equal(tf_weight.value().numpy(), value.numpy()) and tf_weight.name not in found_weights:
+                param_name_lookup[bad_name] = tf_weight.name.replace(":", ".")
+                weight_found = True
+                found_weights.append(tf_weight.name)
+                break
+        if not weight_found:
+            param_name_lookup[bad_name] = bad_name.replace(":", ".")
+            non_weight_params[bad_name] = value
+
     if consteval_in_pybuda:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     np_inputs = {i.name.split(':')[0] : None if x is None else x.numpy() for i, x in  zip(frozen_func.inputs, inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
-
-    param_name_lookup = {}
-
-    # TODO: Destupidify this!
-    found_weights = []
-    weights_not_found = 0
-    for (bad_name, value), weight in zip(params.items(), tfmod.weights):
-        if np.array_equal(weight.value().numpy(), value.numpy()) and weight.name not in found_weights:
-            param_name_lookup[bad_name] = weight.name.replace(":", ".")
-            found_weights.append(weight.name)
-        else:
-            # logger.warning("Iterating through tf weights, this is probably very slow")
-            weight_found = False
-            for tf_weight in tfmod.weights:
-                if np.array_equal(tf_weight.value().numpy(), value.numpy()) and tf_weight.name not in found_weights:
-                    param_name_lookup[bad_name] = tf_weight.name.replace(":", ".")
-                    weight_found = True
-                    found_weights.append(tf_weight.name)
-                    break
-            weights_not_found += not weight_found
-    assert weights_not_found == len(params) - len(tfmod.weights) or 0 == len(tfmod.weights)
-
+    
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
-
+    
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 
 
