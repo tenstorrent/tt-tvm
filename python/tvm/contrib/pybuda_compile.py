@@ -101,7 +101,7 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsuppor
     elif isinstance(torchmod, pybuda.module.TFModule):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
-            tf_inputs = tuple(tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
+            tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
 
