@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e # exit if a command fails
+#set -e # exit if a command fails
 
 if [ -n "$CI_PROJECT_DIR" ]; then
   if [ -z $PYBUDA_ROOT ]; then export PYBUDA_ROOT=$CI_PROJECT_DIR; fi
@@ -38,7 +38,7 @@ else
 fi
 
 echo $TVM_BUILD_CONFIG
-cmake -j$(nproc) -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
+cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
 make -j$(nproc)
 
 echo "TVM Built Successful"
