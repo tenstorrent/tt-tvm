@@ -140,21 +140,51 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    np_inputs = [x.detach().numpy() for x in inputs]
+    np_inputs = {i.debugName().split('.')[0]:x.detach().numpy() for i, x in  zip(list(traced_model.graph.inputs())[1:], inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
     json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
+def get_relay_output(mod, params, inputs, target):
+    # Build and Run Relay modules with inputs as (key : tensor) pair
+    # Then, inputs dont need to be in the same order as 'mod' defines.
+    ret_type = mod["main"].checked_type.ret_type
+    lib = relay.build(mod, target=target, params=params)
+    m = graph_executor.GraphModule(lib["default"](tvm.cpu(0)))
+    m.run(**inputs)
+
+    def _unflatten(flat_iter, cur_type):
+        import tvm.relay.ty as _ty
+        if isinstance(cur_type, _ty.TensorType):
+            return next(flat_iter)
+        if isinstance(cur_type, _ty.TupleType):
+            fields = []
+            for field_type in cur_type.fields:
+                field = _unflatten(flat_iter, field_type)
+                fields.append(field)
+            return fields
+        raise ValueError("Return type", ret_type, "contains unsupported type", cur_type)
+
+    flattened = []
+    from .. import nd as _nd
+    for i in range(m.get_num_outputs()):
+        flattened.append(m.get_output(i).copyto(_nd.cpu(0)))
+    relay_outputs = _unflatten(iter(flattened), ret_type)
+
+    if not isinstance(relay_outputs, (list, tuple)):
+        relay_outputs = [relay_outputs]
+    relay_outputs = [x.numpy() for x in relay_outputs]
+
+    return relay_outputs
+
+
 def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, allow_unsupported=False):
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
-    relay_outputs = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm", params=params).evaluate()(*inputs)
-    if not isinstance(relay_outputs, (list, tuple)):
-        relay_outputs = [relay_outputs]
-    relay_outputs = [x.numpy() for x in relay_outputs]
+    relay_outputs = get_relay_output(mod, params, inputs, target)
 
     # Verify compile passes (original relay passes + buda passes)
     verify_tvm_compile(golden_outputs, relay_outputs)
@@ -250,7 +280,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    np_inputs = [x.numpy() for x in inputs if x is not None]
+    np_inputs = {i.name.split(':')[0] : None if x is None else x.numpy() for i, x in  zip(frozen_func.inputs, inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
 
     param_name_lookup = {}
