@@ -38,8 +38,8 @@ else
 fi
 
 echo $TVM_BUILD_CONFIG
-cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
-make -j$(nproc)
+cmake -j8 -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
+make -j8 -j$(nproc)
 
 echo "TVM Built Successful"
 cd $PYBUDA_ROOT
