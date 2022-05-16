@@ -654,10 +654,13 @@ class RemoveRedundantTake(DFPatternCallback):
         self.pattern = is_op("take")(self.input_tensor, self.indices)
 
     def callback(self, pre, post, node_map):
+        if node_map[self.indices][0].data.numpy().size == 1:
+            indices = node_map[self.indices][0].data.numpy().item()
+        else:
+            return post
+
         act = node_map[self.input_tensor][0]
-        
         act_shape = list(act.checked_type.shape)
-        indices = node_map[self.indices][0].data.numpy().item()
         axis = post.attrs.axis
 
         if act_shape[int(axis)] == 1 and indices == 0:
@@ -1137,6 +1140,7 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         axis = int(post.attrs.axis)
         num_new_axes = int(post.attrs.num_newaxis)
 
+        act = run_infer_type(act)
         if not isinstance(act, tvm.relay.expr.Var) and act.op.name == "reshape":
             target_shape = list(act.attrs.newshape)
         else:
