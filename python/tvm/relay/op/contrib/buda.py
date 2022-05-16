@@ -783,7 +783,7 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         return post
 
 class EstimateWhereInCausalMask(DFPatternCallback):
-    def __init__(self):
+   def __init__(self):
         super().__init__(rewrite_once=True)
         self.act1 = wildcard()
         self.act2 = wildcard()
@@ -793,14 +793,7 @@ class EstimateWhereInCausalMask(DFPatternCallback):
         self.strided_slice = is_op("strided_slice")(wildcard())
         self.multiply = is_op("multiply")(self.reshape, self.reciprocal)
 
-        self.gpt2_pattern_pytorch = is_op("where")(self.strided_slice, self.multiply, wildcard())
-        self.gptj_pattern_pytorch = is_op("where")(self.strided_slice, self.reshape, wildcard())
-        self.gptneo_pattern_pytorch = self.gptj_pattern_pytorch # They're the same, this is for readability purposes
-
-        self.gptj_pattern_tf = is_op("where")(is_constant(), self.reshape, is_constant())
-
-        self.pattern = self.gptj_pattern_pytorch | self.gpt2_pattern_pytorch | self.gptneo_pattern_pytorch \
-                        | self.gptj_pattern_tf
+        self.pattern = is_op("where")(self.strided_slice | is_constant(), self.reshape | self.multiply, wildcard()) 
         
     def callback(self, pre, post, node_map):
         # by assuming the masked value is >> activation, this allows
