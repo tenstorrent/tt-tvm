@@ -58,6 +58,7 @@ _register_external_op_helper("cos")
 _register_external_op_helper("sin")
 _register_external_op_helper("nn.pad")
 _register_external_op_helper("max")
+_register_external_op_helper("broadcast_to")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -97,6 +98,7 @@ def is_squeeze(call):
 
 def is_superfluous_reshape(call):
     input_shape = call.args[0].checked_type.shape
+    call = run_infer_type(call)
     output_shape = call.checked_type.shape
 
     joint_size = min(len(input_shape), len(output_shape))
@@ -269,6 +271,28 @@ class DecomposeMultiAxisMean(DFPatternCallback):
         if keepdims == False:
             acts = tvm.relay.reshape(acts, newshape=output_shape)
         return acts    
+
+class DecomposeMultiAxisBroadcast(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.broadcast_to = is_op("broadcast_to")(self.act)
+        self.pattern = self.broadcast_to
+
+    def callback(self, pre, post, node_map):
+        acts = node_map[self.act][0]
+        acts = run_infer_type(acts)
+        inp_shape = list(acts.checked_type.shape)
+        target_shape = list(post.attrs.shape)
+
+        for i, (inp_dim, target_dim) in enumerate(zip(inp_shape, target_shape)):
+            if inp_dim == target_dim:
+                continue
+
+            one_axis_target = target_shape[:i + 1] + inp_shape[i + 1:]
+            acts = tvm.relay.broadcast_to(acts, one_axis_target)
+
+        return acts
 
 class DecomposeConv1DToConv2D(DFPatternCallback):
     def __init__(self): 
@@ -1388,6 +1412,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
+    logger.trace("After DecomposeMultiAxisMean")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeMultiAxisBroadcast(), relay_module["main"])
     logger.trace("After DecomposeMultiAxisMean")
     logger.trace(relay_module.functions)
 
