@@ -178,7 +178,7 @@ class GraphModule(object):
         self._load_params = module["load_params"]
         self._share_params = module["share_params"]
 
-    def set_input(self, key=None, value=None, **params):
+    def set_input(self, _key_=None, _value_=None, **params):
         """Set inputs to the module via kwargs
 
         Parameters
@@ -192,11 +192,11 @@ class GraphModule(object):
         params : dict of str to NDArray
            Additional arguments
         """
-        if key is not None:
-            v = self._get_input(key)
+        if _key_ is not None:
+            v = self._get_input(_key_)
             if v is None:
-                raise RuntimeError(f"Could not find '{key}' in graph's inputs")
-            v.copyfrom(value)
+                raise RuntimeError(f"Could not find '{_key_}' in graph's inputs")
+            v.copyfrom(_value_)
 
         if params:
             # upload big arrays first to avoid memory issue in rpc mode
