@@ -783,7 +783,7 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         return post
 
 class EstimateWhereInCausalMask(DFPatternCallback):
-   def __init__(self):
+    def __init__(self):
         super().__init__(rewrite_once=True)
         self.act1 = wildcard()
         self.act2 = wildcard()
