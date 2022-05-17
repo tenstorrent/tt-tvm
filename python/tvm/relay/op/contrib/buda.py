@@ -845,6 +845,26 @@ class DecomposeEinsum(DFPatternCallback):
 
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
             return result
+
+        elif equation == "bnqd,bnkd->bnqk":
+            assert len(node_map[self.act][0]) == 2
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            assert len(srcA.checked_type.shape) == 4, \
+                f"Incorrectly shaped input ({srcA.checked_type.shape}) for einsum equation: {equation}"
+            assert len(srcB.checked_type.shape) == 4, \
+                f"Incorrectly shaped input ({srcB.checked_type.shape}) for einsum equation: {equation}"
+            assert srcA.checked_type.shape[0] == 1, \
+                f"TVM einsum decomposition does not support 4-dimensional tensors with axis 0 of size greater than 1 (size = {srcA.checked_type.shape[0]})"
+            assert srcB.checked_type.shape[0] == 1, \
+                f"TVM einsum decomposition does not support 4-dimensional tensors with axis 0 of size greater than 1 (size = {srcB.checked_type.shape[0]})"
+
+            srcA = tvm.relay.squeeze(srcA, axis=[0])
+            srcB = tvm.relay.squeeze(srcB, axis=[0])
+            
+            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
+            return result
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
