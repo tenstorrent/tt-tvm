@@ -19,6 +19,9 @@ import pybuda
 
 from json import JSONEncoder
 from os.path import exists as file_exists
+import onnxruntime as ort
+import onnx
+import onnx.numpy_helper
 
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
@@ -61,7 +64,7 @@ def retrieve_json_graph(*args):
     json_graph["param_names"][function_name] = t[2]
 
 
-def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=False, output_names=None):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=False, output_names=None, path=None):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -78,7 +81,14 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
 
     compiler_cfg: CompilerConfig
         Compiler configurations
-        
+
+    output_names: List[str]
+        Model output names to extract from Tensorflow -> TVM conversion. If None, the last node will be treated
+        as model output node.
+
+    path: str
+        Path to onnx file on disk. This is used to verify TVM results vs. framework results.
+
     Returns
     -------
     Dictionary, OrderedDict, Tuple, Boolean
@@ -87,7 +97,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graph = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported, output_names=output_names)
+    json_graph = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported, output_names=output_names, path=path)
     
     pytorch_inputs, weights = format_tvm_graph_weights(inputs, module, compiler_cfg)
 
@@ -96,7 +106,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
     return json_graph, pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported, output_names=None):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported, output_names=None, path=None):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -111,6 +121,13 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
 
     compiler_cfg: CompilerConfig
         Compiler configurations
+
+    output_names: List[str]
+        Model output names to extract from Tensorflow -> TVM conversion. If None, the last node will be treated
+        as model output node.
+
+    path: str
+        Path to onnx file on disk. This is used to verify TVM results vs. framework results.
 
     Returns
     -------
@@ -140,6 +157,10 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         else:
             tf_inputs = inputs
         json_graph = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg, output_names=output_names)
+    elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
+        assert all([isinstance(x, torch.Tensor) for x in inputs])
+        onnx_inputs = [x.detach().numpy() for x in inputs]
+        json_graph = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -325,6 +346,41 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
 
     return json_graph
 
+def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, allow_unsupported):
+
+    assert path != None, "Onnx compile needs path to onnx file on disk."
+    ort_sess = ort.InferenceSession(path)
+    input_names = []
+    for inp in onnx_mod.graph.input:
+        input_names.append(inp.name)
+
+    output_names = []
+    for out in onnx_mod.graph.output:
+        output_names.append(out.name)
+
+    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
+
+    input_dict = {}
+    input_shape_dict = {}
+    for name, tensor in zip(input_names, inputs):
+        input_dict[name] = tensor
+        input_shape_dict[name] = tensor.shape
+    framework_outputs = ort_sess.run(output_names, input_dict)
+
+    mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict)
+
+    if not compiler_cfg.enable_tvm_constant_prop:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+    else:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+
+    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+
+    json_graph["params"] = {}
+    for function_name in buda_params.keys():
+        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsupported):
     framework_outputs = tfmod(*inputs)
@@ -404,6 +460,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
 
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=output_list_)
 
+    assert compiler_cfg.enable_tvm_constant_prop == True, "Pybuda Compile only support tf graphdef model with TVM parameter binding."
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
@@ -497,6 +554,16 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
     elif isinstance(module, tf.compat.v1.GraphDef):
         weights = {}
+    elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
+        numpy_weights = [onnx.numpy_helper.to_array(weight) for weight in module.graph.initializer]
+        names = [weight.name for weight in module.graph.initializer]
+        weights = {
+            name : (torch.Tensor(weight), issubclass(weight.dtype.type, np.floating))
+            for name, weight in zip(names, numpy_weights)
+        }
+
+        if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
+            inputs = [torch.tensor(onnx.numpy_helper.to_array(x)) for x in inputs if x is not None]
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
