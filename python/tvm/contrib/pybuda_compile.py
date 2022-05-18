@@ -25,14 +25,40 @@ def retrieve_vars_passed_to_buda():
     return passed_to_buda
 
 
-json_graph = {}
+json_graph = {"function_names": [], "graph" : "", "param_names": {}}
 @tvm.register_func
 def retrieve_json_graph(*args):
     t = tuple(args)
     global json_graph
-    json_graph["func_name"] = t[0]
-    json_graph["graph"] = t[1]
-    json_graph["param_names"] = t[2]
+    function_name = t[0]
+    if function_name in json_graph["function_names"]:
+        return
+    json_graph["function_names"].append(function_name)
+
+    if len(json_graph["graph"]) > 0:
+        graph = json.loads(t[1])
+        existing_graph = json.loads(json_graph["graph"])
+        
+        num_new_nodes = len(graph["nodes"])
+        for node in existing_graph["nodes"]:
+            if "num_inputs" not in node["attrs"]:
+                continue
+
+            node["inputs"] = [[input_nid[0] + num_new_nodes, 0, 0] for input_nid in node["inputs"]]
+            
+        existing_graph["heads"] = [[head[0] + num_new_nodes, 0, 0] for head in existing_graph["heads"]]
+        existing_graph["arg_nodes"] = [arg_node + num_new_nodes for arg_node in existing_graph["arg_nodes"]]
+        num_node_rows = len(graph["node_row_ptr"])
+        existing_graph["node_row_ptr"] = [node_row_ptr + num_node_rows for node_row_ptr in existing_graph["node_row_ptr"]]
+
+        for key in graph.keys():
+            graph[key] =  graph[key] + existing_graph[key]
+
+        json_graph["graph"] = json.dumps(graph)
+    else:
+        json_graph["graph"] = t[1]
+    
+    json_graph["param_names"][function_name] = t[2]
 
 
 def load_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsupported=False):
@@ -91,6 +117,8 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsuppor
     Dictionary
         TVM ported graph
     """
+    global json_graph
+    json_graph = {"function_names": [], "graph" : "", "param_names": {}}
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
         if isinstance(torchmod, pybuda.module.PyTorchModule):
@@ -141,7 +169,10 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
 
     np_inputs = {i.debugName().split('.')[0]:x.detach().numpy() for i, x in  zip(list(traced_model.graph.inputs())[1:], inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
-    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+
+    json_graph["params"] = {}
+    for function_name in buda_params.keys():
+        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
@@ -235,14 +266,10 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
     clean_names = []
 
     precursor = "tvmgen_default_buda_main_"
-    if len(json_graph["param_names"]) > 0:
-        fn_number = int(json_graph["param_names"][0].replace(precursor, "").split("_")[0])
-        precursor = f"tvmgen_default_buda_main_{fn_number}_"
-        for idx, name in enumerate(json_graph["param_names"]):
-            if precursor in name:
-                clean_names.append(str(json_graph["param_names"][idx]).replace(precursor, ""))
+    if len(json_graph["params"]) > 0:
+        precursor = f"tvmgen_default_buda_main_"
+        json_graph["params"] = {k.replace(precursor, ""):v for k, v in json_graph["params"].items()}
 
-        json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), clean_names)}
     graph = json.loads(json_graph["graph"])
 
     for node in graph["nodes"]:
@@ -299,7 +326,9 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
     np_inputs = {i.name.split(':')[0] : None if x is None else x.numpy() for i, x in  zip(frozen_func.inputs, inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
     
-    json_graph["params"] = {name:v.numpy() for (k, v), name in zip(buda_params.items(), json_graph["param_names"])}
+    json_graph["params"] = {}
+    for function_name in buda_params.keys():
+        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
     
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 

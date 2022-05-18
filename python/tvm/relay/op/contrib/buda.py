@@ -1196,9 +1196,13 @@ class UpdateConstants(DFPatternCallback):
         self.params = {}
         self.const_idx = 0
         self.pattern = is_constant()
+        self.function_name = ""
 
     def callback(self, pre, post, node_map):
-        self.params[self.const_idx] = post.data
+        if self.function_name not in self.params:
+            self.params[self.function_name] = {}
+
+        self.params[self.function_name][self.const_idx] = post.data
         self.const_idx += 1
         return post
 
@@ -1613,7 +1617,6 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
         logger.trace("After PartitionGraph")
         logger.trace(mod.functions)
 
-        assert len(mod.global_var_map_) == 2, mod["main"]
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
             main_body_call_node = [mod["main"].body]
         else:
@@ -1621,11 +1624,16 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
 
         for item in main_body_call_node:
             if isinstance(item, tvm.relay.expr.Call):
-                assert isinstance(item.op, tvm.ir.expr.GlobalVar), mod["main"]
+                assert isinstance(item.op, tvm.ir.expr.GlobalVar), f"Operator {item.op.name} is unsupported"
                 assert item.op in mod.global_var_map_.values(), mod["main"]
 
+        assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
+
         constant_updator = UpdateConstants()
-        rewrite(constant_updator, mod[mod.get_global_vars()[1]])
+
+        for i in range(1, len(mod.global_var_map_), 1):
+            constant_updator.function_name = mod.get_global_vars()[i].name_hint
+            rewrite(constant_updator, mod[mod.get_global_vars()[i]])
         params = constant_updator.params
         
     return mod, params
