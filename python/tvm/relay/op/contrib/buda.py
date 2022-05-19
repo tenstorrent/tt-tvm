@@ -775,6 +775,22 @@ class RemoveRedundantTake(DFPatternCallback):
         return post
 
 
+class RemoveRedundantReshape(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.reshape = is_op("reshape")(self.input_tensor)
+        self.pattern = self.reshape
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input_tensor][0]
+        reshape_op = node_map[self.reshape][0]
+        new_shape = list(reshape_op.attrs.newshape)
+        if len(new_shape) == 0:
+            return act
+        else:
+            return post
+
 class LowerTakeToStridedSlice(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):
         super().__init__(rewrite_once=rewrite_once)
@@ -834,7 +850,8 @@ class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
         if not match:
             return post
 
-        result = tvm.relay.max(act, axis=-1)
+        result = tvm.relay.max(act, axis=-1, keepdims=True)
+        result = tvm.relay.squeeze(result, axis=[-1])
         return result
 
 class DecomposeMultiRangeTake(DFPatternCallback):
@@ -1003,6 +1020,7 @@ class ConvertLayout(DFPatternCallback):
         self.globalavg_pool2d = is_op('nn.global_avg_pool2d')(self.input)
         self.adaptivemax_pool2d = is_op('nn.adaptive_max_pool2d')(self.input)
         self.adaptiveavg_pool2d = is_op('nn.adaptive_avg_pool2d')(self.input)
+        self.imageresize2d = is_op('image.resize2d')(self.input)
 
         self.pattern = (
             self.conv2d
@@ -1013,6 +1031,7 @@ class ConvertLayout(DFPatternCallback):
             | self.globalavg_pool2d
             | self.adaptivemax_pool2d
             | self.adaptiveavg_pool2d
+            | self.imageresize2d
         )
 
     def callback(self, pre, post, node_map):
@@ -1098,6 +1117,23 @@ class ConvertLayout(DFPatternCallback):
             raise NotImplementedError
         elif node_map[self.pattern][0].op.name == "nn.adaptive_avg_pool2d" and node_map[self.adaptiveavg_pool2d][0].attrs.layout == "NHWC":
             raise NotImplementedError
+        elif node_map[self.pattern][0].op.name == "image.resize2d" and node_map[self.imageresize2d][0].attrs.layout == "NHWC":
+            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+            new_resize2d = tvm.relay.image.resize2d(
+                channel_first_act,
+                size=post.attrs.size,
+                roi=post.attrs.roi,
+                layout="NCHW",
+                method=post.attrs.method,
+                coordinate_transformation_mode=post.attrs.coordinate_transformation_mode,
+                rounding_method=post.attrs.rounding_method,
+                cubic_alpha=post.attrs.cubic_alpha,
+                cubic_exclude=post.attrs.cubic_exclude,
+                extrapolation_value=post.attrs.extrapolation_value,
+                out_dtype=post.attrs.out_dtype,
+            )
+            out_reshape = tvm.relay.transpose(new_resize2d, axes=[0,2,3,1])
+            return out_reshape
         else:
             return post
 
@@ -1602,6 +1638,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(RemoveRedundantTake(), relay_module["main"])
     logger.trace("After RemoveRedundantTake")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(RemoveRedundantReshape(), relay_module["main"])
+    logger.trace("After RemoveRedundantReshape")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(TransposePad(), relay_module["main"])
