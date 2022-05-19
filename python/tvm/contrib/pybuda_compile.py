@@ -268,13 +268,13 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
     precursor = "tvmgen_default_buda_main_"
     if len(json_graph["params"]) > 0:
         precursor = f"tvmgen_default_buda_main_"
-        json_graph["params"] = {k.replace(precursor, ""):v for k, v in json_graph["params"].items()}
+        json_graph["params"] = {k.replace(precursor, "")[2:] + k.replace(precursor, "")[0]:v for k, v in json_graph["params"].items()}
 
     graph = json.loads(json_graph["graph"])
 
     for node in graph["nodes"]:
         if precursor in node["name"]:
-            node["name"] = node["name"].replace(precursor, "")
+            node["name"] = node["name"].replace(precursor, "")[2:] + node["name"].replace(precursor, "")[0]
         elif param_name_lookup is not None and node["name"] in param_name_lookup:
             node["name"] = param_name_lookup[node["name"]]
 
