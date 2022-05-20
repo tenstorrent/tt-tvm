@@ -217,6 +217,33 @@ def pattern_table():
 
     return buda_patterns
 
+class DecomposeMultiAxisMax(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.max = is_op("max")(self.act)
+
+        self.pattern = self.max
+
+    def callback(self, pre, post, node_map):
+
+        reduce_axes = list(post.attrs.axis)
+        if len(reduce_axes) == 1:
+            return post
+
+        acts = node_map[self.act][0]
+        out = node_map[self.max][0]
+        keepdims = bool(post.attrs.keepdims)
+        output_shape = list(out.checked_type.shape)
+
+        for axis in reduce_axes:
+            acts = tvm.relay.max(acts, axis=int(axis), keepdims=True)
+        
+        if keepdims == False:
+            acts = tvm.relay.reshape(acts, newshape=output_shape)
+        return acts   
+        
+
 class RemoveCast(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1483,6 +1510,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
     logger.trace("After InferType")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeMultiAxisMax(), relay_module["main"])
+    logger.trace("After DecomposeMultiAxisMax")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
