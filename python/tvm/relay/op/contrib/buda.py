@@ -192,6 +192,17 @@ def decompose_concat_input_tuple():
     return is_op("concatenate")(act)
 
 
+def merge_conv2d_with_bias():
+    input = wildcard()
+    weight = wildcard()
+    bias = wildcard()
+
+    conv2d = is_op('nn.conv2d')(input, weight)
+    bias_add = is_op('nn.bias_add')(conv2d, bias)
+
+    return bias_add
+
+
 @register_pattern_table("buda")
 def pattern_table():
     matmul = ("buda.matmul", dense_to_matmul())
@@ -200,7 +211,10 @@ def pattern_table():
     layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
     binary_stack = ("buda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
     concatenate = ("buda.concatenate", decompose_concat_input_tuple())
-    buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate]
+    buda_conv2d_with_bias = ("buda.buda_conv2d_with_bias", merge_conv2d_with_bias())
+
+    buda_patterns = [hstack, hslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias]
+
     return buda_patterns
 
 class RemoveCast(DFPatternCallback):
