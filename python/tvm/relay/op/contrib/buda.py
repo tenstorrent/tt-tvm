@@ -1282,6 +1282,23 @@ class TransposePad(DFPatternCallback):
         return arg
 
 
+class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.input = wildcard()
+        self.weight = wildcard()
+        self.bias = wildcard()
+        self.act = is_op('nn.conv2d')(self.input, self.weight)
+        self.reshaped_bias = is_op('reshape')(self.bias)
+        self.pattern = is_op('add')(self.act, self.reshaped_bias)
+
+    def callback(self, pre, post, node_map):
+        bias = node_map[self.bias][0]
+        act = node_map[self.act][0]
+
+        return tvm.relay.nn.bias_add(act, bias)
+
+
 def run_relay_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
@@ -1508,6 +1525,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(LowerTakeToStridedSlice(), relay_module["main"])
     logger.trace("After LowerTakeToStridedSlice")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(ConvertAddToBiasAddAfterConv2d(), relay_module["main"])
+    logger.trace("After ConvertAddToBiasAddAfterConv2d")
     logger.trace(relay_module.functions)
 
     return relay_module
