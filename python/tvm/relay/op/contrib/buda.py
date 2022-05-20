@@ -59,6 +59,7 @@ _register_external_op_helper("sin")
 _register_external_op_helper("nn.pad")
 _register_external_op_helper("max")
 _register_external_op_helper("broadcast_to")
+_register_external_op_helper("sum")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
