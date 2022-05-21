@@ -61,7 +61,7 @@ def retrieve_json_graph(*args):
     json_graph["param_names"][function_name] = t[2]
 
 
-def load_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsupported=False):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=False):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -73,7 +73,7 @@ def load_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsupported
     inputs: Tuple[Tensor, ...]
         Input tensors
 
-    torchmod: Module(PyTorchModule or TFModule)
+    module: Module(PyTorchModule or TFModule)
         Module that contains workload which can be assigned to a single device.
 
     compiler_cfg: CompilerConfig
@@ -87,16 +87,16 @@ def load_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsupported
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graph = compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported)
+    json_graph = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported)
     
-    pytorch_inputs, weights = format_tvm_graph_weights(inputs, torchmod, compiler_cfg)
+    pytorch_inputs, weights = format_tvm_graph_weights(inputs, module, compiler_cfg)
 
     serialize_and_store_tvm_graph(json_graph, compiler_cfg)
 
     return json_graph, pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsupported):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -106,7 +106,7 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsuppor
     inputs: Tuple[Tensor, ...]
         Input tensors
     
-    torchmod: Module(PyTorchModule or TFModule)
+    module: Module(PyTorchModule or TFModule)
         Module that contains workload which can be assigned to a single device
 
     compiler_cfg: CompilerConfig
@@ -121,20 +121,20 @@ def compile_tvm_graph(inputs, torchmod, compiler_cfg, graph_name, allow_unsuppor
     json_graph = {"function_names": [], "graph" : "", "param_names": {}}
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
-        if isinstance(torchmod, pybuda.module.PyTorchModule):
-            torchmod.module.eval()
-    elif isinstance(torchmod, pybuda.module.PyTorchModule):
-        json_graph = compile_pytorch_for_buda(torchmod.module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
-    elif isinstance(torchmod, pybuda.module.TFModule):
+        if isinstanceisinstance(module, torch.nn.Module):
+            module.eval()
+    elif isinstance(module, torch.nn.Module):
+        json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
+    elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
 
-        json_graph = compile_tf_for_buda(torchmod.module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
+        json_graph = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
     else:
-        raise RuntimeError(f"Unsupported module type {type(torchmod)}")
+        raise RuntimeError(f"Unsupported module type {type(module)}")
 
     return json_graph
 
@@ -382,16 +382,16 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
     OrderedDict, Boolean, Tuple
         Weights, Constant evaluation, Input tensors
     """
-    if isinstance(module, pybuda.module.PyTorchModule):
+    if isinstance(module, torch.nn.Module):
         if compiler_cfg.enable_training:
-            for param in module.module.parameters():
+            for param in module.parameters():
                 param.requires_grad = True
 
-        torch_weights = module.module.state_dict()
-        named_params = dict(module.module.named_parameters())
+        torch_weights = module.state_dict()
+        named_params = dict(module.named_parameters())
         weights = {key: (value.numpy(), named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
-    elif isinstance(module, pybuda.module.TFModule):
-        weights = {weight.name.replace(":", "."): (weight.value().numpy(), True) for weight in module.module.weights}
+    elif isinstance(module, tf.keras.Model):
+        weights = {weight.name.replace(":", "."): (weight.value().numpy(), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
     else:
