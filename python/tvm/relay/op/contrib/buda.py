@@ -1613,7 +1613,7 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
         relay_module = run_relay_compile_passes(relay_module)
         dump_graph(relay_module, graph_name, "after_relay_passes")
         compiled_relay_module = run_buda_compile_passes(relay_module)
-        dump_graph(relay_module, graph_name, "after_buda_passes")
+        dump_graph(compiled_relay_module, graph_name, "after_buda_passes")
 
     return compiled_relay_module, params
 
