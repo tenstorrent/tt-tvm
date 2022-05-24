@@ -954,7 +954,7 @@ class DecomposeLayoutTransform(DFPatternCallback):
         else:
             return post
 
-
+# NOTE: TVM crashes when groups != 1 or groups != input_channels
 class ConvertLayout(DFPatternCallback):
     def __init__(self, ):
         super().__init__()
