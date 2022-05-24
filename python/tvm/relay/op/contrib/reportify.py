@@ -46,7 +46,13 @@ class CreateJson(ExprVisitor):
         return op
 
     def visit_call(self, call):
-        name = f"{call.op.name}_{self.node_idx}"
+        if hasattr(call.op, 'name'):
+            name_partial = call.op.name
+        elif hasattr(call.op, 'name_hint'):
+            name_partial = call.op.name_hint
+        else:
+            name_partial = call.op.attrs["Composite"] # Composite functions
+        name = f"{name_partial}_{self.node_idx}"
         op = self.get_default_op(name)
         if isinstance(call.checked_type, tvm.ir.type.TupleType):
             shape = []
@@ -55,8 +61,8 @@ class CreateJson(ExprVisitor):
             op["cache"] = {"shape": shape}
         else:
             op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
-        op["class"] = call.op.name
-        op["type"] = call.op.name
+        op["class"] = name_partial
+        op["type"] = name_partial
         op["opcode"] = "RelayOp"
         self.node_map[call] = name
         return super().visit_call(call)
@@ -85,8 +91,12 @@ class CreateJson(ExprVisitor):
     def visit_tuple_getitem(self, t):
         if isinstance(t.tuple_value, tvm.relay.expr.Tuple):
             op_type = "tuple"
-        else:
+        elif hasattr(t.tuple_value.op, 'name'):
             op_type = t.tuple_value.op.name
+        elif hasattr(t.tuple_value.op, 'name_hint'):
+            op_type = t.tuple_value.op.name_hint
+        else:
+            op_type = "Unknown"
         name = f"{op_type}_{self.node_idx}"
         op = self.get_default_op(name)
         op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
@@ -113,7 +123,7 @@ class CreateJson(ExprVisitor):
 
 def convert_serialized_tvm_to_reportify_graph(mod):
     json_creator = CreateJson()
-    json_creator.visit(mod["main"])
+    json_creator.visit(mod)
 
     graph = json_creator.graph
     # because expr visitor does not operate in topologial order, link all
@@ -129,16 +139,18 @@ def convert_serialized_tvm_to_reportify_graph(mod):
 
 
 def dump_graph(mod, test_name, stage):
-    mod = tvm.transform.Sequential([transform.InferType()])(mod)
-    tvm_graph = convert_serialized_tvm_to_reportify_graph(mod)
-    path = get_default_reportify_path(test_name)
-    initialize_directory(path, test_name)
-    tvm_subdir = path + get_tvm_reports_relpath()
-    os.makedirs(tvm_subdir + stage + "_graphs", exist_ok=True)
+    for global_var in mod.get_global_vars():
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        mod_fn = mod[global_var.name_hint]
+        tvm_graph = convert_serialized_tvm_to_reportify_graph(mod_fn)
+        path = get_default_reportify_path(test_name)
+        initialize_directory(path, test_name)
+        tvm_subdir = path + get_tvm_reports_relpath()
+        os.makedirs(tvm_subdir + stage + "_graphs", exist_ok=True)
 
-    filename = tvm_subdir + stage + ".buda"
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, "w") as f:
-        f.write(tvm_graph)
+        filename = tvm_subdir + stage + "_" + global_var.name_hint + "_"  + ".buda"
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, "w") as f:
+            f.write(tvm_graph)
         
     # assert(False)

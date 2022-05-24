@@ -1670,5 +1670,7 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
             constant_updator.function_name = mod.get_global_vars()[i].name_hint
             rewrite(constant_updator, mod[mod.get_global_vars()[i]])
         params = constant_updator.params
+
+    dump_graph(mod, graph_name, "after_buda_partition")
         
     return mod, params
