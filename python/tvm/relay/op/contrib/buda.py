@@ -986,7 +986,12 @@ class ConvertLayout(DFPatternCallback):
         if node_map[self.pattern][0].op.name == "nn.conv2d" and node_map[self.conv2d][0].attrs.data_layout == "NHWC":
             channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
             weight = node_map[self.conv2d][0].args[1]
-            channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+        
+            if post.attrs.channels == post.attrs.groups:
+                channel_first_weight = tvm.relay.transpose(weight, axes=[2, 3, 0, 1])
+            else:
+                channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+
             new_conv2d = tvm.relay.op.nn.conv2d(
                 channel_first_act,
                 channel_first_weight,
