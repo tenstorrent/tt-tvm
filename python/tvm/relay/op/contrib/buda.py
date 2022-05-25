@@ -14,11 +14,11 @@ from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
 from .reportify import dump_graph
 
-from tvm.relay.testing import run_infer_type
 import numpy as np
 import math
 import numpy as np
 from tvm.relay.dataflow_pattern import *
+from tvm.relay.testing import run_infer_type
 
 from loguru import logger
 
@@ -292,9 +292,6 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
     def callback(self, pre, post, node_map):
 
         transpose_axes = post.attrs.axes
-        acts = node_map[self.act][0]
-        trans = node_map[self.transpose][0]
-        trans = run_infer_type(trans)
         if transpose_axes == None:
             return post
 
@@ -309,7 +306,13 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
         if len(changed_axis) == 2:
             return post
 
-        ndim = len(trans.args[0].checked_type.shape)
+        acts = post.args[0]
+        temp_mod = tvm.IRModule.from_expr(acts)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        act_shape = temp_mod["main"].body.checked_type.shape
+        del temp_mod
+
+        ndim = len(act_shape)
         total_permute = list(transpose_axes)
         total_permute = [int(x) for x in total_permute]
         no_permute = list(range(ndim))
@@ -358,9 +361,14 @@ class DecomposeMultiAxisBroadcast(DFPatternCallback):
         self.pattern = self.broadcast_to
 
     def callback(self, pre, post, node_map):
-        acts = node_map[self.act][0]
-        acts = run_infer_type(acts)
-        inp_shape = list(acts.checked_type.shape)
+        acts = post.args[0]
+        
+        temp_mod = tvm.IRModule.from_expr(acts)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        act_shape = temp_mod["main"].body.checked_type.shape
+        del temp_mod
+
+        inp_shape = list(act_shape)
         target_shape = list(post.attrs.shape)
 
         for i, (inp_dim, target_dim) in enumerate(zip(inp_shape, target_shape)):
@@ -770,7 +778,6 @@ class RemoveRedundantTake(DFPatternCallback):
             del newshape[int(axis)]
 
             out = tvm.relay.reshape(act, newshape=newshape)
-            act = run_infer_type(act)
             return out
 
         return post
@@ -784,9 +791,14 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         self.pattern = is_op("take")(self.input_tensor, self.indices)
 
     def callback(self, pre, post, node_map):
-        act = node_map[self.input_tensor][0]
-        
-        act_shape = list(act.checked_type.shape)
+
+        acts = post.args[0]
+        temp_mod = tvm.IRModule.from_expr(acts)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        act_shape = temp_mod["main"].body.checked_type.shape
+        del temp_mod
+
+        act_shape = list(act_shape)
 
         try:
             indices = node_map[self.indices][0].data.numpy().item()
@@ -794,11 +806,11 @@ class LowerTakeToStridedSlice(DFPatternCallback):
             assert False, "we only support take with a single index currently"
         
         axis = post.attrs.axis
-        strided_slice = tvm.relay.strided_slice(act, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
+        strided_slice = tvm.relay.strided_slice(acts, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
         newshape = act_shape
         del newshape[int(axis)]
         reshape = tvm.relay.reshape(strided_slice, newshape=newshape)
-        act = run_infer_type(act)
+
         return reshape
 
 
@@ -816,7 +828,6 @@ class DecomposeMultiRangeTake(DFPatternCallback):
             tvm.take can have a list of arbitrary indices. 
         """
         act = node_map[self.input_tensor][0]
-        act = run_infer_type(act)
         try:
             indices = node_map[self.indices][0].data.numpy().item()
         except ValueError as v:
@@ -1198,10 +1209,15 @@ class PopulateStridedSliceAxes(DFPatternCallback):
     def callback(self, pre, post, node_map):
         if post.attrs.axes is not None:
             return post
+        
+        temp_mod = tvm.IRModule.from_expr(post)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        temp_mod = temp_mod["main"].body
 
-        post = run_infer_type(post)
-        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
-        output_shape = [int(dim) for dim in post.checked_type.shape]
+        input_shape = [int(dim) for dim in temp_mod.args[0].checked_type.shape]
+        output_shape = [int(dim) for dim in temp_mod.checked_type.shape]
+        
+        del temp_mod
 
         begin = [int(dim) for dim in post.attrs.begin]
         end = [int(dim) for dim in post.attrs.end]
@@ -1232,8 +1248,12 @@ class PopulateTransposeAxes(DFPatternCallback):
         if post.attrs.axes is not None:
             return post
 
-        post = run_infer_type(post)
-        transpose_dims = len(post.checked_type.shape)
+        temp_mod = tvm.IRModule.from_expr(post)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        temp_mod = temp_mod["main"].body
+        transpose_dims = len(temp_mod.checked_type.shape)
+        del temp_mod
+
         last_dim = -transpose_dims - 1
         taxes = list(range(-1, last_dim, -1))
 
@@ -1277,20 +1297,23 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         self.pattern = is_op('expand_dims')(self.act)
 
     def callback(self, pre, post, node_map):
-        act = node_map[self.act][0]
+        acts = post.args[0]
+        temp_mod = tvm.IRModule.from_expr(acts)
+        temp_mod = relay.transform.InferType()(temp_mod)
+        act_shape = temp_mod["main"].body.checked_type.shape
+        del temp_mod
         axis = int(post.attrs.axis)
         num_new_axes = int(post.attrs.num_newaxis)
 
-        act = run_infer_type(act)
-        if not isinstance(act, tvm.relay.expr.Var) and act.op.name == "reshape":
-            target_shape = list(act.attrs.newshape)
+        if not isinstance(acts, tvm.relay.expr.Var) and acts.op.name == "reshape":
+            target_shape = list(acts.attrs.newshape)
         else:
-            target_shape = list(act.checked_type.shape)
+            target_shape = list(act_shape)
 
         for i in range(num_new_axes):
             target_shape.insert(axis, 1)
 
-        return tvm.relay.reshape(act, newshape=target_shape)
+        return tvm.relay.reshape(acts, newshape=target_shape)
 
 
 class TransposePad(DFPatternCallback):
