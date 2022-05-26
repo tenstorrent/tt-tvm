@@ -820,7 +820,7 @@ class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
     def __init__(self, rewrite_once=True):
         super().__init__(rewrite_once=rewrite_once)
         self.input_tensor = wildcard()
-        self.argmax = is_op("argmax")(self.input_tensor)
+        self.argmax = wildcard()
         self.reshape = is_op("reshape")(self.input_tensor)
         self.const = is_constant()
         self.add = is_op("add")(self.const, self.argmax)
@@ -830,10 +830,12 @@ class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
     def callback(self, pre, post, node_map):
 
         act = node_map[self.input_tensor][0]
-        act = run_infer_type(act)
         input_shape = list(act.checked_type.shape)
 
         argmax_op = node_map[self.argmax][0]
+        if argmax_op.op.name != "argmax":
+            return post
+
         argmax_axis = int(argmax_op.attrs.axis[0])
         if argmax_axis != -1 and int(input_shape[0]) == 1:
             return post
