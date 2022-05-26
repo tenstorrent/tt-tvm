@@ -60,6 +60,7 @@ _register_external_op_helper("nn.pad")
 _register_external_op_helper("max")
 _register_external_op_helper("broadcast_to")
 _register_external_op_helper("sum")
+_register_external_op_helper("power")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -799,6 +800,43 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         return reshape
 
 
+class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.argmax = is_op("argmax")(self.input_tensor)
+        self.reshape = is_op("reshape")(self.input_tensor)
+        self.const = is_constant()
+        self.add = is_op("add")(self.const, self.argmax)
+        self.take = is_op("take")(self.reshape, self.add)
+        self.pattern = self.take
+
+    def callback(self, pre, post, node_map):
+
+        act = node_map[self.input_tensor][0]
+        act = run_infer_type(act)
+        input_shape = list(act.checked_type.shape)
+
+        argmax_op = node_map[self.argmax][0]
+        argmax_axis = int(argmax_op.attrs.axis[0])
+        if argmax_axis != -1 and int(input_shape[0]) == 1:
+            return post
+
+        reshape_op = node_map[self.reshape][0]
+        new_shape = list(reshape_op.attrs.newshape)
+        if not (len(new_shape) == 1 and int(new_shape[0]) == -1):
+            return post
+
+        const_data = node_map[self.const][0].data.numpy()
+        arange_max = int(input_shape[-2]) * int(input_shape[-1])
+        test_np = np.expand_dims(np.arange(start=0, stop=arange_max, step=int(input_shape[-1]), dtype=const_data.dtype), axis=0)
+        match = np.array_equal(const_data, test_np, equal_nan=False)
+        if not match:
+            return post
+
+        result = tvm.relay.max(act, axis=-1)
+        return result
+
 class DecomposeMultiRangeTake(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):
         super().__init__(rewrite_once=rewrite_once)
@@ -1462,6 +1500,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After DecomposeVariance")
     logger.trace(relay_module.functions)
 
+    relay_module["main"] = rewrite(ConvertArgmaxTakeToReduceMax(), relay_module["main"])
+    logger.trace("After ConvertArgmaxTakeToReduceMax")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(DecomposeEinsum(), relay_module["main"])
     logger.trace("After DecomposeEinsum")
     logger.trace(relay_module.functions)
@@ -1653,6 +1695,7 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
 
 def partition_for_buda(mod, graph_name, allow_unsupported=False):
     with tvm.transform.PassContext(opt_level=5):
+
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
 
