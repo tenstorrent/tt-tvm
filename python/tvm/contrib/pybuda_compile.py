@@ -299,7 +299,8 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
 
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def()
-    mod, params = tvm.relay.frontend.from_tensorflow(graph_def)
+    outputs = [output.name for output in frozen_func.outputs]
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=outputs)
 
     # TODO: Destupidify this! (Maybe we can sort by a substring of the weight names to make this more efficient)
     found_weights = []
