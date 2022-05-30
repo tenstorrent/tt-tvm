@@ -284,17 +284,17 @@ class DecomposeStack(DFPatternCallback):
 
 class DecomposeMultiAxisTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.transpose = is_op("transpose")(self.act)
         self.pattern = self.transpose
 
     def callback(self, pre, post, node_map):
 
-        transpose_axes = post.attrs.axes
+        transpose_axes = pre.attrs.axes
+        act_shape = pre.args[0].checked_type.shape
         acts = node_map[self.act][0]
-        trans = node_map[self.transpose][0]
-        trans = run_infer_type(trans)
+
         if transpose_axes == None:
             return post
 
@@ -309,7 +309,7 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
         if len(changed_axis) == 2:
             return post
 
-        ndim = len(trans.args[0].checked_type.shape)
+        ndim = len(act_shape)
         total_permute = list(transpose_axes)
         total_permute = [int(x) for x in total_permute]
         no_permute = list(range(ndim))
@@ -352,16 +352,15 @@ class DecomposeMultiAxisMean(DFPatternCallback):
 
 class DecomposeMultiAxisBroadcast(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.broadcast_to = is_op("broadcast_to")(self.act)
         self.pattern = self.broadcast_to
 
     def callback(self, pre, post, node_map):
         acts = node_map[self.act][0]
-        acts = run_infer_type(acts)
         inp_shape = list(acts.checked_type.shape)
-        target_shape = list(post.attrs.shape)
+        target_shape = list(pre.attrs.shape)
 
         for i, (inp_dim, target_dim) in enumerate(zip(inp_shape, target_shape)):
             if inp_dim == target_dim:
@@ -749,7 +748,7 @@ class ExplicateHSliceTranspose(DFPatternCallback):
         return rtt
 
 class RemoveRedundantTake(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
+    def __init__(self, rewrite_once=True, require_type=True):
         super().__init__(rewrite_once=rewrite_once)
         self.input_tensor = wildcard()
         self.indices = is_constant()
@@ -763,21 +762,20 @@ class RemoveRedundantTake(DFPatternCallback):
 
         act = node_map[self.input_tensor][0]
         act_shape = list(act.checked_type.shape)
-        axis = post.attrs.axis
+        axis = pre.attrs.axis
 
         if act_shape[int(axis)] == 1 and indices == 0:
             newshape = act_shape
             del newshape[int(axis)]
 
             out = tvm.relay.reshape(act, newshape=newshape)
-            act = run_infer_type(act)
             return out
 
         return post
 
 
 class LowerTakeToStridedSlice(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
+    def __init__(self, rewrite_once=True, require_type=True):
         super().__init__(rewrite_once=rewrite_once)
         self.input_tensor = wildcard()
         self.indices = is_constant()
@@ -793,17 +791,16 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         except ValueError as v:
             assert False, "we only support take with a single index currently"
         
-        axis = post.attrs.axis
+        axis = pre.attrs.axis
         strided_slice = tvm.relay.strided_slice(act, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
         newshape = act_shape
         del newshape[int(axis)]
         reshape = tvm.relay.reshape(strided_slice, newshape=newshape)
-        act = run_infer_type(act)
         return reshape
 
 
 class DecomposeMultiRangeTake(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
+    def __init__(self, rewrite_once=True, require_type=True):
         super().__init__(rewrite_once=rewrite_once)
         self.input_tensor = wildcard()
         self.indices = is_constant()
@@ -816,7 +813,6 @@ class DecomposeMultiRangeTake(DFPatternCallback):
             tvm.take can have a list of arbitrary indices. 
         """
         act = node_map[self.input_tensor][0]
-        act = run_infer_type(act)
         try:
             indices = node_map[self.indices][0].data.numpy().item()
         except ValueError as v:
@@ -1189,28 +1185,27 @@ class CStridedSliceToRStridedSlice(DFPatternCallback):
         return trslice
         
 class PopulateStridedSliceAxes(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
+    def __init__(self, rewrite_once=True, require_type=True):
         super().__init__()
         self.input_tensor = wildcard()
 
         self.pattern = is_op('strided_slice')(wildcard())
 
     def callback(self, pre, post, node_map):
-        if post.attrs.axes is not None:
+        if pre.attrs.axes is not None:
             return post
 
-        post = run_infer_type(post)
-        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
-        output_shape = [int(dim) for dim in post.checked_type.shape]
+        input_shape = [int(dim) for dim in pre.args[0].checked_type.shape]
+        output_shape = [int(dim) for dim in pre.checked_type.shape]
 
-        begin = [int(dim) for dim in post.attrs.begin]
-        end = [int(dim) for dim in post.attrs.end]
-        stride = [int(dim) for dim in post.attrs.strides]
+        begin = [int(dim) for dim in pre.attrs.begin]
+        end = [int(dim) for dim in pre.attrs.end]
+        stride = [int(dim) for dim in pre.attrs.strides]
 
         act = post.args[0]
         for dim, (in_dim, out_dim) in enumerate(zip(input_shape, output_shape)):
             if in_dim != out_dim:
-                if post.attrs.slice_mode == "size":
+                if pre.attrs.slice_mode == "size":
                     final_stride = None
                     final_end = (begin[dim] + end[dim], )
                 else:
@@ -1222,18 +1217,17 @@ class PopulateStridedSliceAxes(DFPatternCallback):
 
         
 class PopulateTransposeAxes(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
+    def __init__(self, rewrite_once=True, require_type=True):
         super().__init__()
         self.input_tensor = wildcard()
 
         self.pattern = is_op('transpose')(wildcard())
 
     def callback(self, pre, post, node_map):
-        if post.attrs.axes is not None:
+        if pre.attrs.axes is not None:
             return post
 
-        post = run_infer_type(post)
-        transpose_dims = len(post.checked_type.shape)
+        transpose_dims = len(pre.checked_type.shape)
         last_dim = -transpose_dims - 1
         taxes = list(range(-1, last_dim, -1))
 
@@ -1272,16 +1266,15 @@ class AllowUnsupportedOps(ExprMutator):
 
 class ConvertExpandDimsToReshape(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.pattern = is_op('expand_dims')(self.act)
 
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
-        axis = int(post.attrs.axis)
-        num_new_axes = int(post.attrs.num_newaxis)
+        axis = int(pre.attrs.axis)
+        num_new_axes = int(pre.attrs.num_newaxis)
 
-        act = run_infer_type(act)
         if not isinstance(act, tvm.relay.expr.Var) and act.op.name == "reshape":
             target_shape = list(act.attrs.newshape)
         else:
