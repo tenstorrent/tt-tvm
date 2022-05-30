@@ -2406,8 +2406,30 @@ class PyTorchOpConverter:
     def embedding(self, inputs, input_types):
         weight = inputs[0]
         indices = inputs[1]
-
         return _op.take(weight, indices.astype("int32"), axis=0)
+
+    def embedding_bag(self, inputs, input_types):
+
+        weight = inputs[0]
+        indices = inputs[1]
+
+        modes = ["sum", "mean", "max"]
+        mode = modes[inputs[4]]
+
+        offsets = inputs[2]
+        #TODO: Support multiple bags
+        assert offsets.type_annotation.concrete_shape[0] == 1, "embedding_bag currently only supports a single bag"
+
+        take = []
+        take.append(_op.take(weight, indices.astype("int32"), axis=0))
+        
+        if mode == "sum":
+            out = _op.sum(take[0], axis=0)
+        elif mode == "mean":
+            out = _op.mean(take[0], axis=0)
+        else:
+            out = _op.max(take[0], axis=0)
+        return (out,)
 
     def one_hot(self, inputs, input_types):
         indices = inputs[0].astype("int32")
@@ -3948,6 +3970,7 @@ class PyTorchOpConverter:
             "aten::Float": self.Float,
             "aten::rsub": self.rsub,
             "aten::embedding": self.embedding,
+            "aten::embedding_bag": self.embedding_bag,
             "aten::one_hot": self.one_hot,
             "aten::mm": self.matmul,
             "aten::add": self.add,
@@ -4287,7 +4310,10 @@ class PyTorchOpConverter:
                     _get_op_inputs(op_node, outputs),
                     _get_input_types(op_node, outputs, default_dtype=self.default_dtype),
                 )
+
+                span_str, empty_counter = self._get_torch_span(op_node, empty_counter)
                 relay_out = set_span(relay_out, self.source_map[op_node])
+
                 self.record_output_type(relay_out)
 
                 if isinstance(relay_out, tuple):
