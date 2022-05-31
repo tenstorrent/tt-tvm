@@ -815,6 +815,21 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         reshape = tvm.relay.reshape(strided_slice, newshape=newshape)
         return reshape
 
+class AddSqueezeForArgmax(DFPatternCallback):
+    def __init__(self, rewrite_once=True, require_type=True):
+        super().__init__(rewrite_once=rewrite_once, require_type=require_type)
+        self.input_tensor = wildcard()
+        self.pattern = is_op("argmax")(self.input_tensor)
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.keepdims:
+            return post
+        
+        inp = node_map[self.input_tensor][0]
+        axis = post.attrs.axis
+        new_argmax = tvm.relay.argmax(inp, axis=axis, keepdims=True,)
+        result = tvm.relay.squeeze(new_argmax, axis=axis)
+        return result
 
 class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
     def __init__(self, rewrite_once=True):
@@ -1540,6 +1555,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ConvertArgmaxTakeToReduceMax(), relay_module["main"])
     logger.trace("After ConvertArgmaxTakeToReduceMax")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(AddSqueezeForArgmax(), relay_module["main"])
+    logger.trace("After AddSqueezeForArgmax")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeEinsum(), relay_module["main"])
