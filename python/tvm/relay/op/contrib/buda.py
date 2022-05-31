@@ -1341,6 +1341,39 @@ class UpdateConstants(DFPatternCallback):
         self.const_idx += 1
         return post
 
+class AddNopsToPassthrough(ExprMutator):
+    def __init__(self):
+        super().__init__()
+        self.output_vars =  []
+
+    def visit_var(self, var):
+        if var in self.output_vars:
+            target_shape = list(var.checked_type.shape)
+            return tvm.relay.reshape(var, newshape=target_shape)
+        else:
+            return var
+
+    def visit_call(self, call):
+        new_op = self.visit(call.op)
+        new_args = [self.visit(arg) for arg in call.args]
+        return tvm.relay.Call(new_op, new_args, call.attrs)
+
+    def visit_global_var(self, gvar):
+        return gvar
+
+    def visit_op(self, op):
+        return op
+
+    def visit_function(self, fn):
+        if isinstance(fn.body, tvm.relay.expr.Tuple):
+            outputs = [output for output in fn.body]
+        else:
+            outputs = [fn.body]
+
+        self.output_vars = [output for output in outputs if isinstance(output, tvm.relay.Var)]
+        new_body = self.visit(fn.body)
+        return tvm.relay.Function(list(fn.params), new_body, fn.ret_type, fn.type_params, fn.attrs)
+
 
 class AllowUnsupportedOps(ExprMutator):
     def __init__(self):
@@ -1772,6 +1805,14 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
             mod["main"] = AllowUnsupportedOps().visit(mod["main"])
             logger.trace("After AllowUnsupportedOps")
             logger.trace(mod.functions)
+
+        mod["main"] = AddNopsToPassthrough().visit(mod["main"])
+        logger.trace("After AddNopsToPassthrough")
+        logger.trace(mod.functions)
+
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        logger.trace("After InferType")
+        logger.trace(mod.functions)
 
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         logger.trace("After FoldConstant")
