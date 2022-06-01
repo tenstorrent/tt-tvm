@@ -121,7 +121,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     json_graph = {"function_names": [], "graph" : "", "param_names": {}}
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
-        if isinstanceisinstance(module, torch.nn.Module):
+        if isinstance(module, torch.nn.Module):
             module.eval()
     elif isinstance(module, torch.nn.Module):
         json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
