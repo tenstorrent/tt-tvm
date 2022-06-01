@@ -556,15 +556,47 @@ class ReconstructTFGelu(DFPatternCallback):
 
         return tvm.relay.gelu(node_map[self.act][0])
 
+class ReconstructPyTorchGeluNew(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        square = is_op("multiply")(self.act, self.act)
+        pow_3 = is_op("multiply")(square, self.act)
+        self.c_0044715 = is_constant()
+        times_const = is_op("multiply")(pow_3, self.c_0044715)
+        addition = is_op("add")(self.act, times_const)
+        self.root_two_over_pie = is_constant()
+        times_root_2_over_pie = is_op("multiply")(addition, self.root_two_over_pie)
+        tanh = is_op("tanh")(times_root_2_over_pie)
+        self.one = is_constant()
+        tanh_plus_one = is_op("add")(tanh, self.one)
+        self.one_half = is_constant()
+        divide_by_two = is_op("multiply")(self.act, self.one_half)
+        new_gelu = is_op("multiply")(divide_by_two, tanh_plus_one)
+
+        self.pattern = new_gelu
+
+    def callback(self, pre, post, node_map):
+        constnats_correct = True
+        constnats_correct = constnats_correct and math.isclose(node_map[self.c_0044715][0].data.numpy(), 0.044715, rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.root_two_over_pie][0].data.numpy(), math.sqrt(2.0 / math.pi), rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.one][0].data.numpy(), 1, rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.one_half][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not constnats_correct:
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
 class ReconstructPyTorchGelu(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
-        act = wildcard()
-        times_root_two = is_op("multiply")(act, is_constant())
+        self.act = wildcard()
+        times_root_two = is_op("multiply")(self.act, is_constant())
         erf = is_op("erf")(times_root_two)
         times_half = is_op("multiply")(erf, is_constant())
         add = is_op("add")(is_constant(), times_half)
-        gelu = is_op("multiply")(act, add)
+        gelu = is_op("multiply")(self.act, add)
 
         self.pattern = gelu
 
@@ -577,7 +609,7 @@ class ReconstructPyTorchGelu(DFPatternCallback):
         if not (half_added and half_multiplied and root_two_multiplied):
             return post
 
-        return tvm.relay.gelu(post.args[0])
+        return tvm.relay.gelu(node_map[self.act][0])
 
 class ReconstructPyTorchLayerNorm(DFPatternCallback):
     def __init__(self):
@@ -695,6 +727,49 @@ class DenseWeightTranspose(DFPatternCallback):
         wt2 = tvm.relay.transpose(wt1)
         return tvm.relay.nn.dense(act, wt2)
 
+class LiftLinearSplit(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        act = wildcard()
+        self.dense_weight = wildcard()
+        self.add_bias = wildcard()
+        self.dense = is_op("nn.dense")(act, self.dense_weight)
+        self.add = is_op("add")(self.dense, self.add_bias)
+        self.reshape = is_op("reshape")(self.add)
+        self.split = is_op('split')(self.reshape)
+        self.pattern = self.split
+
+    def callback(self, pre, post, node_map):
+        weight = node_map[self.dense_weight][0]
+        bias = node_map[self.add_bias][0]
+
+        indices_or_sections = [int(ios) for ios in post.attrs.indices_or_sections]
+        axis = post.attrs.axis
+
+        output_shape = node_map[self.reshape][0].checked_type.shape
+        newshape = list(output_shape)
+        newshape[axis] = -1
+
+        if (is_unsqueeze(node_map[self.reshape][0])):
+            # Weight should be transposed in nn.dense, so if splitting
+            # along the final output axis, split along the first weight
+            if axis == len(output_shape) - 1:
+                assert output_shape[axis] == weight.checked_type.shape[0]
+                axis = 0
+
+        act = node_map[self.dense][0].args[0]
+
+        split_weights = tvm.relay.split(weight, indices_or_sections, axis)
+        split_biases = tvm.relay.split(bias, indices_or_sections, 0)
+
+        outputs = []
+        for i in range(split_weights.size):
+            dense_out = tvm.relay.nn.dense(act, tvm.relay.TupleGetItem(split_weights.tuple_value, i))
+            add_out = tvm.relay.add(dense_out, tvm.relay.TupleGetItem(split_biases.tuple_value, i))
+            reshape_out = tvm.relay.reshape(add_out, newshape=newshape)
+            outputs.append(reshape_out)
+
+        return tvm.relay.expr.Tuple(outputs)
 
 class LowerSplitToStridedSlice(DFPatternCallback):
     def __init__(self):
@@ -709,7 +784,7 @@ class LowerSplitToStridedSlice(DFPatternCallback):
 
         if not self.split.match(split):
             return post
-        
+
         act = split.args[0]
         axis = split.attrs.axis
         if axis < 0:
@@ -1509,12 +1584,15 @@ class AddNopsToPassthrough(ExprMutator):
 
 
 class AllowUnsupportedOps(ExprMutator):
-    def __init__(self):
+    def __init__(self, check_only=False):
         super().__init__()
+        self.check_only = check_only
 
     def visit_call(self, call):
         if isinstance(call.op, tvm.ir.Op):
-            if call.op.get_attr("target.buda") is None:
+            if self.check_only:
+                assert False, f"Operator {call.op} is not supported"
+            elif call.op.get_attr("target.buda") is None:
                 def _func_wrapper(expr):
                     return True
                 tvm.ir.register_op_attr(call.op.name, "target.buda", _func_wrapper)
@@ -1735,6 +1813,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After DecomposeLayoutTransform")
     logger.trace(relay_module.functions)
 
+    relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
+    logger.trace("After LiftLinearSplit")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
     logger.trace("After LowerSplitToStridedSlice")
     logger.trace(relay_module.functions)
@@ -1855,24 +1937,28 @@ def reconstruct_ops_for_buda(mod):
 
     logger.trace("reconstruct_ops_for_buda:: At Entry")
     logger.trace(mod.functions)
-    mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
 
+    mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
     logger.trace("After ReconstructPyTorchGelu")
     logger.trace(mod.functions)
-    mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
 
+    mod["main"] = rewrite(ReconstructPyTorchGeluNew(), mod["main"])
+    logger.trace("After ReconstructPyTorchGeluNew")
+    logger.trace(mod.functions)
+
+    mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
     logger.trace("After ReconstructTFGelu")
     logger.trace(mod.functions)
-    mod = tvm.transform.Sequential([transform.InferType()])(mod)
 
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
     logger.trace("After InferType")
     logger.trace(mod.functions)
-    mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
 
+    mod["main"] = rewrite(ReconstructTFLayerNorm(), mod["main"])
     logger.trace("After ReconstructTFLayerNorm")
     logger.trace(mod.functions)
-    mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
 
+    mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
     logger.trace("After ReconstructPyTorchLayerNorm")
     logger.trace(mod.functions)
 
@@ -1961,6 +2047,10 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
 
         mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
         logger.trace("After PartitionGraph")
+        logger.trace(mod.functions)
+
+        mod["main"] = AllowUnsupportedOps(check_only=True).visit(mod["main"])
+        logger.trace("After AllowUnsupportedOps")
         logger.trace(mod.functions)
 
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
