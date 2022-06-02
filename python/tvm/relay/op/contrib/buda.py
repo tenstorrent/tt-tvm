@@ -625,8 +625,8 @@ class ReconstructTFLayerNorm(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
-        self.gamma = is_constant()
-        self.beta = is_constant()
+        self.gamma = wildcard()
+        self.beta = wildcard()
         self.eps = is_constant()
 
         mean_act = is_op("mean")(self.act)
@@ -657,11 +657,11 @@ class ReconstructTFLayerNorm(DFPatternCallback):
 
         act_shape = list(act.checked_type.shape)
 
-        assert len(gamma.data.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+        assert len(gamma.type_annotation.shape) == 1, "TVM Layernorm only supports single dim layernorm"
         axis = None
         # Find the last dimension of the specific size
         for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma.data.shape[0]:
+            if dim == gamma.type_annotation.shape[0]:
                 axis = (i * -1) - 1 # i == 0 means axis = -1
                 break
 
