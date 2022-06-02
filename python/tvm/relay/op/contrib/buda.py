@@ -9,6 +9,7 @@ from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name, BuildModule,build_target_by_device_type_map
 from tvm.ir import IRModule
 from tvm.relay import function as _function
+from tvm.relay.op.transform import broadcast_to
 from tvm.target.compilation_config import make_compilation_config
 from ...dataflow_pattern import wildcard, is_op
 from .register import register_pattern_table
@@ -36,6 +37,7 @@ _register_external_op_helper("log")
 _register_external_op_helper("mean")
 _register_external_op_helper("multiply")
 _register_external_op_helper("nn.batch_matmul")
+_register_external_op_helper("nn.matmul")
 _register_external_op_helper("nn.conv2d")
 _register_external_op_helper("nn.max_pool2d")
 _register_external_op_helper("nn.relu")
@@ -934,7 +936,7 @@ class DecomposeNegative(DFPatternCallback):
 
 class DecomposeEinsum(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = is_tuple(None)
 
         self.pattern = is_op('einsum')(self.act)
@@ -950,31 +952,159 @@ class DecomposeEinsum(DFPatternCallback):
             return result
         elif equation == "bts,bcs->bct":
             assert len(node_map[self.act][0]) == 2
-            srcB = node_map[self.act][0][0]
-            srcA = node_map[self.act][0][1]
-
-            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
-            return result
-
-        elif equation == "bnqd,bnkd->bnqk":
-            assert len(node_map[self.act][0]) == 2
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
 
-            assert len(srcA.checked_type.shape) == 4, \
-                f"Incorrectly shaped input ({srcA.checked_type.shape}) for einsum equation: {equation}"
-            assert len(srcB.checked_type.shape) == 4, \
-                f"Incorrectly shaped input ({srcB.checked_type.shape}) for einsum equation: {equation}"
-            assert srcA.checked_type.shape[0] == 1, \
-                f"TVM einsum decomposition does not support 4-dimensional tensors with axis 0 of size greater than 1 (size = {srcA.checked_type.shape[0]})"
-            assert srcB.checked_type.shape[0] == 1, \
-                f"TVM einsum decomposition does not support 4-dimensional tensors with axis 0 of size greater than 1 (size = {srcB.checked_type.shape[0]})"
-
-            srcA = tvm.relay.squeeze(srcA, axis=[0])
-            srcB = tvm.relay.squeeze(srcB, axis=[0])
-            
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
-            return result
+            return tvm.relay.transpose(result, axes=[0, 2, 1])
+
+        elif equation == "bnqd,bnkd->bnqk":
+            assert len(node_map[self.act][0]) == 2
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[0, 1, 3, 2,])
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[2]), int(srcA_shape[3])]
+            new_shape_srcB = [int(srcB_shape[0]) * int(srcB_shape[1]), int(srcB_shape[3]), int(srcB_shape[2])]
+
+            reshape_srcA = tvm.relay.reshape(srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+            return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[2]])
+        elif equation == "ibh,hnd->ibnd":
+            assert len(node_map[self.act][0]) == 2
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+            srcA_shape = srcA.checked_type.shape
+            srcB_shape = srcB.checked_type.shape
+
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[2])] # i*b h 
+            new_shape_srcB = [int(srcB_shape[0]), int(srcB_shape[1]) * int(srcB_shape[2])] # h n*d
+
+            reshape_srcA = tvm.relay.reshape(srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(srcB, newshape=new_shape_srcB)
+
+            # MatMul
+            result = tvm.relay.nn.matmul(reshape_srcA, reshape_srcB) # i*b n*d
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[1], srcB_shape[2]])
+            return reshape_result
+        elif equation == "ibnd,jbnd->bnij":
+            srcA_shape = list(pre.args[0][0].checked_type.shape)
+            srcB_shape = list(pre.args[0][1].checked_type.shape)
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            if srcA_shape[1] != srcB_shape[1] and srcA_shape[1] == 1:
+                # broadcast
+                srcA_shape[1] = srcA_shape[1] * srcB_shape[1]
+                srcA = tvm.relay.broadcast_to(srcA, srcA_shape)
+            elif srcA_shape[1] != srcB_shape[1]:
+                # Dont know how to handle
+                assert False, f"TVM einsum decomposition does not support {equation} with srcA shape {srcA_shape}."
+
+            transpose_srcA = tvm.relay.transpose(srcA, axes=[1, 2, 0, 3]) # bnid
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[1, 2, 3, 0]) # bndj
+            new_shape_srcA = [int(srcA_shape[1]) * int(srcA_shape[2]), int(srcA_shape[0]), int(srcA_shape[3])]
+            new_shape_srcB = [int(srcB_shape[1]) * int(srcB_shape[2]), int(srcB_shape[3]), int(srcB_shape[0])]
+
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            # Batch MatMul
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[1], srcA_shape[2], srcA_shape[0], srcB_shape[0]])
+            return reshape_result
+        elif equation == "ibnd,snd->ibns":
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            transpose_srcA = tvm.relay.transpose(srcA, axes=[2, 0, 1, 3]) # nibd
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[1, 2, 0]) # nds
+            new_shape_srcA = [int(srcA_shape[2]), int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[3])] # n i*b d
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA)
+            # Batch MatMul
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, transpose_srcB, transpose_a=False, transpose_b=False) # n i*b s
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[2], srcA_shape[0], srcA_shape[1], srcB_shape[0]])
+            reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 2, 0, 3])
+            return reshape_result
+        elif equation == "ijbs,ibns->bnij":
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+            
+            transpose_srcA = tvm.relay.transpose(srcA, axes=[0, 2, 1, 3,]) # ibjs
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[0, 1, 3, 2]) # ibsn
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[1]), int(srcA_shape[3])] # i*b j s
+            new_shape_srcB = [int(srcB_shape[0]) * int(srcB_shape[1]), int(srcB_shape[3]), int(srcB_shape[2])] # i*b s n
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+            # MatMul
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False) # ibjn
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcA_shape[1], srcB_shape[2]])
+            reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 3, 0, 2])
+            return reshape_result
+        elif equation == "ijbn->bnij":
+            srcA = node_map[self.act][0][0]
+            return tvm.relay.transpose(srcA, axes=[2, 3, 0, 1])
+        elif equation == "bnij,jbnd->ibnd":
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[1, 2, 0, 3]) # bnjd
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]),int(srcA_shape[2]), int(srcA_shape[3])] # b*n i j
+            new_shape_srcB = [int(srcB_shape[1]) * int(srcB_shape[2]), int(srcB_shape[0]), int(srcB_shape[3])]  # b*n j d
+            reshape_srcA = tvm.relay.reshape(srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            if srcA_shape[-1] != srcB_shape[0] and srcB_shape[0] == 1:
+                # broadcast
+                new_shape_srcB[-2] = new_shape_srcB[-2] * srcA_shape[-1]
+                reshape_srcB = tvm.relay.broadcast_to(reshape_srcB, new_shape_srcB)
+            elif srcA_shape[-1] != srcB_shape[0]:
+                # Dont know how to handle
+                assert False, f"TVM einsum decomposition does not support {equation} with srcB shape {srcB_shape}."
+
+            # MatMul
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[3]])
+            reshape_result = tvm.relay.transpose(reshape_result, axes=[2, 0, 1, 3])
+            return reshape_result
+        elif equation == "ibnd,hnd->ibh":
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[1, 2, 0]) # ibsn
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[2]) * int(srcA_shape[3])]
+            new_shape_srcB = [int(srcB_shape[1]) * int(srcB_shape[2]), int(srcB_shape[0])]
+            reshape_srcA = tvm.relay.reshape(srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            # MatMul
+            result = tvm.relay.nn.matmul(reshape_srcA, reshape_srcB) # ibjn
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[0]])
+            return reshape_result
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
@@ -1837,8 +1967,11 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
 
         for item in main_body_call_node:
             if isinstance(item, tvm.relay.expr.Call):
-                assert isinstance(item.op, tvm.ir.expr.GlobalVar), f"Operator {item.op.name} is unsupported"
-                assert item.op in mod.global_var_map_.values(), mod["main"]
+                for arg in item.args:
+                    if isinstance(arg, tvm.relay.expr.Var):
+                        continue
+                    assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
+                    assert arg.op in mod.global_var_map_.values(), mod["main"]
 
         assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
 
