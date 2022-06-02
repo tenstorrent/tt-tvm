@@ -743,7 +743,12 @@ class LiftLinearSplit(DFPatternCallback):
         weight = node_map[self.dense_weight][0]
         bias = node_map[self.add_bias][0]
 
-        indices_or_sections = [int(ios) for ios in post.attrs.indices_or_sections]
+        if isinstance(post.attrs.indices_or_sections, tvm.tir.expr.IntImm):
+            total_len = int(pre.args[0].checked_type.shape[post.attrs.axis])
+            section_len = total_len // int(post.attrs.indices_or_sections)
+            indices_or_sections = list(range(section_len, total_len, section_len))
+        else:
+            indices_or_sections = [int(ios) for ios in post.attrs.indices_or_sections]
         axis = post.attrs.axis
 
         output_shape = node_map[self.reshape][0].checked_type.shape
@@ -760,7 +765,7 @@ class LiftLinearSplit(DFPatternCallback):
         act = node_map[self.dense][0].args[0]
 
         split_weights = tvm.relay.split(weight, indices_or_sections, axis)
-        split_biases = tvm.relay.split(bias, indices_or_sections, 0)
+        split_biases = tvm.relay.split(bias, indices_or_sections, -1)
 
         outputs = []
         for i in range(split_weights.size):

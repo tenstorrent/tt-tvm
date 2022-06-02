@@ -124,7 +124,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         if isinstance(module, torch.nn.Module):
             module.eval()
     elif isinstance(module, torch.nn.Module):
-        json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
+        json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
@@ -132,20 +132,20 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         else:
             tf_inputs = inputs
 
-        json_graph = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval)
+        json_graph = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.compat.v1.GraphDef):
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graph = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, consteval_in_pybuda=compiler_cfg.enable_consteval, output_names=output_names)
+        json_graph = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg, output_names=output_names)
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
     return json_graph
 
 
-def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, consteval_in_pybuda):
+def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
     torchmod.eval()
     framework_outputs = torchmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
@@ -168,10 +168,14 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
-    if consteval_in_pybuda:
+    if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+        if len(compiler_cfg.tvm_constnat_prop_mask):
+            propped_params = {k : v for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
+        else:
+            propped_params = params
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i.debugName().split('.')[0]:x.detach().numpy() for i, x in  zip(list(traced_model.graph.inputs())[1:], inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
@@ -289,7 +293,7 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
     return json_graph
 
 
-def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_unsupported):
+def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsupported):
     framework_outputs = tfmod(*inputs)
     if not isinstance(framework_outputs, (list, tuple)):
         framework_outputs = [framework_outputs]
@@ -324,11 +328,15 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
         if not weight_found:
             param_name_lookup[bad_name] = bad_name.replace(":", ".")
             non_weight_params[bad_name] = value
-
-    if consteval_in_pybuda:
+    if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
     else:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+        if len(compiler_cfg.tvm_constnat_prop_mask):
+            propped_params = {k : v for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
+            propped_params.update(non_weight_params)
+        else:
+            propped_params = params
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i.name.split(':')[0] : None if x is None else x.numpy() for i, x in  zip(frozen_func.inputs, inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
@@ -340,7 +348,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, consteval_in_pybuda, allow_u
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 
 # TODO (arui) : Verify graphdef output vs. TVM output
-def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, consteval_in_pybuda, allow_unsupported, output_names=None):
+def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, allow_unsupported, output_names=None):
     if output_names == None:
         output_list_ = []
     else:
@@ -363,10 +371,14 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, consteval_in_py
 
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=output_list_)
 
-    if consteval_in_pybuda:
+    if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+        if len(compiler_cfg.tvm_constnat_prop_mask):
+            propped_params = {k : v for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
+        else:
+            propped_params = params
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
