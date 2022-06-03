@@ -145,6 +145,21 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
 
     return json_graph
 
+def save_nid_to_input_idx(traced_model_inputs):
+    existing_graph = json.loads(json_graph["graph"])
+
+    nid_to_input_idx = {}
+
+    # reorder arg nodes to be inputs first, then parameters
+    for i, arg_idx in enumerate(existing_graph["arg_nodes"]):
+        name = existing_graph["nodes"][arg_idx]["name"]
+        if name not in traced_model_inputs:
+            continue
+
+        nid_to_input_idx[arg_idx] = traced_model_inputs.index(name)
+
+    json_graph["nid_to_input_idx"] = nid_to_input_idx
+
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
     torchmod.eval()
@@ -185,6 +200,9 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     json_graph["params"] = {}
     for function_name in buda_params.keys():
         json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+
+    traced_model_inputs = [i.debugName().split('.')[0] for i in  list(traced_model.graph.inputs())[1:]]
+    save_nid_to_input_idx(traced_model_inputs) # Input order might not be preserved by TVM
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
@@ -439,7 +457,8 @@ def load_serialized_tvm_graph(full_file_path):
     serialized_dict = {}
     serialized_dict["graph"] = json.dumps(serialized_graph_str["graph"])
     serialized_dict["params"] = serialized_graph_str["params"]
-
+    if "nid_to_input_idx" in serialized_graph_str.keys():
+        serialized_dict["nid_to_input_idx"] = serialized_graph_str["nid_to_input_idx"]
     logger.debug(f"Successfully load serialized TVM graph from {full_file_path} path")
 
     return serialized_dict
@@ -516,6 +535,8 @@ def serialize_and_store_tvm_graph(json_graph, compiler_cfg):
     serilized_dict = {}
     serilized_dict["graph"] = graph_dict
     serilized_dict["params"] = params_dict
+    if "nid_to_input_idx" in json_graph.keys():
+        serilized_dict["nid_to_input_idx"] = json_graph["nid_to_input_idx"]
     serilized_str = json.dumps(serilized_dict, cls=NumpyArrayEncoder, indent=2)
     
     with open(compiler_cfg.tvm_graph_store_path, 'w') as file:
