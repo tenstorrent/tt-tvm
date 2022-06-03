@@ -129,7 +129,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
-            tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
+            tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.float().detach().numpy() if t.dtype.is_floating_point else t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
 
@@ -493,7 +493,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
     elif isinstance(module, tf.keras.Model):
-        weights = {weight.name.replace(":", "."): (torch.Tensor(weight.value().numpy()), True) for weight in module.weights}
+        weights = {weight.name.replace(":", "."): (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
     elif isinstance(module, tf.compat.v1.GraphDef):
