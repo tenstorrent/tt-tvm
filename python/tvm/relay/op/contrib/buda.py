@@ -63,6 +63,9 @@ _register_external_op_helper("max")
 _register_external_op_helper("broadcast_to")
 _register_external_op_helper("sum")
 _register_external_op_helper("power")
+_register_external_op_helper("ones")
+_register_external_op_helper("zeros")
+
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
