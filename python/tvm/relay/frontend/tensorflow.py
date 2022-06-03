@@ -43,6 +43,7 @@ from .tensorflow_ops import _convert_map
 from .tensorflow_ops import _need_prelude_for_shape_inference
 from .tensorflow_ops import _get_more_static_shape
 
+from tensorflow.python.framework import dtypes
 __all__ = ["from_tensorflow"]
 
 # The default configurations of Relay TensorFlow frontend.
@@ -703,7 +704,10 @@ class GraphProto(object):
             raise ImportError(f"Unable to import tensorflow which is required {e}")
 
         if key == "value":
+            unsuported_types = [dtypes.bfloat16, ]
             np_array = tensor_util.MakeNdarray(value.tensor)
+            if dtypes.as_dtype(value.tensor.dtype) in unsuported_types:
+                np_array = np_array.astype('float32')
 
             if np_array.dtype == np.dtype(object):
                 # Object types are generally tensorflow DT_STRING (DecodeJpeg op).
