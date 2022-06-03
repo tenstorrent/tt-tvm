@@ -3768,6 +3768,112 @@ class PyTorchOpConverter:
             reci_order,
         )
         return weight_g * (weight_v / norm_v)
+    def new_empty(self, inputs, input_types):
+        shape = inputs[1]
+
+        for i, val in enumerate(shape):
+            if isinstance(val, tvm.relay.expr.Call):
+                shape[i] = int(_infer_value(inputs[1][i], {}).numpy())
+
+        return _op.zeros(shape, _convert_dtype_value(inputs[2]))
+
+    def new_zeros(self, inputs, input_types):
+        data = inputs[1]
+
+        import torch
+
+        if not isinstance(data, (_expr.Expr, list, torch.Tensor, np.ndarray)):
+            msg = "Data type %s could not be parsed in zeros op" % (type(data))
+            raise AssertionError(msg)
+
+        if inputs[2] is not None:
+            dtype = _convert_dtype_value(inputs[2])
+        else:
+            dtype = self.default_dtype
+
+        for i, dim in enumerate(data):
+            if isinstance(dim, int):
+                data[i] = _expr.const(dim, dtype=dtype)
+
+        return self.full_impl(data, 0, dtype)
+
+
+    def new_ones(self, inputs, input_types):
+        data = inputs[1]
+
+        import torch
+
+        if not isinstance(data, (_expr.Expr, list, torch.Tensor, np.ndarray)):
+            msg = "Data type %s could not be parsed in zeros op" % (type(data))
+            raise AssertionError(msg)
+
+        if inputs[2] is not None:
+            dtype = _convert_dtype_value(inputs[2])
+        else:
+            dtype = self.default_dtype
+
+        return self.full_impl(data, 1, dtype)
+
+
+    def tril(self, inputs, input_types):
+        x = inputs[0]
+        x_shape = _infer_shape(x)
+
+        y = np.tril(np.ones(x_shape)).astype(np.float32)
+        y = tvm.nd.array(y)
+        y = tvm.relay.Constant(y)
+        
+        return _op.multiply(x, y)
+
+
+    def as_strided(self, inputs, input_types):
+        input_tensor = inputs[0]
+        output_size = inputs[1]
+        strides = inputs[2]
+
+        input_dtype = str(self.infer_type(input_tensor).dtype)
+
+        for i, out in enumerate(output_size):
+            if not isinstance(out, int):
+                output_size[i] = int(_infer_value(output_size[i], {}).numpy())
+        n_out_batch = output_size[-4]
+        n_out_time = output_size[-3]
+        n_out_row = output_size[-2]
+        n_out_col = output_size[-1]
+
+        stride_batch = strides[-4]
+        stride_time = strides[-3]
+        stride_col = strides[-1]
+
+        input_tensor = _op.transform.reshape(input_tensor, [-1])
+
+        batch_rows = np.array([])
+        for batch_dim in range(0, n_out_batch):
+
+            time_rows = np.array([])
+            for time_dim in range(0, n_out_time):
+
+                rc_rows = np.array([])
+                rc_begin = 0 + (time_dim * stride_time) + (batch_dim * stride_batch)
+                rc_end = rc_begin + n_out_col * stride_col
+                for _ in range(0, n_out_row):
+                    strided_row = _op.transform.strided_slice(input_tensor, begin=[rc_begin], end=[rc_end], strides=[stride_col], slice_mode="end")
+                    strided_row = _op.expand_dims(strided_row, axis=0)
+                    strided_row = _op.cast(strided_row, input_dtype)
+                    rc_rows = np.append(rc_rows, strided_row)
+
+                    rc_begin += stride_col
+                    rc_end = rc_begin + (n_out_col * stride_col)
+                
+                rc_rows = _op.concatenate(rc_rows, axis=0)
+                rc_rows = _op.expand_dims(rc_rows, axis=0)
+                time_rows = np.append(time_rows, rc_rows)
+
+            time_rows = _op.concatenate(time_rows, axis=0)
+            time_rows = _op.expand_dims(time_rows, axis=0)
+            batch_rows = np.append(batch_rows, time_rows)
+        
+        return _op.concatenate(batch_rows, axis=0)
 
     # Operator mappings
     def create_convert_map(self):
@@ -4042,6 +4148,11 @@ class PyTorchOpConverter:
             "aten::multinomial": self.multinomial,
             "aten::_weight_norm": self.weight_norm,
             "aten::copy_": self.identity,
+            "aten::new_empty": self.new_empty,
+            "aten::new_zeros": self.new_zeros,
+            "aten::new_ones": self.new_ones,
+            "aten::tril": self.tril,
+            "aten::as_strided": self.as_strided,
         }
 
     def update_convert_map(self, custom_map):
@@ -4265,6 +4376,9 @@ class PyTorchOpConverter:
                     _handel_nested_input(inputs), self.source_map[op_node]
                 )
             elif operator in ["prim::ListUnpack", "prim::TupleUnpack"]:
+                # if isinstance(inputs[0], tvm.relay.expr.Call):
+                #     inputs[0] = unbind(inputs[0], 1)
+
                 assert len(inputs) == 1
                 if isinstance(inputs[0], (list, _expr.TupleWrapper)):
                     unpacked = inputs[0]
