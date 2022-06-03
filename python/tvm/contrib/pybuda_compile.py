@@ -124,10 +124,12 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         if isinstance(module, torch.nn.Module):
             module.eval()
     elif isinstance(module, torch.nn.Module):
+        inputs = (act.float() if torch.is_floating_point(act) else act.int() for act in inputs)
         json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
+            inputs = (act.float() if torch.is_floating_point(act) else act.int() for act in inputs)
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
@@ -165,7 +167,8 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
         framework_outputs = output_list
 
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
-    traced_model = torch.jit.trace(torchmod, inputs, strict=False)
+    traced_model = torch.jit.trace(copy.deepcopy(torchmod), inputs, strict=False)
+    traced_model = traced_model.float()
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     if not compiler_cfg.enable_tvm_constant_prop:
@@ -470,9 +473,9 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
 
         torch_weights = module.state_dict()
         named_params = dict(module.named_parameters())
-        weights = {key: (value.numpy(), named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
+        weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
     elif isinstance(module, tf.keras.Model):
-        weights = {weight.name.replace(":", "."): (weight.value().numpy(), True) for weight in module.weights}
+        weights = {weight.name.replace(":", "."): (torch.Tensor(weight.value().numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
     elif isinstance(module, tf.compat.v1.GraphDef):
