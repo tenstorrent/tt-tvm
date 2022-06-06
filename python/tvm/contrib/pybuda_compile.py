@@ -124,12 +124,11 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         if isinstance(module, torch.nn.Module):
             module.eval()
     elif isinstance(module, torch.nn.Module):
-        inputs = (act.float() if torch.is_floating_point(act) else act.int() for act in inputs)
+        inputs = (act.float() for act in inputs if torch.is_floating_point(act))
         json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
-            inputs = (act.float() if torch.is_floating_point(act) else act.int() for act in inputs)
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
