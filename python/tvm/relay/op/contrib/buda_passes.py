@@ -789,14 +789,14 @@ class DecomposeEinsum(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         equation = str(post.attrs.equation)
-        if equation == "bct,bcs->bts":
+        if match_einsum_pattern("bct,bcs->bts", equation):
             assert len(node_map[self.act][0]) == 2
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
 
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=True, transpose_b=False)
             return result
-        elif equation == "bts,bcs->bct":
+        elif match_einsum_pattern("bts,bcs->bct", equation):
             assert len(node_map[self.act][0]) == 2
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
@@ -804,7 +804,7 @@ class DecomposeEinsum(DFPatternCallback):
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
             return tvm.relay.transpose(result, axes=[0, 2, 1])
 
-        elif equation == "bnqd,bnkd->bnqk":
+        elif match_einsum_pattern("bnqd,bnkd->bnqk", equation):
             assert len(node_map[self.act][0]) == 2
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -820,7 +820,7 @@ class DecomposeEinsum(DFPatternCallback):
 
             result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
             return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[2]])
-        elif equation == "ibh,hnd->ibnd":
+        elif match_einsum_pattern("ibh,hnd->ibnd", equation):
             assert len(node_map[self.act][0]) == 2
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
@@ -839,7 +839,7 @@ class DecomposeEinsum(DFPatternCallback):
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[1], srcB_shape[2]])
             return reshape_result
-        elif equation == "ibnd,jbnd->bnij":
+        elif match_einsum_pattern("ibnd,jbnd->bnij", equation):
             srcA_shape = list(pre.args[0][0].checked_type.shape)
             srcB_shape = list(pre.args[0][1].checked_type.shape)
             srcA = node_map[self.act][0][0]
@@ -867,7 +867,7 @@ class DecomposeEinsum(DFPatternCallback):
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[1], srcA_shape[2], srcA_shape[0], srcB_shape[0]])
             return reshape_result
-        elif equation == "ibnd,snd->ibns":
+        elif match_einsum_pattern("ibnd,snd->ibns", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
             srcA = node_map[self.act][0][0]
@@ -884,7 +884,7 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[2], srcA_shape[0], srcA_shape[1], srcB_shape[0]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 2, 0, 3])
             return reshape_result
-        elif equation == "ijbs,ibns->bnij":
+        elif match_einsum_pattern("ijbs,ibns->bnij", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
             srcA = node_map[self.act][0][0]
@@ -903,10 +903,10 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcA_shape[1], srcB_shape[2]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 3, 0, 2])
             return reshape_result
-        elif equation == "ijbn->bnij":
+        elif match_einsum_pattern("ijbn->bnij", equation):
             srcA = node_map[self.act][0][0]
             return tvm.relay.transpose(srcA, axes=[2, 3, 0, 1])
-        elif equation == "bnij,jbnd->ibnd":
+        elif match_einsum_pattern("bnij,jbnd->ibnd", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
             srcA = node_map[self.act][0][0]
@@ -933,7 +933,7 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[3]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[2, 0, 1, 3])
             return reshape_result
-        elif equation == "ibnd,hnd->ibh":
+        elif match_einsum_pattern("ibnd,hnd->ibh", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
             srcA = node_map[self.act][0][0]

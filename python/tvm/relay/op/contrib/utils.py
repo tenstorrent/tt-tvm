@@ -107,3 +107,28 @@ def is_stack_reshape_reshape_to_binary_stack(call):
 
     works = all([i == o or (dim == stack_axis and o == 2 * i) for dim, (i, o) in enumerate(zip(input_shape, output_shape))])
     return works
+
+def match_einsum_pattern(pattern, query):
+    query = query.replace(" ", "")
+    pattern = pattern.replace(" ", "")
+    if len(query) != len(pattern):
+        return False
+
+    query_dict = {}
+    for char in query:
+        query_dict[char] = []
+    
+    for i in range(len(query)):
+        char = query[i]
+        query_dict[char].append(i)
+
+    pattern_dict = {}
+    for char in pattern:
+        pattern_dict[char] = []
+    
+    for i in range(len(pattern)):
+        char = pattern[i]
+        pattern_dict[char].append(i)
+
+    return sorted(list(query_dict.values())) == sorted(list(pattern_dict.values()))
+
