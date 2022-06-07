@@ -751,7 +751,8 @@ class EstimateWhereInCausalMask(DFPatternCallback):
         self.strided_slice = is_op("strided_slice")(wildcard())
         self.multiply = is_op("multiply")(self.reshape, self.reciprocal)
 
-        self.pattern = is_op("where")(self.strided_slice | is_constant(), self.reshape | self.multiply, wildcard()) 
+        self.pattern = is_op("where")(self.strided_slice | is_constant(), self.reshape | self.multiply | wildcard(), wildcard()) 
+
         
     def callback(self, pre, post, node_map):
         # by assuming the masked value is >> activation, this allows
