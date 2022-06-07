@@ -14,7 +14,7 @@ export TVM_HOME=$PYBUDA_ROOT/third_party/tvm
 # Download / untar LLVM
 cd $PYBUDA_ROOT/third_party
 if [ ! -d "$PYBUDA_ROOT/third_party/llvm" ]; then
-  wget -nc https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
+  wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
   LLVM_TAR=$PYBUDA_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
   LLVM_DIR=$PYBUDA_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
   tar -xf $LLVM_TAR && mv $LLVM_DIR $PYBUDA_ROOT/third_party/llvm && rm -f $LLVM_TAR
