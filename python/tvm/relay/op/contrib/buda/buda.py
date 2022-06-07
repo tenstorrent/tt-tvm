@@ -11,8 +11,8 @@ from tvm.ir import IRModule
 from tvm.relay import function as _function
 from tvm.relay.op.transform import broadcast_to
 from tvm.target.compilation_config import make_compilation_config
-from ...dataflow_pattern import wildcard, is_op
-from .register import register_pattern_table
+from ....dataflow_pattern import wildcard, is_op
+from ..register import register_pattern_table
 from .reportify import dump_graph
 from .buda_passes import run_buda_compile_passes
 from .relay_passes import run_relay_compile_passes
