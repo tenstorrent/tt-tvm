@@ -28,7 +28,7 @@ from .tensorrt import *
 from .cutlass import *
 from .clml import *
 from .mrvl import *
-from .buda import *
-from .buda_passes import *
-from .relay_passes import *
-from .utils import *
+from .buda.buda import *
+from .buda.buda_passes import *
+from .buda.relay_passes import *
+from .buda.utils import *
