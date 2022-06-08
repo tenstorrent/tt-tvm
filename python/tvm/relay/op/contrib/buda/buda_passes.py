@@ -317,10 +317,10 @@ class DecomposeConv1DToConv2D(DFPatternCallback):
             assert False, "Conv1d from TF is not supported yet"
             # TODO: converting TF conv1d - channel-last to channel-first Conv2d
         else:
-            assert post.attrs.kernel_size[0] == 1, "Conv2d only support square kernels, since Conv1d is decomposed to Conv2d, it can only have kernel size of 1"
             assert post.attrs.padding[0] == 0, "Paddings are not support for conv1d"
             # reshape activation and reshape weight 
             expected_output_shape = node_map[self.pattern][0].checked_type.shape
+            
             acts = node_map[self.act][0]
             acts_shape = acts.checked_type.shape
             weights = node_map[self.weight][0]
