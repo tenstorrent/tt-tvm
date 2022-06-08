@@ -190,19 +190,22 @@ class ReconstructPyTorchGelu(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
         self.act = wildcard()
-        times_root_two = is_op("multiply")(self.act, is_constant())
+        self.one_over_root_two = is_constant()
+        self.half_multiplied = is_constant()
+        self.half_added = is_constant()
+
+        times_root_two = is_op("multiply")(self.act, self.one_over_root_two)
         erf = is_op("erf")(times_root_two)
-        times_half = is_op("multiply")(erf, is_constant())
-        add = is_op("add")(is_constant(), times_half)
-        gelu = is_op("multiply")(self.act, add)
+        times_half = is_op("multiply")(erf, self.half_multiplied)
+        add = is_op("add")(self.half_added, times_half)
+        gelu = add.optional(lambda x : is_op("multiply")(self.act, x))
 
         self.pattern = gelu
 
     def callback(self, pre, post, node_map):
-
-        half_added = math.isclose(post.args[1].args[0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
-        half_multiplied = math.isclose(post.args[1].args[1].args[1].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
-        root_two_multiplied = math.isclose(post.args[1].args[1].args[0].args[0].args[1].data.numpy(), 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        half_added = math.isclose(node_map[self.half_added][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(node_map[self.half_multiplied][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        root_two_multiplied = math.isclose(node_map[self.one_over_root_two][0].data.numpy(), 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
 
         if not (half_added and half_multiplied and root_two_multiplied):
             return post
