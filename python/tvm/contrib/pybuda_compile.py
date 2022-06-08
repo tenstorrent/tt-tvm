@@ -366,7 +366,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
     else:
         if len(compiler_cfg.tvm_constnat_prop_mask):
-            propped_params = {k : v for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
+            propped_params = {k : v for k, v, in params.items() if any([mask in param_name_lookup[k] for mask in compiler_cfg.tvm_constnat_prop_mask])}
             propped_params.update(non_weight_params)
         else:
             propped_params = params
