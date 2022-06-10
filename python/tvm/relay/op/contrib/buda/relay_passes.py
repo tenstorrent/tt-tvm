@@ -68,9 +68,9 @@ def run_relay_compile_passes(relay_module, print_all=False):
     logger.trace("After FoldConstant")
     logger.trace(relay_module.functions)
 
-    relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
-    logger.trace("After FoldScaleAxis")
-    logger.trace(relay_module.functions)
+    # relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
+    # logger.trace("After FoldScaleAxis")
+    # logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
     logger.trace("After CanonicalizeCast")

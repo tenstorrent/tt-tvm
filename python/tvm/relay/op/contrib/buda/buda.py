@@ -199,7 +199,7 @@ class ReconstructPyTorchGelu(DFPatternCallback):
         erf = is_op("erf")(times_root_two)
         times_half = is_op("multiply")(erf, self.half_multiplied)
         add = is_op("add")(self.half_added, times_half)
-        gelu = add.optional(lambda x : is_op("multiply")(self.act, x))
+        gelu = is_op("multiply")(self.act, add)
 
         self.pattern = gelu
 
