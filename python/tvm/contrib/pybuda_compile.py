@@ -202,7 +202,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i.debugName().split('.')[0]:x.detach().numpy() for i, x in  zip(list(traced_model.graph.inputs())[1:], inputs)}
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
 
     json_graph["params"] = {}
     for function_name in buda_params.keys():
@@ -242,19 +242,20 @@ def get_relay_output(mod, params, inputs, target):
 
     if not isinstance(relay_outputs, (list, tuple)):
         relay_outputs = [relay_outputs]
-    relay_outputs = [x.numpy() for x in relay_outputs]
+    relay_outputs = [x.numpy() for x in flattened]
 
     return relay_outputs
 
 
-def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, allow_unsupported=False):
+def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, allow_unsupported=False, compiler_cfg=None):
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
-    relay_outputs = get_relay_output(mod, params, inputs, target)
+    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+        relay_outputs = get_relay_output(mod, params, inputs, target)
 
-    # Verify compile passes (original relay passes + buda passes)
-    verify_tvm_compile(golden_outputs, relay_outputs)
+        # Verify compile passes (original relay passes + buda passes)
+        verify_tvm_compile(golden_outputs, relay_outputs)
 
     # Reconstruct Ops + export buda graph
     mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
@@ -371,7 +372,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i.name.split(':')[0] : None if x is None else x.numpy() for i, x in  zip(frozen_func.inputs, inputs)}
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     
     json_graph["params"] = {}
     for function_name in buda_params.keys():

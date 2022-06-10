@@ -57,7 +57,8 @@ class CreateJson(ExprVisitor):
         if isinstance(call.checked_type, tvm.ir.type.TupleType):
             shape = []
             for field in call.checked_type.fields:
-                shape.append([int(dim) for dim in field.shape])
+                if hasattr(field, "shape"):
+                    shape.append([int(dim) for dim in field.shape])
             op["cache"] = {"shape": shape}
         else:
             op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
@@ -99,7 +100,10 @@ class CreateJson(ExprVisitor):
             op_type = "Unknown"
         name = f"{op_type}_{self.node_idx}"
         op = self.get_default_op(name)
-        op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
+        if hasattr(t.checked_type, "shape"):
+            op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
+        else:
+            op["cache"] = {"shape": []}
         op["class"] = op_type
         op["type"] = op_type
         op["opcode"] = "RelayOp"
@@ -111,7 +115,8 @@ class CreateJson(ExprVisitor):
         op = self.get_default_op(name)
         shape = []
         for field in tup.checked_type.fields:
-            shape.append([int(dim) for dim in field.shape])
+            if hasattr(field, "shape"):
+                shape.append([int(dim) for dim in field.shape])
 
         op["cache"] = {"shape": shape}
         op["class"] = "tuple"
