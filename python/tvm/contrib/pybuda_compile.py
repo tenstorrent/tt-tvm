@@ -181,8 +181,15 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
         framework_outputs = output_list
 
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
-    traced_model = torch.jit.trace(copy.deepcopy(torchmod), inputs, strict=False)
-    traced_model = traced_model.float()
+
+    convert_dtype = False
+    for key, value in torchmod.state_dict().items():
+        if value.dtype not in (torch.float32, torch.float64):
+            convert_dtype = True
+
+    torchmod = copy.deepcopy(torchmod) if convert_dtype else torchmod
+    traced_model = torch.jit.trace(torchmod, inputs, strict=False)
+    traced_model = traced_model.float() if convert_dtype else traced_model
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     if not compiler_cfg.enable_tvm_constant_prop:
