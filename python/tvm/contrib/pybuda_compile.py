@@ -303,11 +303,6 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
         json_graph["params"] = {}
         for k, v in old_params.items():
             key = k.replace(precursor, "")[2:] + k.replace(precursor, "")[0]
-
-            # Preventing variable names starting with an integer in generated python
-            if key[0] in [f"{n}" for n in range(10)]:
-                key = f"op_{key}"
-                
             json_graph["params"][key] = v
 
     graph = json.loads(json_graph["graph"])
@@ -317,10 +312,6 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
             node["name"] = node["name"].replace(precursor, "")[2:] + node["name"].replace(precursor, "")[0]
         elif param_name_lookup is not None and node["name"] in param_name_lookup:
             node["name"] = param_name_lookup[node["name"]]
-
-        # Preventing variable names starting with an integer in generated python
-        if node["name"][0] in [f"{n}" for n in range(10)]:
-            node["name"] = f"op_{node['name']}"
 
     json_graph["graph"] = json.dumps(graph)
 
