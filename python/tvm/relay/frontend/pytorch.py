@@ -3875,6 +3875,24 @@ class PyTorchOpConverter:
         
         return _op.concatenate(batch_rows, axis=0)
 
+
+    def weight_norm(self, inputs, input_types):
+        weight_v = inputs[0]
+        weight_g = inputs[1]
+        dim = inputs[2]
+
+        # Axis on which to reduce
+        axes = list(range(len(self.infer_shape(weight_v))))
+        axes.remove(dim)
+
+        # Euclidean normalization
+        v_euc_norm = _op.sqrt(_op.reduce.sum((weight_v * weight_v), axis=axes, keepdims=True))
+
+        # Weight normalization
+        weight_norm = weight_v * (weight_g / v_euc_norm)
+
+        return weight_norm
+
     # Operator mappings
     def create_convert_map(self):
         self.convert_map = {
@@ -4153,6 +4171,7 @@ class PyTorchOpConverter:
             "aten::new_ones": self.new_ones,
             "aten::tril": self.tril,
             "aten::as_strided": self.as_strided,
+            "aten::_weight_norm": self.weight_norm,
         }
 
     def update_convert_map(self, custom_map):
