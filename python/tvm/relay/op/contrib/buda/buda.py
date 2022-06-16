@@ -363,7 +363,7 @@ class AddNopsToPassthrough(ExprMutator):
         else:
             outputs = [fn.body]
 
-        self.output_vars = [output for output in outputs if isinstance(output, tvm.relay.Var)]
+        self.output_vars.extend([output for output in outputs if isinstance(output, tvm.relay.Var)])
         new_body = self.visit(fn.body)
         return tvm.relay.Function(list(fn.params), new_body, fn.ret_type, fn.type_params, fn.attrs)
 
