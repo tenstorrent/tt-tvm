@@ -48,6 +48,7 @@ from .common import lstm_cell, try_infer_value, unbind, fold_constant
 from .common import set_span
 from .pytorch_utils import is_version_greater_than, getattr_attr_name
 
+from loguru import logger
 __all__ = ["from_pytorch"]
 
 # This returns a "subgraph" which puts variables whenever
@@ -477,7 +478,10 @@ class PyTorchOpConverter:
                 if isinstance(b, int):
                     tmp.append(_op.expand_dims(_expr.const(b, axis_dtype), axis=0))
                 else:
-                    tmp.append(_op.cast(_op.expand_dims(b, axis=0), axis_dtype))
+                    if len(self.infer_type(_op.cast(_op.expand_dims(b, axis=0), axis_dtype)).shape) > 1:
+                        tmp.append(_op.cast(b, axis_dtype))
+                    else:
+                        tmp.append(_op.cast(_op.expand_dims(b, axis=0), axis_dtype))
             begin = _op.concatenate(tmp, axis=0)
             btype = self.infer_type(begin).dtype
             if str(btype) != axis_dtype:
@@ -544,6 +548,11 @@ class PyTorchOpConverter:
         # 2 - the starting dimension
         # 3 - the distance to the ending dimension
         # Lets find the ending dimension
+        if inputs[2] < 0:
+            input_shape = self.infer_shape(inputs[0])
+            length = input_shape[inputs[1]]
+            inputs[2] += length
+
         end = self.add(inputs[2:4], input_types[2:4])
         stride = 1
         slice_input = inputs[:3] + [end, stride]
@@ -4363,6 +4372,7 @@ class PyTorchOpConverter:
     def convert_operators(self, operators, outputs, ret_names):
         """Convert each Torch IR operators to Relay equivalent"""
         for node_name, op_node in operators:
+            logger.trace(f"Converting: {op_node.kind()} : {node_name}")
             operator = op_node.kind()
             inputs = _get_op_inputs(op_node, outputs)
             # we need to record what current operator is to provide correct source name
