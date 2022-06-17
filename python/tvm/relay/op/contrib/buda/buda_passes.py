@@ -1,5 +1,7 @@
 import logging
 
+from pkg_resources import require
+
 import tvm
 from tvm import relay
 from tvm.relay.expr_functor import ExprVisitor, ExprMutator
@@ -649,7 +651,7 @@ class LowerTakeToStridedSlice(DFPatternCallback):
     def callback(self, pre, post, node_map):
         act = node_map[self.input_tensor][0]
         
-        act_shape = list(act.checked_type.shape)
+        act_shape = list(pre.args[0].checked_type.shape)
 
         try:
             indices = node_map[self.indices][0].data.numpy().item()
@@ -952,6 +954,29 @@ class DecomposeEinsum(DFPatternCallback):
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[0]])
             return reshape_result
+        elif match_einsum_pattern("bhd,bmd->bhmd", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            assert srcA_shape[0] == srcB_shape[0], f"Only support {equation} with srcA/srcB shape being the same on dim b and d"
+            assert srcA_shape[-1] == srcB_shape[-1], f"Only support {equation} with srcA/srcB shape being the same on dim b and d"
+
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            transpose_srcA = tvm.relay.transpose(srcA, axes=[0, 2, 1,]) # dbh
+            transpose_srcB = tvm.relay.transpose(srcB, axes=[0, 2, 1,]) # bdm
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[1]), 1,]
+            new_shape_srcB = [int(srcB_shape[0]) * int(srcB_shape[2]), 1, int(srcB_shape[1]),]
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA) # bxd h 1
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB) # bxd 1 m
+
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcA_shape[1], srcB_shape[1]])
+            reshape_result = tvm.relay.transpose(reshape_result, axes=[0, 2, 3, 1])
+            return reshape_result
+
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
@@ -1087,13 +1112,13 @@ class LowerAdaptiveMaxPool(DFPatternCallback):
 
 class LowerSqueezeToReshape(DFPatternCallback):
     def __init__(self):
-        super().__init__()
+        super().__init__(require_type=True)
         self.input_tensor = wildcard()
 
         self.pattern = is_op('squeeze')(wildcard())
 
     def callback(self, pre, post, node_map):
-        return tvm.relay.reshape(post.args[0], newshape=post.checked_type.shape)
+        return tvm.relay.reshape(post.args[0], newshape=pre.checked_type.shape)
 
 class TransposePad(DFPatternCallback):
     def __init__(self):
@@ -1179,6 +1204,27 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
         act = node_map[self.act][0]
 
         return tvm.relay.nn.bias_add(act, bias)
+
+class DecomposeReduceSum(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+
+        self.pattern = is_op('sum')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        if post.attrs.keepdims == 0:
+            act = post.args[0]
+            reduce_ = tvm.relay.sum(
+                act,
+                axis=post.attrs.axis,
+                keepdims=True,
+            )
+            result = tvm.relay.squeeze(reduce_, axis=post.attrs.axis)
+            return result
+        else:
+            return post
+
+
 
 class ConvertExpandDimsToReshape(DFPatternCallback):
     def __init__(self):
@@ -1293,6 +1339,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(LowerAdaptiveMaxPool(), relay_module["main"])
     logger.trace("After LowerAdaptiveMaxPool")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeReduceSum(), relay_module["main"])
+    logger.trace("After DecomposeReduceSum")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
