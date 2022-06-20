@@ -1028,7 +1028,7 @@ class DecomposeLayoutTransform(DFPatternCallback):
 
 class ExplicateTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__()
+        super().__init__(require_type=True)
         self.input_tensor = wildcard()
 
         self.pattern = is_op('nn.batch_matmul')(wildcard(), wildcard())
@@ -1307,10 +1307,6 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
     logger.trace("After InvertDivide")
-    logger.trace(relay_module.functions)
-
-    relay_module = transform.InferType()(relay_module)
-    logger.trace("After InferType")
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
