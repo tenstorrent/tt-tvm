@@ -1309,6 +1309,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After InvertDivide")
     logger.trace(relay_module.functions)
 
+    relay_module = transform.InferType()(relay_module)
+    logger.trace("After InferType")
+    logger.trace(relay_module.functions)
+
     relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
     logger.trace("After ExplicateTranspose")
     logger.trace(relay_module.functions)
