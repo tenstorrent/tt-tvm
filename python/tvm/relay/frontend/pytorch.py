@@ -2733,6 +2733,15 @@ class PyTorchOpConverter:
         index_tensor = _op.stack(indices, axis=0)
         return _op.scatter_nd(in_tensor, index_tensor, values, mode)
 
+    def index_copy(self, inputs, input_types):
+        in_tensor = inputs[0]
+        axis = inputs[1]
+        indices = inputs[2]
+        values = inputs[3]
+
+        mode = "update"
+        return _op.transform.scatter(in_tensor, indices, values, axis)
+
     def scalar_tensor(self, inputs, input_types):
         data = inputs[0]
         cast_map = {6: "float32", 7: "float64", 3: "int32", 4: "int64"}
@@ -4127,6 +4136,7 @@ class PyTorchOpConverter:
             "aten::scatter": self.scatter,
             "aten::scatter_add": self.scatter_add,
             "aten::scatter_reduce": self.scatter_reduce,
+            "aten::index_copy": self.index_copy,
             "aten::index_put": self.index_put,
             "aten::scalar_tensor": self.scalar_tensor,
             "aten::__interpolate": self.interpolate,

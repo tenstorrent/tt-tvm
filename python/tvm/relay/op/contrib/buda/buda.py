@@ -69,6 +69,7 @@ _register_external_op_helper("power")
 _register_external_op_helper("ones")
 _register_external_op_helper("zeros")
 _register_external_op_helper("tanh")
+_register_external_op_helper("scatter")
 
 
 def nn_layernorm_to_buda_layernorm():
