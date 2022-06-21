@@ -1353,10 +1353,6 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After PopulateTransposeAxes")
     logger.trace(relay_module.functions)
 
-    relay_module = transform.InferType()(relay_module)
-    logger.trace("After InferType")
-    logger.trace(relay_module.functions)
-
     relay_module["main"] = rewrite(PopulateStridedSliceAxes(), relay_module["main"])
     logger.trace("After PopulateStridedSliceAxes")
     logger.trace(relay_module.functions)
