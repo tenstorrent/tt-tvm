@@ -354,12 +354,12 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
         weight_found = False
         for tf_weight in tfmod.weights:
             if np.array_equal(tf_weight.value().numpy(), value.numpy()) and tf_weight.name not in found_weights:
-                param_name_lookup[bad_name] = tf_weight.name.replace(":", ".")
+                param_name_lookup[bad_name] = tf_weight.name
                 weight_found = True
                 found_weights.append(tf_weight.name)
                 break
         if not weight_found:
-            param_name_lookup[bad_name] = bad_name.replace(":", ".")
+            param_name_lookup[bad_name] = bad_name
             non_weight_params[bad_name] = value
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
@@ -492,7 +492,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
     elif isinstance(module, tf.keras.Model):
-        weights = {weight.name.replace(":", "."): (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
+        weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
     elif isinstance(module, tf.compat.v1.GraphDef):
