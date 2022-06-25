@@ -29,7 +29,7 @@ if(USE_BUDA_CODEGEN STREQUAL "ON")
   list(APPEND BUDA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/../../placer)
   list(APPEND BUDA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/../../third_party/fmt)
   list(APPEND BUDA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/../../third_party/json)
-  list(APPEND BUDA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/../../build/python_env/lib/python3.8/site-packages/pybind11/include)
+  list(APPEND BUDA_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/../../third_party/pybind11/include)
   list(APPEND BUDA_INCLUDE_DIRS /usr/include/python3.8)
 
   include_directories(SYSTEM ${BUDA_INCLUDE_DIRS})
