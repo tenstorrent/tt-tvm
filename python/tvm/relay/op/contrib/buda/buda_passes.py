@@ -1205,20 +1205,28 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
 
         return tvm.relay.nn.bias_add(act, bias)
 
-class DecomposeReduceSum(DFPatternCallback):
+class EnsureKeepdims(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
 
-        self.pattern = is_op('sum')(wildcard())
+        self.pattern = is_op('sum')(wildcard()) | is_op('mean')(wildcard())
 
     def callback(self, pre, post, node_map):
+        import pdb; pdb.set_trace()
         if post.attrs.keepdims == 0:
             act = post.args[0]
-            reduce_ = tvm.relay.sum(
-                act,
-                axis=post.attrs.axis,
-                keepdims=True,
-            )
+            if node_map[self.pattern][0].op.name == 'sum':
+                reduce_ = tvm.relay.sum(
+                    act,
+                    axis=post.attrs.axis,
+                    keepdims=True,
+                )
+            else:
+                reduce_ = tvm.relay.mean(
+                    act,
+                    axis=post.attrs.axis,
+                    keepdims=True,
+                )
             result = tvm.relay.squeeze(reduce_, axis=post.attrs.axis)
             return result
         else:
@@ -1384,7 +1392,7 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace("After LowerAdaptiveMaxPool")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(DecomposeReduceSum(), relay_module["main"])
+    relay_module["main"] = rewrite(EnsureKeepdims(), relay_module["main"])
     logger.trace("After DecomposeReduceSum")
     logger.trace(relay_module.functions)
 
