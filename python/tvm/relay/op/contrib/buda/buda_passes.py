@@ -1212,7 +1212,6 @@ class EnsureKeepdims(DFPatternCallback):
         self.pattern = is_op('sum')(wildcard()) | is_op('mean')(wildcard())
 
     def callback(self, pre, post, node_map):
-        import pdb; pdb.set_trace()
         if post.attrs.keepdims == 0:
             act = post.args[0]
             if node_map[self.pattern][0].op.name == 'sum':
