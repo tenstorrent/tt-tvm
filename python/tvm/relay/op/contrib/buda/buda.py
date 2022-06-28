@@ -71,6 +71,7 @@ _register_external_op_helper("zeros")
 _register_external_op_helper("tanh")
 _register_external_op_helper("scatter")
 _register_external_op_helper("nn.leaky_relu")
+_register_external_op_helper("nn.max_pool1d")
 
 
 def nn_layernorm_to_buda_layernorm():

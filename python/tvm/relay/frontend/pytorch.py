@@ -1157,15 +1157,27 @@ class PyTorchOpConverter:
         dilation = inputs[4]
         ceil_mode = int(inputs[5])
 
-        return _op.nn.max_pool2d(
-            data,
-            pool_size=pool_size,
-            strides=strides,
-            dilation=dilation,
-            padding=padding,
-            layout="NCHW",
-            ceil_mode=ceil_mode,
-        )
+        data_shape = self.infer_shape(data)
+        if len(data_shape) == 3:
+            return _op.nn.max_pool1d(
+                data,
+                pool_size=pool_size[-1],
+                strides=strides[-1],
+                dilation=dilation[-1],
+                padding=padding[-1],
+                layout="NCW",
+                ceil_mode=ceil_mode,
+            )
+        else:
+            return _op.nn.max_pool2d(
+                data,
+                pool_size=pool_size,
+                strides=strides,
+                dilation=dilation,
+                padding=padding,
+                layout="NCHW",
+                ceil_mode=ceil_mode,
+            )
 
     def maxpool_2d_with_indices(self, inputs, input_types):
         # returns dummy indices too
