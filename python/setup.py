@@ -21,6 +21,8 @@ import pathlib
 import shutil
 import sys
 import sysconfig
+import platform
+import subprocess
 
 from setuptools import find_packages
 from setuptools.dist import Distribution
@@ -124,6 +126,9 @@ def git_describe_version(original_version):
     _, gd_version = libver["git_describe_version"]()
     if gd_version != original_version and "--inplace" not in sys.argv:
         print("Use git describe based version %s" % gd_version)
+
+    short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
+    gd_version += "+dev.tt_" + short_hash
     return gd_version
 
 
