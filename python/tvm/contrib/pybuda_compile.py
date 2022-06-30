@@ -210,8 +210,9 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
 
     convert_dtype = False
     for key, value in torchmod.state_dict().items():
-        if value.dtype not in (torch.float32, torch.float64):
+        if value.dtype in (torch.bfloat16,):
             convert_dtype = True
+            break
 
     torchmod = copy.deepcopy(torchmod) if convert_dtype else torchmod
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
