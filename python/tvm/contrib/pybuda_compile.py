@@ -22,6 +22,7 @@ from os.path import exists as file_exists
 import onnxruntime as ort
 import onnx
 import onnx.numpy_helper
+import mxnet as mx
 
 passed_to_buda = None
 def retrieve_vars_passed_to_buda():
@@ -161,6 +162,10 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
         json_graph = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
+    elif isinstance(module, mx.gluon.HybridBlock):
+        assert all([isinstance(x, torch.Tensor) for x in inputs])
+        mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
+        json_graph = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -490,6 +495,34 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 
+def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsupported):
+    # Need to figure out how to retrieve input names for multi-input case
+    assert len(inputs) == 1, "MXNet compile only support a single input for now"
+    framework_outputs = module(*inputs)
+    if not isinstance(framework_outputs, (list, tuple)):
+        framework_outputs = [framework_outputs]
+
+    framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, torch.Tensor)]
+
+    input_dict = {
+        "data" : inputs[0].shape
+    }
+    mod, params = relay.frontend.from_mxnet(module, shape=input_dict)
+
+    if not compiler_cfg.enable_tvm_constant_prop:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+    else:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
+
+    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+
+    json_graph["params"] = {}
+    for function_name in buda_params.keys():
+        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+
+    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+
+
 def load_serialized_tvm_graph(full_file_path):
     """
     Loads serialized TVM graph representation ported to PyBuda in form of python dictionary.
@@ -564,6 +597,14 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
 
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(onnx.numpy_helper.to_array(x)) for x in inputs if x is not None]
+
+    elif isinstance(module, mx.gluon.HybridBlock):
+        weights = {
+            name : (torch.Tensor(mx_param.data().asnumpy()), issubclass(mx_param.data().asnumpy().dtype.type, np.floating))
+            for name, mx_param in module.collect_params().items()
+        }
+        if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
+            inputs = [torch.tensor(x.asnumpy()) for x in inputs if x is not None]
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
