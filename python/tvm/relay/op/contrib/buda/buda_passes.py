@@ -1230,7 +1230,18 @@ class EnsureKeepdims(DFPatternCallback):
         else:
             return post
 
+class DecomposeBatchFlatten(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.pattern = is_op('nn.batch_flatten')(self.act)
 
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        input_shape = list(pre.args[0].checked_type.shape)
+        target_shape = [input_shape[0]] + [math.prod(input_shape[1:])]
+
+        return tvm.relay.reshape(act, newshape=target_shape)
 
 class ConvertExpandDimsToReshape(DFPatternCallback):
     def __init__(self):
@@ -1444,6 +1455,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(SkipRedundantConcatenateSlice(), relay_module["main"])
     logger.trace("After SkipRedundantConcatenateSlice")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeBatchFlatten(), relay_module["main"])
+    logger.trace("After DecomposeBatchFlatten")
     logger.trace(relay_module.functions)
 
     return relay_module
