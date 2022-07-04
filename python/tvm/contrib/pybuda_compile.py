@@ -552,7 +552,7 @@ def load_serialized_tvm_graph(full_file_path):
     serialized_dict["graph"] = json.dumps(serialized_graph_str["graph"])
     serialized_dict["params"] = serialized_graph_str["params"]
     if "nid_to_input_idx" in serialized_graph_str.keys():
-        serialized_dict["nid_to_input_idx"] = serialized_graph_str["nid_to_input_idx"]
+        serialized_dict["nid_to_input_idx"] = {int(k) : v for k, v in serialized_graph_str["nid_to_input_idx"].items()}
     logger.debug(f"Successfully load serialized TVM graph from {full_file_path} path")
 
     return serialized_dict
