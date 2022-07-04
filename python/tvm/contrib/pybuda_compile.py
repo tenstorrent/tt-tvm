@@ -139,8 +139,6 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     json_graph = {"function_names": [], "graph" : "", "param_names": {}}
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
-        if isinstance(module, torch.nn.Module):
-            module.eval()
     elif isinstance(module, torch.nn.Module):
         inputs = (act.float() if torch.is_floating_point(act) else act for act in inputs)
         json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
@@ -188,8 +186,11 @@ def save_nid_to_input_idx(traced_model_inputs):
 
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
-    torchmod.eval()
+    training_mode = torchmod.training
+    if training_mode:
+        torchmod.eval()
     framework_outputs = torchmod(*inputs)
+
     if not isinstance(framework_outputs, (list, tuple)):
         if isinstance(framework_outputs, torch.Tensor):
             framework_outputs = [framework_outputs]
@@ -237,6 +238,9 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
 
     traced_model_inputs = [i.debugName().split('.')[0] for i in  list(traced_model.graph.inputs())[1:]]
     save_nid_to_input_idx(traced_model_inputs) # Input order might not be preserved by TVM
+
+    if training_mode:
+        torchmod.train()
 
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
