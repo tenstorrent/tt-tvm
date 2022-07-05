@@ -306,7 +306,7 @@ class DecomposeMultiAxisBroadcast(DFPatternCallback):
 
 class DecomposeConv1DToConv2D(DFPatternCallback):
     def __init__(self): 
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         
         self.act = wildcard()
         self.weight = wildcard()
@@ -314,29 +314,31 @@ class DecomposeConv1DToConv2D(DFPatternCallback):
         self.pattern = self.conv_pattern
 
     def callback(self, pre, post, node_map):
-        
         if post.attrs.data_layout == 'NWC' and post.attrs.kernel_layout == 'WIO':
             assert False, "Conv1d from TF is not supported yet"
             # TODO: converting TF conv1d - channel-last to channel-first Conv2d
         else:
             # reshape activation and reshape weight 
-            expected_output_shape = node_map[self.pattern][0].checked_type.shape
+            expected_output_shape = pre.checked_type.shape
             
             acts = node_map[self.act][0]
-            acts_shape = acts.checked_type.shape
+            acts_shape = list(pre.args[0].checked_type.shape)
             weights = node_map[self.weight][0]
-            weights_shape = weights.checked_type.shape
+            weights_shape = list(pre.args[1].checked_type.shape)
             
-            acts_shape = [acts_shape[0], acts_shape[1], acts_shape[2], 1]
-            weights_shape = [weights_shape[0], weights_shape[1], weights_shape[2], 1]
-            reshaped_acts = tvm.relay.reshape(acts, newshape=acts_shape)
-            reshaped_weights = tvm.relay.reshape(weights, newshape=weights_shape)
-            
+            new_acts_shape = [acts_shape[0], acts_shape[1], acts_shape[2], 1]
+            new_weights_shape = [weights_shape[0], weights_shape[1], weights_shape[2], 1]
+            reshaped_acts = tvm.relay.reshape(acts, newshape=new_acts_shape)
+            reshaped_weights = tvm.relay.reshape(weights, newshape=new_weights_shape)
+
             new_conv2d = tvm.relay.op.nn.conv2d(
                 reshaped_acts, 
                 reshaped_weights,
                 strides=[post.attrs.strides[0], 1],
-                padding=[post.attrs.padding[0], 0, post.attrs.padding[0], 0],
+                padding=[post.attrs.padding[0], 0, post.attrs.padding[1], 0],
+                # (TODO arui) Since weight kernel is 1 on unsqueezed dim, dilation shouldnt matter. This is needed because we dont support different
+                # dilation for each dim in pybuda conv2d.
+                dilation=[post.attrs.dilation[0], post.attrs.dilation[0]],
                 groups=post.attrs.groups,
                 channels=post.attrs.channels,
                 kernel_size=[post.attrs.kernel_size[0], 1],
