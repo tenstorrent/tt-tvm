@@ -976,6 +976,53 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.transpose(reshape_result, axes=[0, 2, 3, 1])
             return reshape_result
 
+        elif match_einsum_pattern("ijk, qr -> ijr", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+
+            B_sum = tvm.relay.sum(srcB, axis=[0])
+            A_sum = tvm.relay.sum(srcA, axis=[2])
+            A_expanded = tvm.relay.reshape(A_sum, newshape=[srcA_shape[0], srcA_shape[1], 1])
+            B_expanded = tvm.relay.reshape(B_sum, newshape=[1, srcB_shape[1], 1])
+
+            return tvm.relay.nn.batch_matmul(A_expanded, B_expanded)
+
+        elif match_einsum_pattern("ijk, kr -> ijr", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+            
+            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+
+            B_transpose = tvm.relay.transpose(srcB, axes=[1,0])
+            B_expanded = tvm.relay.reshape(B_transpose, newshape=[1, srcB_shape[1], srcB_shape[0]])
+            return tvm.relay.nn.batch_matmul(srcA, B_expanded)
+
+        elif match_einsum_pattern("ij, qr -> i", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            # have to sum over each axis one by one for pybuda
+            B_sum = tvm.relay.sum(srcB, axis=[0])
+            B_sum = tvm.relay.sum(B_sum, axis=[0])
+
+            A_transpose = tvm.relay.transpose(srcA, axes=[1, 0])
+            A_sum = tvm.relay.sum(A_transpose, axis=[0])
+            out = tvm.relay.multiply(B_sum, A_sum)
+            out = tvm.relay.reshape(out, newshape=post.checked_type.shape)
+
+            return out
+
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
