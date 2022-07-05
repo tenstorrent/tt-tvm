@@ -26,6 +26,8 @@ from typing import Dict
 import math
 import re
 import sys
+import logging
+from typing import OrderedDict
 
 import numpy as np
 import tvm
@@ -52,6 +54,7 @@ from .pytorch_utils import is_version_greater_than, getattr_attr_name
 
 from loguru import logger
 __all__ = ["from_pytorch"]
+
 
 # This returns a "subgraph" which puts variables whenever
 # the type is known. It also records things to map the input
@@ -709,6 +712,106 @@ class PyTorchOpConverter:
             data = _op.transform.reshape(data, [-1])
             axis = 0
         return _op.transform.repeat(data, repeats=repeats, axis=axis)
+
+    def tensordot(self, input, input_types):
+        dims = input[2:]
+        x = input[0]
+        y = input[1]
+        xshape = self.infer_shape(x)
+        yshape = self.infer_shape(y)
+        
+        # handle all types of inputs for `dims`
+        if isinstance(dims, int):
+            pairs = []
+            for j in range(len(xshape)):
+                for k in range(len(yshape)):
+                    if xshape[j] == yshape[k]:
+                        pairs.append((j, k))
+
+            assert len(pairs) >= dims, f"Not enough matching dims, required = {dims}, given x = {x.shape}, y = {y.shape}"
+            j = 0
+            dim_count = dims
+            dims = [[0,0], [0,0]]
+            for pair in pairs[:dim_count]:
+                dims[0][j] = pair[0]
+                dims[1][j] = pair[1]
+                j += 1
+
+        elif isinstance(dims, (tuple, list)) and len(dims) == 1:
+            dims = ((dims[0],), (dims[0],))
+        elif isinstance(dims, (tuple, list)) and len(dims) > 1 and not isinstance(dims[0], (tuple, list)):
+            dims = (dims, dims)
+
+        # Handle negative dims
+        dims = list(dims)
+        dims[0] = list(dims[0])
+        for j in range(len(dims[0])):
+            if dims[0][j] < 0:
+                dims[0][j] += len(xshape)
+        
+        dims[1] = list(dims[1])
+        for j in range(len(dims[1])):
+            if dims[1][j] < 0:
+                dims[1][j] += len(yshape)
+
+        dims[0] = tuple(dims[0])
+        dims[1] = tuple(dims[1])
+        dims = tuple(dims)
+
+        assert len(dims[0]) == len(dims[1])
+        # for j in range(len(dims)):
+        #     assert xshape[dims[0][j]] == yshape[dims[1][j]], f"Contracting dims must match! Recieved shapes x = {xshape}, y = {yshape} contracting on {dims[0]}, {dims[1]} respectively."
+
+
+        alphabet = 'abcdefghijklmnopqrztuvwxyz'
+        l = 0
+        dim_to_char = OrderedDict()
+        dim_to_char[0] = OrderedDict()
+        dim_to_char[1] = OrderedDict()
+
+        x_str = ""
+        for i, j in enumerate(xshape):
+            if j not in dim_to_char[0]:
+                dim_to_char[0][j] = alphabet[l]
+                l += 1
+            x_str = x_str + dim_to_char[0][j]
+
+        y_str = ""
+        for i, j in enumerate(yshape):
+
+            if j in dim_to_char[0]:
+                dim_to_char[1][j] = dim_to_char[0][j]
+
+            if j not in dim_to_char[0]:
+                dim_to_char[1][j] = alphabet[l]
+                l += 1
+            elif i not in dims[1]:
+                dim_to_char[1][j] = alphabet[l]
+                l += 1
+
+            
+            y_str = y_str + dim_to_char[1][j]
+
+        for dim in dims[0]:
+            if xshape[dim] in dim_to_char[0]:
+                dim_to_char[0].pop(xshape[dim])
+
+        for dim in dims[1]:
+            if yshape[dim] in dim_to_char[1]:
+                dim_to_char[1].pop(yshape[dim])
+
+        z_str = ""
+        for k, v in dim_to_char[0].items():
+            z_str = z_str + v
+
+        for k, v in dim_to_char[1].items():
+            z_str = z_str + v
+
+
+        return _op.einsum([x, y], f"{x_str}, {y_str}->{z_str}")
+
+
+        
 
     def addcdiv(self, inputs, input_types):
         data, t1, t2, c = self.pytorch_promote_types(inputs[:4], input_types[:4])
@@ -4250,6 +4353,7 @@ class PyTorchOpConverter:
             "aten::reciprocal": self.reciprocal,
             "aten::repeat": self.repeat,
             "aten::repeat_interleave": self.repeat_interleave,
+            "aten::tensordot": self.tensordot,
             "aten::to": self.to,
             "aten::squeeze": self.squeeze,
             "aten::unsqueeze": self.unsqueeze,
