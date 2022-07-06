@@ -215,7 +215,17 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
             convert_dtype = True
             break
 
-    torchmod = copy.deepcopy(torchmod) if convert_dtype else torchmod
+    if convert_dtype:
+        invalid_torch_attrs = []
+        for key, value in torchmod.__dict__.items():
+            if type(value) == torch.Tensor:
+                invalid_torch_attrs.append(key)
+        
+        for key in invalid_torch_attrs:
+            delattr(torchmod, key)
+
+        torchmod = copy.deepcopy(torchmod)
+
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
     traced_model = traced_model.float() if convert_dtype else traced_model
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
