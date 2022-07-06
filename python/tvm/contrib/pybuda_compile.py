@@ -140,7 +140,6 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
     elif isinstance(module, torch.nn.Module):
-        inputs = (act.float() if torch.is_floating_point(act) else act for act in inputs)
         json_graph = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
@@ -207,14 +206,26 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
                 output_list.append(sublist)
         framework_outputs = output_list
 
+    framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
+    # Determines do we need to convert certain module parameters to the
+    # float type. In current state, only unsupported type is bfloat. 
+    #
+    # Have in mind that conversion and processing shouldn't have any influence 
+    # to the originally defined PyTorch module.
     convert_dtype = False
     for key, value in torchmod.state_dict().items():
         if value.dtype in (torch.bfloat16,):
             convert_dtype = True
             break
 
+    # Remove invalid attributes from the PyTorch module. Commonly ones
+    # which are added during forward pass with self.atr_name (previously
+    # undefined in __init__).
+    # 
+    # Doesn't have influence on the original model as those are re-calculated
+    # each time during forward pass.
     if convert_dtype:
         invalid_torch_attrs = []
         for key, value in torchmod.__dict__.items():
@@ -239,6 +250,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
             propped_params = params
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
+    inputs = (act.float() if torch.is_floating_point(act) else act for act in inputs)
     np_inputs = {i.debugName().split('.')[0]:x.detach().numpy() for i, x in  zip(list(traced_model.graph.inputs())[1:], inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
 
