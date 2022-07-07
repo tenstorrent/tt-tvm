@@ -1314,8 +1314,8 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         return tvm.relay.reshape(act, newshape=target_shape)
 
 class SkipRedundantConcatenateSlice(DFPatternCallback):
-    def __init__(self, rewrite_once=True, require_type=True):
-        super().__init__()
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
         self.concat = is_op("concatenate")(wildcard())
         self.pattern = is_op("strided_slice")(wildcard())
         # self.pattern = self.concat
@@ -1355,6 +1355,21 @@ class SkipRedundantConcatenateSlice(DFPatternCallback):
 
         return post
 
+class DecomposeRepeat(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("repeat")(wildcard())
+    
+    def callback(self, pre, post, node_map):
+        axis = int(post.attrs.axis)
+        num_repeats = int(post.attrs.repeats)
+        input_shape = list(pre.args[0].checked_type.shape)
+        assert input_shape[axis] == 1, "Cannot decompose repeat to broadcast when dim != 1"
+        output_shape = input_shape
+        output_shape[axis] *= num_repeats
+
+        result = tvm.relay.broadcast_to(post.args[0], output_shape)
+        return result
 
 def run_buda_compile_passes(relay_module, print_all=False):
 
@@ -1508,6 +1523,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(DecomposeBatchFlatten(), relay_module["main"])
     logger.trace("After DecomposeBatchFlatten")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeRepeat(), relay_module["main"])
+    logger.trace("After DecomposeRepeat")
     logger.trace(relay_module.functions)
 
     return relay_module
