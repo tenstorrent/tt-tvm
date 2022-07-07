@@ -4696,7 +4696,7 @@ def _convert_data_type(input_type, default_dtype=None):
         return "float64"
     elif input_type in ["float", "float32", "torch.float32"]:
         return "float32"
-    elif input_type in ["half", "float16", "torch.float16", 'bfloat16']:
+    elif input_type in ["half", "float16", "torch.float16", "bfloat16"]:
         return "float16"
     elif input_type in ["long", "int64", "torch.int64"]:
         return "int64"
@@ -4772,6 +4772,8 @@ def _run_jit_passes(graph, enable_lower_all_tuples=True):
 
 
 def _get_tensor_and_var(torch_tensor, name):
+    if str(torch_tensor.dtype) == 'torch.bfloat16':  # Use str` to avoid "import torch"
+        torch_tensor = torch_tensor.detach().float()
     tensor = tvm.nd.array(torch_tensor.cpu().numpy())
     var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype)
     return tensor, var
