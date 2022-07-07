@@ -209,36 +209,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
     framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
-    # Determines do we need to convert certain module parameters to the
-    # float type. In current state, only unsupported type is bfloat. 
-    #
-    # Have in mind that conversion and processing shouldn't have any influence 
-    # to the originally defined PyTorch module.
-    convert_dtype = False
-    for key, value in torchmod.state_dict().items():
-        if value.dtype in (torch.bfloat16,):
-            convert_dtype = True
-            break
-
-    # Remove invalid attributes from the PyTorch module. Commonly ones
-    # which are added during forward pass with self.atr_name (previously
-    # undefined in __init__).
-    # 
-    # Doesn't have influence on the original model as those are re-calculated
-    # each time during forward pass.
-    if convert_dtype:
-        invalid_torch_attrs = []
-        for key, value in torchmod.__dict__.items():
-            if type(value) == torch.Tensor:
-                invalid_torch_attrs.append(key)
-        
-        for key in invalid_torch_attrs:
-            delattr(torchmod, key)
-
-        torchmod = copy.deepcopy(torchmod)
-
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
-    traced_model = traced_model.float() if convert_dtype else traced_model
     input_list = [(i.debugName().split('.')[0], i.type().sizes()) for i in  list(traced_model.graph.inputs())[1:]]
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_list)
     if not compiler_cfg.enable_tvm_constant_prop:
