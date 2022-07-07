@@ -759,46 +759,48 @@ class PyTorchOpConverter:
         dims = tuple(dims)
 
         assert len(dims[0]) == len(dims[1])
-        # for j in range(len(dims)):
-        #     assert xshape[dims[0][j]] == yshape[dims[1][j]], f"Contracting dims must match! Recieved shapes x = {xshape}, y = {yshape} contracting on {dims[0]}, {dims[1]} respectively."
-
+        for i in range(len(dims[0])):
+            assert xshape[dims[0][i]] == yshape[dims[1][i]] or \
+                xshape[dims[0][i]] == 1 or yshape[dims[1][i]] == 1
 
         alphabet = 'abcdefghijklmnopqrztuvwxyz'
         l = 0
         dim_to_char = OrderedDict()
         dim_to_char[0] = OrderedDict()
         dim_to_char[1] = OrderedDict()
+        
 
         x_str = ""
         for i, j in enumerate(xshape):
-            if j not in dim_to_char[0]:
-                dim_to_char[0][j] = alphabet[l]
+            if i not in dim_to_char[0]:
+                dim_to_char[0][i] = alphabet[l]
                 l += 1
-            x_str = x_str + dim_to_char[0][j]
+            x_str = x_str + dim_to_char[0][i]
+        
 
         y_str = ""
         for i, j in enumerate(yshape):
 
-            if j in dim_to_char[0]:
-                dim_to_char[1][j] = dim_to_char[0][j]
-
-            if j not in dim_to_char[0]:
-                dim_to_char[1][j] = alphabet[l]
+            if i in dims[1]:
+                if xshape[dims[0][dims[1].index(i)]] == j:
+                    dim_to_char[1][i] = dim_to_char[0][dims[0][dims[1].index(i)]]
+                else:
+                    dim_to_char[1][i] = alphabet[l]
+                    l += 1
+            else:
+                dim_to_char[1][i] = alphabet[l]
                 l += 1
-            elif i not in dims[1]:
-                dim_to_char[1][j] = alphabet[l]
-                l += 1
 
-            
-            y_str = y_str + dim_to_char[1][j]
+            y_str = y_str + dim_to_char[1][i]
+
 
         for dim in dims[0]:
-            if xshape[dim] in dim_to_char[0]:
-                dim_to_char[0].pop(xshape[dim])
+            if dim in dim_to_char[0]:
+                dim_to_char[0].pop(dim)
 
         for dim in dims[1]:
-            if yshape[dim] in dim_to_char[1]:
-                dim_to_char[1].pop(yshape[dim])
+            if dim in dim_to_char[1]:
+                dim_to_char[1].pop(dim)
 
         z_str = ""
         for k, v in dim_to_char[0].items():
@@ -810,8 +812,6 @@ class PyTorchOpConverter:
 
         return _op.einsum([x, y], f"{x_str}, {y_str}->{z_str}")
 
-
-        
 
     def addcdiv(self, inputs, input_types):
         data, t1, t2, c = self.pytorch_promote_types(inputs[:4], input_types[:4])

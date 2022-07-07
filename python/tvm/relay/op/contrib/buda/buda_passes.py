@@ -824,25 +824,27 @@ class DecomposeEinsum(DFPatternCallback):
 
             result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
             return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[2]])
-        elif match_einsum_pattern("ibh,hnd->ibnd", equation):
+
+        elif match_einsum_pattern("abc,cde->abde", equation):
             assert len(node_map[self.act][0]) == 2
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
             srcA_shape = srcA.checked_type.shape
             srcB_shape = srcB.checked_type.shape
 
-            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[2])] # i*b h 
-            new_shape_srcB = [int(srcB_shape[0]), int(srcB_shape[1]) * int(srcB_shape[2])] # h n*d
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[1]), int(srcA_shape[2])] # a*b c 
+            new_shape_srcB = [int(srcB_shape[0]), int(srcB_shape[1]) * int(srcB_shape[2])] # c d*e
 
             reshape_srcA = tvm.relay.reshape(srcA, newshape=new_shape_srcA)
             reshape_srcB = tvm.relay.reshape(srcB, newshape=new_shape_srcB)
 
             # MatMul
-            result = tvm.relay.nn.matmul(reshape_srcA, reshape_srcB) # i*b n*d
+            result = tvm.relay.nn.matmul(reshape_srcA, reshape_srcB) # a*b d*e
 
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[1], srcB_shape[2]])
             return reshape_result
+
         elif match_einsum_pattern("ibnd,jbnd->bnij", equation):
             srcA_shape = list(pre.args[0][0].checked_type.shape)
             srcB_shape = list(pre.args[0][1].checked_type.shape)
@@ -871,6 +873,7 @@ class DecomposeEinsum(DFPatternCallback):
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[1], srcA_shape[2], srcA_shape[0], srcB_shape[0]])
             return reshape_result
+
         elif match_einsum_pattern("ibnd,snd->ibns", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -888,6 +891,7 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[2], srcA_shape[0], srcA_shape[1], srcB_shape[0]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 2, 0, 3])
             return reshape_result
+
         elif match_einsum_pattern("ijbs,ibns->bnij", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -907,6 +911,7 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcA_shape[1], srcB_shape[2]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[1, 3, 0, 2])
             return reshape_result
+
         elif match_einsum_pattern("ijbn->bnij", equation):
             srcA = node_map[self.act][0][0]
             return tvm.relay.transpose(srcA, axes=[2, 3, 0, 1])
@@ -937,6 +942,7 @@ class DecomposeEinsum(DFPatternCallback):
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcA_shape[2], srcB_shape[3]])
             reshape_result = tvm.relay.transpose(reshape_result, axes=[2, 0, 1, 3])
             return reshape_result
+
         elif match_einsum_pattern("ibnd,hnd->ibh", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -955,6 +961,7 @@ class DecomposeEinsum(DFPatternCallback):
             # Reshape 
             reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[0]])
             return reshape_result
+
         elif match_einsum_pattern("bhd,bmd->bhmd", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -981,35 +988,36 @@ class DecomposeEinsum(DFPatternCallback):
         elif match_einsum_pattern("ijk, qr -> ijr", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
-            srcA = node_map[self.act][0][0]
-            srcB = node_map[self.act][0][1]
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
 
-            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
 
-            B_sum = tvm.relay.sum(srcB, axis=[0])
-            A_sum = tvm.relay.sum(srcA, axis=[2])
-            A_expanded = tvm.relay.reshape(A_sum, newshape=[srcA_shape[0], srcA_shape[1], 1])
-            B_expanded = tvm.relay.reshape(B_sum, newshape=[1, srcB_shape[1], 1])
-
-            return tvm.relay.nn.batch_matmul(A_expanded, B_expanded)
+            A = tvm.relay.sum(A, axis=[2], keepdims=True) # i j 1
+            B = tvm.relay.sum(B, axis=[0], keepdims=True) # 1 r
+            
+            B = tvm.relay.reshape(B, newshape=[1, srcB_shape[1], 1]) # 1 r 1
+            
+            result = tvm.relay.nn.batch_matmul(A, B) # 
+            return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[1]])
 
         elif match_einsum_pattern("ijk, kr -> ijr", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
-            srcA = node_map[self.act][0][0]
-            srcB = node_map[self.act][0][1]
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
             
-            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
 
-            B_transpose = tvm.relay.transpose(srcB, axes=[1,0])
-            B_expanded = tvm.relay.reshape(B_transpose, newshape=[1, srcB_shape[1], srcB_shape[0]])
-            return tvm.relay.nn.batch_matmul(srcA, B_expanded)
+            A = tvm.relay.reshape(A, newshape=[srcA_shape[0] * srcA_shape[1], srcA_shape[2]]) # i*j k
+            result = tvm.relay.nn.matmul(A, B) # i*j r
+            return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[1], srcB_shape[1]]) # i j r
 
         elif match_einsum_pattern("ij, qr -> i", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
 
-            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimenstions"
+            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
 
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
@@ -1024,6 +1032,102 @@ class DecomposeEinsum(DFPatternCallback):
             out = tvm.relay.reshape(out, newshape=post.checked_type.shape)
 
             return out
+
+        elif match_einsum_pattern("ij, jk -> ik", equation) or match_einsum_pattern("ij, kr -> ir", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
+
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            A_sum = tvm.relay.sum(srcA, axis=[1], keepdims=True)
+            B_sum = tvm.relay.sum(srcB, axis=[0], keepdims=True)
+            return tvm.relay.nn.matmul(A_sum, B_sum)
+
+        elif match_einsum_pattern("abc, bde -> acde", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 3, "input tensors have incorrect number of dimensions"
+
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+            
+            A = tvm.relay.transpose(A, axes=[0, 2, 1])
+
+            new_shape_A = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[1])] # a*c b 
+            new_shape_B = [int(srcB_shape[0]), int(srcB_shape[1]) * int(srcB_shape[2])] # b d*e
+
+            reshape_A = tvm.relay.reshape(A, newshape=new_shape_A)
+            reshape_B = tvm.relay.reshape(B, newshape=new_shape_B)
+
+            # MatMul
+            result = tvm.relay.nn.matmul(reshape_A, reshape_B) # a*c d*e
+
+            # Reshape 
+            reshape_result = tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcB_shape[1], srcB_shape[2]])
+            return reshape_result
+
+        elif match_einsum_pattern("abcd, dcbe -> ae", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 4, "input tensors have incorrect number of dimensions"
+
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            B = tvm.relay.transpose(B, axes=[2, 1, 0, 3])
+
+            new_shape_A = [int(srcA_shape[0]), int(srcA_shape[1]) * int(srcA_shape[2]) * int(srcA_shape[3])] # a b*c*d 
+            new_shape_B = [int(srcB_shape[0]) * int(srcB_shape[1]) * int(srcB_shape[2]), int(srcB_shape[3])] # b*c*d e
+
+            A = tvm.relay.reshape(A, newshape=new_shape_A)
+            B = tvm.relay.reshape(B, newshape=new_shape_B)
+
+            # MatMul
+            result = tvm.relay.nn.matmul(A, B) # a e
+            return result
+
+        elif match_einsum_pattern("abc, bcd -> ad", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 3, "input tensors have incorrect number of dimensions"
+
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            new_shape_A = [int(srcA_shape[0]), int(srcA_shape[1]) * int(srcA_shape[2])] # a b*c 
+            new_shape_B = [int(srcB_shape[0]) * int(srcB_shape[1]), int(srcB_shape[2])] # b*c d
+
+            reshape_A = tvm.relay.reshape(A, newshape=new_shape_A)
+            reshape_B = tvm.relay.reshape(B, newshape=new_shape_B)
+
+            # MatMul
+            result = tvm.relay.nn.matmul(reshape_A, reshape_B) # a d
+            return result
+
+        elif match_einsum_pattern("abc, bd -> acd", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == 3 and len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
+
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            A = tvm.relay.transpose(A, axes=[0, 2, 1]) # a c b
+
+            new_shape_A = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[1])] # a*c b 
+
+            A = tvm.relay.reshape(A, newshape=new_shape_A) # a*c b 
+
+            # MatMul
+            result = tvm.relay.nn.matmul(A, B) # a*c b X b d = a*c d
+            return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcB_shape[1]])
 
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
