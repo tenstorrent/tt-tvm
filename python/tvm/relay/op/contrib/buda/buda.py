@@ -96,6 +96,12 @@ def transpose_reshape_to_hstack():
     act_t = is_op("transpose")(act)
     return is_op("reshape")(act_t)
 
+def transpose_reshape_reshape_to_hstack():
+    act = wildcard()
+    act_t = is_op("transpose")(act)
+    rshp = is_op("reshape")(act_t)
+    return is_op("reshape")(rshp)
+
 def reshape_to_vstack():
     act = wildcard()
     return is_op('reshape')(act)
@@ -129,7 +135,10 @@ def merge_conv2d_with_bias():
 def pattern_table():
     matmul = ("buda.matmul", dense_to_matmul())
     hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
-    hstack = ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack)
+    hstack = [
+        ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
+        ("buda.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
+        ]
     vstack = ("buda.vstack", reshape_to_vstack(), is_reshape_vstack)
     vslice = ("buda.vslice", reshape_to_vslice(), is_reshape_vslice)
     layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
@@ -137,7 +146,7 @@ def pattern_table():
     concatenate = ("buda.concatenate", decompose_concat_input_tuple())
     buda_conv2d_with_bias = ("buda.buda_conv2d_with_bias", merge_conv2d_with_bias())
 
-    buda_patterns = [hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias]
+    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias]
 
     return buda_patterns
 

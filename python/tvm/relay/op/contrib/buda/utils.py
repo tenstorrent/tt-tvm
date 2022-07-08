@@ -129,24 +129,37 @@ def is_transpose_hslice(call):
 def is_reshape_transpose_hslice(call):
     return is_reshape_hslice(call) and is_transpose_hslice(call)
 
-def is_transpose_reshape_hstack(call):
-    t_axes = call.args[0].attrs.axes
+def _is_transpose_reshape_hstack_helper(transpose_axes, reshape_newshape, reshape_in_shape):
     hstack_t_axes = (0, 2, 1, 3)
     
-    if not (len(t_axes) == 4 and all([hstack_t_axes[i] == t_axes[i] for i in range(4)])):
+    if not (len(transpose_axes) == 4 and all([hstack_t_axes[i] == transpose_axes[i] for i in range(4)])):
         return False
-
-    r_newshape = call.checked_type.shape
-    r_input_shape = call.type_args[0].shape
     
-    if (not (len(r_newshape) == 2 or (len(r_newshape) == 3) and r_newshape[0].value == 1)
-    or not all([dim == 1 for dim in r_newshape[:-2]])
-    or not (r_input_shape[-3].value == r_newshape[-2].value)
-    or is_superfluous_reshape(call)):
+    if (not (len(reshape_newshape) == 2 or (len(reshape_newshape) == 3) and reshape_newshape[0].value == 1)
+    or not all([dim == 1 for dim in reshape_newshape[:-2]])
+    or not (reshape_in_shape[-3].value == reshape_newshape[-2].value)):
             return False
 
     return True
 
+def is_transpose_reshape_hstack(call):
+
+    if is_superfluous_reshape(call):
+        return False
+    t_axes = call.args[0].attrs.axes
+
+    r_newshape = call.checked_type.shape
+    r_input_shape = call.type_args[0].shape
+    return _is_transpose_reshape_hstack_helper(t_axes, r_newshape, r_input_shape)
+
+def is_transpose_reshape_reshape_hstack(call):
+    if is_superfluous_reshape(call) or is_superfluous_reshape(call.args[0]):
+        return False
+
+    t_axes = call.args[0].args[0].attrs.axes
+    r_newshape = call.checked_type.shape
+    r_input_shape = call.args[0].type_args[0].shape
+    return _is_transpose_reshape_hstack_helper(t_axes, r_newshape, r_input_shape)
 
 def is_stack_reshape_reshape_to_binary_stack(call):
     dim = len(call.checked_type.shape)
