@@ -19,7 +19,7 @@ from .relay_passes import run_relay_compile_passes
 from .utils import *
 
 from tvm.relay.testing import run_infer_type
-import numpy as np
+
 import math
 import numpy as np
 from tvm.relay.dataflow_pattern import *
@@ -181,7 +181,7 @@ class ReconstructTFGelu(DFPatternCallback):
 
 class ReconstructPyTorchGeluNew(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         square = is_op("multiply")(self.act, self.act)
         pow_3 = is_op("multiply")(square, self.act)
@@ -213,7 +213,7 @@ class ReconstructPyTorchGeluNew(DFPatternCallback):
 
 class ReconstructPyTorchGelu(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.one_over_root_two = is_constant()
         self.half_multiplied = is_constant()
@@ -239,7 +239,7 @@ class ReconstructPyTorchGelu(DFPatternCallback):
 
 class ReconstructPyTorchLayerNorm(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.gamma = wildcard()
         self.beta = wildcard()
@@ -292,7 +292,7 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
 
 class ReconstructTFLayerNorm(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.gamma = wildcard()
         self.beta = wildcard()
@@ -326,11 +326,26 @@ class ReconstructTFLayerNorm(DFPatternCallback):
 
         act_shape = list(act.checked_type.shape)
 
-        assert len(gamma.type_annotation.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+        if len(gamma.checked_type.shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma.checked_type.shape)]) == 1:
+            # Count the number of dims thats not 1
+            gamma_shape = (np.prod([int(x) for x in gamma.checked_type.shape]),)
+            gamma = tvm.relay.reshape(gamma, newshape=gamma_shape)
+        else:
+            assert len(gamma.checked_type.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+            gamma_shape = gamma.checked_type.shape
+
+        if len(beta.checked_type.shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta.checked_type.shape)]) == 1:
+            # Count the number of dims thats not 1
+            beta_shape = (np.prod([int(x) for x in beta.checked_type.shape]),)
+            beta = tvm.relay.reshape(beta, newshape=gamma_shape)
+        else:
+            assert len(beta.checked_type.shape) == 1, "TVM Layernorm only supports single dim layernorm"
+            beta_shape = beta.checked_type.shape
+
         axis = None
         # Find the last dimension of the specific size
         for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma.type_annotation.shape[0]:
+            if dim == gamma_shape[0]:
                 axis = (i * -1) - 1 # i == 0 means axis = -1
                 break
 
