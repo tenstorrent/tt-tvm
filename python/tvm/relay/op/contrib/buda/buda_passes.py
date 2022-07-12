@@ -261,7 +261,7 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
 
 class DecomposeMultiAxisMean(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.mean = is_op("mean")(self.act)
         self.pattern = self.mean
@@ -1407,10 +1407,10 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         axis = int(pre.attrs.axis)
         num_new_axes = int(pre.attrs.num_newaxis)
 
-        if not isinstance(act, tvm.relay.expr.Var) and act.op.name == "reshape":
-            target_shape = list(act.attrs.newshape)
+        if not isinstance(pre.args[0], tvm.relay.expr.Var) and pre.args[0].op.name == "reshape":
+            target_shape = list(pre.args[0].attrs.newshape)
         else:
-            target_shape = list(act.checked_type.shape)
+            target_shape = list(pre.args[0].checked_type.shape)
 
         for i in range(num_new_axes):
             target_shape.insert(axis, 1)
