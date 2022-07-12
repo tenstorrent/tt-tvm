@@ -1129,6 +1129,24 @@ class DecomposeEinsum(DFPatternCallback):
             result = tvm.relay.nn.matmul(A, B) # a*c b X b d = a*c d
             return tvm.relay.reshape(result, newshape=[srcA_shape[0], srcA_shape[2], srcB_shape[1]])
 
+        elif match_einsum_pattern("ibnd,jbnd->ijbn", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            assert len(srcA_shape) == 4 and len(srcB_shape) == 4
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            transpose_srcA = tvm.relay.transpose(A, axes=[1, 2, 0, 3]) # bnid
+            transpose_srcB = tvm.relay.transpose(B, axes=[1, 2, 3, 0]) # bdm
+            new_shape_srcA = [int(srcA_shape[1]) * int(srcA_shape[2]), int(srcA_shape[0]), int(srcA_shape[3]),] # b*n id
+            new_shape_srcB = [int(srcB_shape[1]) * int(srcB_shape[2]), int(srcB_shape[3]), int(srcB_shape[0]),] # b*n dj
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA) 
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB) 
+
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+            result = tvm.relay.reshape(result, newshape=[int(srcA_shape[1]), int(srcA_shape[2]), int(srcA_shape[0]), int(srcB_shape[0]),]) #bnij
+
+            return tvm.relay.transpose(result, axes=[2, 3, 0, 1]) # ijbn
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
