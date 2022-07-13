@@ -1505,12 +1505,33 @@ class DecomposeRepeat(DFPatternCallback):
         axis = int(post.attrs.axis)
         num_repeats = int(post.attrs.repeats)
         input_shape = list(pre.args[0].checked_type.shape)
-        assert input_shape[axis] == 1, "Cannot decompose repeat to broadcast when dim != 1"
+        assert input_shape[axis] == 1, "Cannot decompose repeat to broadcast when input dim != 1"
         output_shape = input_shape
         output_shape[axis] *= num_repeats
 
         result = tvm.relay.broadcast_to(post.args[0], output_shape)
         return result
+
+class DecomposeTile(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("tile")(wildcard())
+    
+    def callback(self, pre, post, node_map):
+        reps = list(post.attrs.reps)
+        input_shape = list(pre.args[0].checked_type.shape)
+
+        assert len(input_shape) == len(reps)
+        act = post.args[0]
+        for idx, (inp, rep) in enumerate(zip(input_shape, reps)):
+            if rep == 1:
+                continue
+            
+            assert int(inp) == 1, "Cannot decompose tile to broadcast when input dim != 1"
+            input_shape[idx] = rep
+            act = tvm.relay.broadcast_to(act, input_shape)
+
+        return act
 
 def run_buda_compile_passes(relay_module, print_all=False):
 
@@ -1668,6 +1689,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(DecomposeRepeat(), relay_module["main"])
     logger.trace("After DecomposeRepeat")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(DecomposeTile(), relay_module["main"])
+    logger.trace("After DecomposeTile")
     logger.trace(relay_module.functions)
 
     return relay_module
