@@ -436,7 +436,9 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
     json_graph["params"] = {}
     for function_name in buda_params.keys():
         json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
-    
+
+    traced_model_inputs = [i.name.split(':')[0] for i in frozen_func.inputs]
+    save_nid_to_input_idx(traced_model_inputs)
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup))
 
 # TODO (arui) : Verify graphdef output vs. TVM output
