@@ -2683,6 +2683,12 @@ def _topk():
 def _floordiv():
     def _impl(inputs, attr, params, mod):
         assert len(inputs) == 2
+        
+        if inputs[0].data.dtype != inputs[1].data.dtype:
+            warnings.warn("_floordiv: Inputs dtype mismatch. Converting both to float32.")
+            inputs[0] = _op.cast(inputs[0], "float32")
+            inputs[1] = _op.cast(inputs[1], "float32")
+        
         return AttrCvt("floor_divide")(inputs, attr)
 
     return _impl
