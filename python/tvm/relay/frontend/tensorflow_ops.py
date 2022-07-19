@@ -3001,6 +3001,19 @@ def _einsum():
         return _op.einsum(data, equation)
     return _impl
 
+
+def _cumsum():
+    def _impl(inputs, attr, params, mod):
+        tensor = inputs[0]
+        axis = _infer_value(inputs[1], params, mod).numpy().tolist()
+        dtype = attr["T"].name
+        exclusive = attr["exclusive"]
+        
+        return _op.cumsum(tensor, axis=axis, dtype=dtype, exclusive=exclusive)
+
+    return _impl
+
+
 # _convert_map defines maps of name to converter functor(callable)
 # for 1 to 1 mapping, use Renamer if nothing but name is different
 # use AttrCvt if attributes need to be converted
@@ -3185,4 +3198,5 @@ _convert_map = {
     "UnravelIndex": _unravel_index(),
     "Where": _where_v2(),
     "ZerosLike": AttrCvt("zeros_like"),
+    "Cumsum": _cumsum(),
 }
