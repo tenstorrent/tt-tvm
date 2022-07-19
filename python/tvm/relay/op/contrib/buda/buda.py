@@ -326,23 +326,23 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         except TVMError: # Does not have epsilon addition
             eps = 0
 
-        act_shape = list(act.checked_type.shape)
+        act_shape = pre.args[0].args[0].checked_type.shape
+        gamma_shape = pre.args[0].args[1].args[1].checked_type.shape
+        beta_shape = pre.args[1].args[0].checked_type.shape
 
-        if len(gamma.checked_type.shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma.checked_type.shape)]) == 1:
+        if len(gamma_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma_shape)]) == 1:
             # Count the number of dims thats not 1
-            gamma_shape = (np.prod([int(x) for x in gamma.checked_type.shape]),)
+            gamma_shape = (np.prod([int(x) for x in gamma_shape]),)
             gamma = tvm.relay.reshape(gamma, newshape=gamma_shape)
         else:
-            assert len(gamma.checked_type.shape) == 1, "TVM Layernorm only supports single dim layernorm"
-            gamma_shape = gamma.checked_type.shape
+            assert len(gamma_shape) == 1, "TVM Layernorm only supports single dim layernorm"
 
-        if len(beta.checked_type.shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta.checked_type.shape)]) == 1:
+        if len(beta_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta_shape)]) == 1:
             # Count the number of dims thats not 1
-            beta_shape = (np.prod([int(x) for x in beta.checked_type.shape]),)
+            beta_shape = (np.prod([int(x) for x in beta_shape]),)
             beta = tvm.relay.reshape(beta, newshape=gamma_shape)
         else:
-            assert len(beta.checked_type.shape) == 1, "TVM Layernorm only supports single dim layernorm"
-            beta_shape = beta.checked_type.shape
+            assert len(beta_shape) == 1, "TVM Layernorm only supports single dim layernorm"
 
         axis = None
         # Find the last dimension of the specific size
