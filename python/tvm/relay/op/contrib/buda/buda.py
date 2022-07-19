@@ -74,6 +74,8 @@ _register_external_op_helper("nn.leaky_relu")
 _register_external_op_helper("nn.max_pool1d")
 _register_external_op_helper("take")
 _register_external_op_helper("stack")
+_register_external_op_helper("cumsum")
+_register_external_op_helper("logical_not")
 
 
 def nn_layernorm_to_buda_layernorm():
