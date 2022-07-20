@@ -41,11 +41,11 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       ICHECK(comp.defined()) << "Buda JSON runtime only supports composite functions.";
       name = comp.value();
       if (name == "buda.select") {
-        call = GetRootCall(fn->body.as<CallNode>(), 0, {"strided_slice"});
+        call = GetRootCall(fn->body.as<CallNode>(), {"strided_slice"});
       } else if (name == "buda.concatenate") {
-        call = GetRootCall(fn->body.as<CallNode>(), 0, {"concatenate"});
+        call = GetRootCall(fn->body.as<CallNode>(), {"concatenate"});
       } else if (name == "buda.buda_conv2d_with_bias") {
-        call = GetRootCall(fn->body.as<CallNode>(), 1, {"nn.conv2d", "nn.bias_add"});
+        call = GetRootCall(fn->body.as<CallNode>(), {"nn.conv2d", "nn.bias_add"});
       }
       // if (name == "buda.matmul") {
       //   call = GetRootCall(fn->body.as<CallNode>(), 1, {"transpose", "nn.dense"});
