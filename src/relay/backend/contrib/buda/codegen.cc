@@ -38,21 +38,17 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       name = op_node->name;
     } else if (const auto* fn = cn->op.as<FunctionNode>()) {
       auto comp = fn->GetAttr<String>(attr::kComposite);
+      auto body = fn->body.as<CallNode>();
       ICHECK(comp.defined()) << "Buda JSON runtime only supports composite functions.";
       name = comp.value();
       if (name == "buda.select") {
-        call = GetRootCall(fn->body.as<CallNode>(), {"strided_slice"});
+        call = GetRootCall(body, 0, "strided_slice");
       } else if (name == "buda.concatenate") {
-        call = GetRootCall(fn->body.as<CallNode>(), {"concatenate"});
+        call = GetRootCall(fn->body.as<CallNode>(), 0, "concatenate");
       } else if (name == "buda.buda_conv2d_with_bias") {
-        call = GetRootCall(fn->body.as<CallNode>(), {"nn.conv2d", "nn.bias_add"});
+        std::vector<std::string> names = {"nn.conv2d", "nn.bias_add"};
+        call = GetRootCall(fn->body.as<CallNode>(), 1, names);
       }
-      // if (name == "buda.matmul") {
-      //   call = GetRootCall(fn->body.as<CallNode>(), 1, {"transpose", "nn.dense"});
-      //   ICHECK(call->op.as<OpNode>()) << "Not op node";
-      // } else {
-      //   LOG(FATAL) << "Unrecognized Buda pattern: " << name;
-      // }
     } else {
       LOG(FATAL) << "Buda JSON runtime does not support calls to " << cn->op->GetTypeKey();
     }
