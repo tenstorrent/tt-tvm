@@ -284,7 +284,6 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return
     # Reconstruct Ops + export buda graph
     mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, allow_unsupported=allow_unsupported, graph_name=graph_name)
-
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
 
     with tvm.transform.PassContext(opt_level=5):
