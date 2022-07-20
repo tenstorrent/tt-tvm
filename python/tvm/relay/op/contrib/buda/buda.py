@@ -6,7 +6,7 @@ from tvm.relay.expr_functor import ExprVisitor, ExprMutator
 from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
 from tvm.relay import transform
-from tvm.relay.build_module import bind_params_by_name, BuildModule,build_target_by_device_type_map
+from tvm.relay.build_module import bind_params_by_name, BuildModule
 from tvm.ir import IRModule
 from tvm.relay import function as _function
 from tvm.relay.op.transform import broadcast_to
@@ -469,19 +469,12 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
             "instead of deprecated parameter func (tvm.relay.function.Function)"
         )
 
-    target = build_target_by_device_type_map(target)
-
-    if isinstance(tvm.autotvm.DispatchContext.current, tvm.autotvm.FallbackContext):
-        tophub_context = tvm.autotvm.tophub.context(list(target.values()))
-    else:
-        tophub_context = tvm.autotvm.utils.EmptyContext()
+    tophub_context = tvm.autotvm.utils.EmptyContext()
 
     with tophub_context, tvm.transform.PassContext(opt_level=5):
         bld_mod = BuildModule()
         if params:
             bld_mod._set_params(params)
-        context = PassContext().current()
-        compiler_config = make_compilation_config(context,target)
 
         logger.trace("Before Compiling")
         logger.trace(relay_module.functions)
