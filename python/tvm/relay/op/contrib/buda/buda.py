@@ -326,9 +326,10 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         except TVMError: # Does not have epsilon addition
             eps = 0
 
-        act_shape = pre.args[0].args[0].checked_type.shape
-        gamma_shape = pre.args[0].args[1].args[1].checked_type.shape
-        beta_shape = pre.args[1].args[0].checked_type.shape
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        gamma_shape = pre_node_map[self.gamma][0].checked_type.shape
+        beta_shape = pre_node_map[self.beta][0].checked_type.shape
 
         if len(gamma_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma_shape)]) == 1:
             # Count the number of dims thats not 1
