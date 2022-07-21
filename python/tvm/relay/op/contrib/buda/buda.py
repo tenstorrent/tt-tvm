@@ -1,7 +1,10 @@
 import logging
+import torch
 
 import tvm
 from tvm import relay
+from tvm.ir.type import TupleType
+from tvm.ir.tensor_type import TensorType
 from tvm.relay.expr_functor import ExprVisitor, ExprMutator
 from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
@@ -492,10 +495,72 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
 
     return compiled_relay_module, params
 
+class FlattenInputs(ExprMutator):
 
+    def __init__(self, flattenend_name_map):
+        super().__init__()
+        self.flattened_name_map = flattenend_name_map
+        self.input_tuples= []
+        self.new_params = []
+
+    def visit_tuple_getitem(self, op):
+        if op.tuple_value in self.input_tuples:
+            tup_index = self.tuple_indices[self.input_tuples.index(op.tuple_value)]
+            return self.visit(self.old_param_map[tup_index][op.index])
+        
+        new_op = tvm.relay.TupleGetItem(self.visit(op.tuple_value), op.index)
+        return new_op
+
+    def visit_call(self, call):
+        new_op = self.visit(call.op)
+        new_args = [self.visit(arg) for arg in call.args]
+        return tvm.relay.Call(new_op, new_args, call.attrs)
+
+    def visit_function(self, fn):
+        new_body = fn.body
+        self.old_param_map = {}
+        self.tuple_indices = []
+
+        param_num = 0
+
+        for i in range(len(fn.params)):
+            if isinstance(fn.params[i].type_annotation, TupleType):
+                self.input_tuples.append(fn.params[i])
+                inputs = fn.params[i].type_annotation.fields
+                new_params = []
+                
+                for j in range(len(inputs)):
+                    input = inputs[j]
+                    new_params.append(tvm.relay.Var(self.flattened_name_map[fn.params[i].name_hint][j], input))
+                    param_num += 1
+
+                    if i not in self.old_param_map:
+                        self.tuple_indices.append(i)
+                        self.old_param_map[i] = {}
+                    self.old_param_map[i][j] = new_params[-1]
+   
+                self.new_params += new_params
+                
+            else:
+                self.new_params.append(fn.params[i])
+                self.old_param_map[i] = self.new_params[-1]
+                
+
+        new_body = self.visit(fn.body)
+        return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs)
+
+
+def flatten_inputs(mod, flattened_inputs, flattened_name_map):
+
+    # flattens inputs in IR
+    mod["main"] = FlattenInputs(flattened_name_map).visit(mod["main"])
+    logger.trace("After FlattenInputs")
+    logger.trace(mod.functions)
+
+    return mod
+    
 def partition_for_buda(mod, graph_name, allow_unsupported=False):
     with tvm.transform.PassContext(opt_level=5):
-
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
 
