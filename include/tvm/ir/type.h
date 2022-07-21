@@ -369,6 +369,34 @@ class TupleTypeNode : public TypeNode {
 };
 
 /*!
+ * \brief The type of tuple values.
+ * \sa TupleType
+ */
+class DictTypeNode : public TypeNode {
+ public:
+  /*! \brief The type of each field in the tuple. */
+  Array<String> keys;
+  Array<Type> values;
+
+  DictTypeNode() {}
+
+  void VisitAttrs(AttrVisitor* v) {
+    v->Visit("keys", &keys);
+    v->Visit("values", &values);
+    v->Visit("span", &span);
+  }
+
+  bool SEqualReduce(const DictTypeNode* other, SEqualReducer equal) const {
+    return equal(keys, other->keys) && equal(values, other->values);
+  }
+
+  void SHashReduce(SHashReducer hash_reduce) const { hash_reduce(keys); }
+
+  static constexpr const char* _type_key = "DictType";
+  TVM_DECLARE_FINAL_OBJECT_INFO(DictTypeNode, TypeNode);
+};
+
+/*!
  * \brief Managed reference to TupleTypeNode.
  * \sa TupleTypeNode.
  */
@@ -388,6 +416,29 @@ class TupleType : public Type {
   TVM_DLL TupleType static Empty();
 
   TVM_DEFINE_OBJECT_REF_METHODS(TupleType, Type, TupleTypeNode);
+};
+
+/*!
+ * \brief Managed reference to TupleTypeNode.
+ * \sa TupleTypeNode.
+ */
+class DictType : public Type {
+ public:
+  /*!
+   * \brief Constructor
+   * \param keys keys of the dict.
+   * \param values values of the dict
+   * \param span The span of the type.
+   */
+  TVM_DLL explicit DictType(Array<String> keys, Array<Type> values, Span span = Span());
+
+  /*!
+   * \brief Create an empty tuple type that constains nothing.
+   * \return A empty tuple type.
+   */
+  TVM_DLL DictType static Empty();
+
+  TVM_DEFINE_OBJECT_REF_METHODS(DictType, Type, DictTypeNode);
 };
 
 /*!
