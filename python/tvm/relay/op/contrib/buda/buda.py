@@ -273,22 +273,25 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
         except TVMError: # Does not have epsilon addition
             eps = 0
 
-        act_shape = list(act.checked_type.shape)
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        gamma_shape = list(pre_node_map[self.gamma][0].checked_type.shape)
+
         axis = None
         # Find the last dimension of the specific size
         for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma.checked_type.shape[0]:
+            if dim == gamma_shape[0]:
                 axis = (i * -1) - 1 # i == 0 means axis = -1
                 break
 
         assert axis is not None, "Cannot find an axis in input activation that matches weight shape"
 
         # Also supports padded shapes (e.g. (32, 1, 1))
-        gamma_shape = list(gamma.checked_type.shape)
         gamma_shape.pop(axis)
         is_padded = all(dim == 1 for dim in gamma_shape)
-        
-        assert len(gamma.checked_type.shape) == 1 or is_padded, "TVM Layernorm only supports single dim layernorm"
+
+        gamma_shape = pre_node_map[self.gamma][0].checked_type.shape        
+        assert len(gamma_shape) == 1 or is_padded, "TVM Layernorm only supports single dim layernorm"
 
         return tvm.relay.layernorm(act, gamma, beta, eps, axis)
 
