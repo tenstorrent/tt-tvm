@@ -901,6 +901,33 @@ Expr PatternRewriter::DispatchVisitExpr(const Expr& pre) {
   return post;
 }
 
+Map<DFPattern, Array<Expr>> ConstructPreNodeMapImpl(const DFPattern& pattern, const Expr& pre) {
+  std::unordered_map<DFPattern, Array<Expr>, ObjectPtrHash, ObjectPtrEqual> node_map;
+
+  // Initialize class for pre-rewriting graph pattern matching
+  auto grouper = PatternGrouper();
+
+  // Groups expressions that match pattern for the pre-rewriting graph
+  std::unordered_map<int, PatternGrouper::Group> groups_ = grouper.GroupMatches(pattern, pre);
+
+  // Gets group assignments of the expressions provided to it
+  std::unordered_map<Expr, int, ObjectPtrHash, ObjectPtrEqual> gid_assignments_ = grouper.GetGIDAssignments();
+
+  // Construct pattern/expression paris in a key/value format based on pre-rewriting graph
+  auto group = groups_[gid_assignments_[pre]];
+  for (auto kv : group.matched_nodes) {
+    node_map.insert({kv.first, kv.second});
+  }
+
+  return Map<DFPattern, Array<Expr>>(node_map);
+}
+
+Map<DFPattern, Array<Expr>> ConstructPreNodeMap(const DFPattern& pattern, const Expr& pre) {
+  return ConstructPreNodeMapImpl(pattern, pre);
+}
+
+TVM_REGISTER_GLOBAL("relay.dataflow_pattern.construct_pre_node_map").set_body_typed(ConstructPreNodeMap);
+
 Expr RewritePatterns(Array<DFPatternCallback> callbacks, Expr expr, IRModule mod) {
   return PatternRewriter(mod).Rewrite(callbacks, expr);
 }
