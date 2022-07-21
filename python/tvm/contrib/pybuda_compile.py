@@ -206,7 +206,17 @@ def flatten_inputs(inputs, names=None):
             flattened_name_map[name] = sub_names
 
         elif isinstance(inp, dict):
-            raise NotImplementedError("Dict inputs not supporte")
+            sub_names = []
+            sub_inputs = []
+            for k, v in inp.items():
+                sub_names.append(f"{name}_{k}")
+                sub_inputs.append(v)
+            
+            sub_inputs, sub_names, _ = flatten_inputs(sub_inputs, sub_names)
+            new_inputs += sub_inputs
+            new_names += sub_names
+            flattened_name_map[name] = sub_names
+
         elif isinstance(inp, (torchtensor)):
             if torch.is_floating_point(inp):
                 inp = inp.float()
@@ -224,6 +234,10 @@ def flatten_inputs(inputs, names=None):
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
     training_mode = torchmod.training
+    if training_mode:
+        torchmod.eval()
+    
+    framework_outputs = torchmod(*inputs)
 
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
@@ -252,12 +266,10 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
         framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
-
     # ensures unique names for every input
     input_structure = []
     input_names = [i.debugName().split('.')[0] for i in list(traced_model.graph.inputs())[1:]]#list(torchmod.forward.__code__.co_varnames[1:][:len(inputs)])
     input_count = 0
-
 
     if isinstance(inputs, (list, tuple)):
         

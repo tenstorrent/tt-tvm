@@ -51,6 +51,7 @@ using TypeVarNode = tvm::TypeVarNode;
 using GlobalTypeVar = tvm::GlobalTypeVar;
 using GlobalTypeVarNode = tvm::GlobalTypeVarNode;
 using TupleType = tvm::TupleType;
+using DictType = tvm::DictType;
 using TupleTypeNode = tvm::TupleTypeNode;
 using TypeConstraint = tvm::TypeConstraint;
 using TypeConstraintNode = tvm::TypeConstraintNode;
