@@ -334,7 +334,7 @@ set(USE_CLML_GRAPH_EXECUTOR OFF)
 set(USE_ANTLR OFF)
 
 # Whether use Relay debug mode
-set(USE_RELAY_DEBUG ON)
+set(USE_RELAY_DEBUG OFF)
 
 # Whether to enable debug code that may cause ABI changes
 set(TVM_DEBUG_WITH_ABI_CHANGE OFF)
