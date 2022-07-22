@@ -402,7 +402,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
     graph_def = frozen_func.graph.as_graph_def()
     outputs = [output.name for output in frozen_func.outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=outputs)
-
+    mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
     # TODO: Destupidify this! (Maybe we can sort by a substring of the weight names to make this more efficient)
     found_weights = []
     param_name_lookup = {}

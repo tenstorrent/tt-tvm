@@ -391,10 +391,12 @@ def _conv(opname):
 
         if attr["data_format"] == "NHWC":
             in_channels = input_shape[3]
-            kernel_h, kernel_w, _, depth_mult = weights_shape
+            kernel_h, kernel_w, inp_ch, depth_mult = weights_shape
             attr["kernel_shape"] = (weights_shape[0], weights_shape[1])
             if opname == "conv":
                 attr["channels"] = weights_shape[3]
+                assert in_channels % inp_ch == 0, "Input channel must be divisible by weight inp channel"
+                attr["groups"] = in_channels // inp_ch
             elif opname == "conv_transpose":
                 attr["channels"] = weights_shape[2]
             else:
