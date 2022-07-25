@@ -976,7 +976,7 @@ class GraphProto(object):
                 g1 = SubGraphProto(main_graph_proto)
                 sub_func, sub_params = g1.from_tensorflow(subgraph, shape=subgraph_shape_dict)
                 main_graph_proto._params.update(sub_params)
-                func_expr = _function.Function(sub_func.params, sub_func.body)
+                func_expr = _function.Function(sub_func.params, sub_func.body).with_attr("Inline", attr_value=tvm.tir.expr.IntImm(dtype="int32", value=1))
                 global_func = tvm.relay.GlobalVar(func_name)
                 main_graph_proto._mod[global_func] = func_expr
                 main_graph_proto._mod = InferType()(main_graph_proto._mod)
