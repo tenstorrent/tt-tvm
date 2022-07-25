@@ -34,6 +34,7 @@ def is_squeeze(call):
     return False
 
 def is_superfluous_reshape(call):
+    assert call.op.name == "reshape"
     input_shape = call.args[0].checked_type.shape
     call = run_infer_type(call)
     output_shape = call.checked_type.shape
@@ -112,7 +113,7 @@ def is_reshape_hslice(call):
     if (not (len(r_newshape) == 3 or (len(r_newshape) == 4 and r_newshape[0].value == 1)) 
     or len(r_input_shape) < 2
     or not (r_input_shape[-2].value == r_newshape[-3].value) 
-    or is_superfluous_reshape(call)):
+    or is_superfluous_reshape(call.args[0])):
             return False
 
     return True
