@@ -411,6 +411,8 @@ def _conv(opname):
             attr["kernel_shape"] = (weights_shape[2], weights_shape[3])
             if opname == "conv":
                 attr["channels"] = weights_shape[0]
+                assert in_channels % depth_mult == 0, "Input channel must be divisible by weight inp channel"
+                attr["groups"] = in_channels // depth_mult
             elif opname == "conv_transpose":
                 attr["channels"] = weights_shape[1]
             else:
