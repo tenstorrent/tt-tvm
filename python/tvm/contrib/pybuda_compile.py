@@ -224,29 +224,32 @@ def flatten_inputs(inputs, names=None):
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
     training_mode = torchmod.training
-    if training_mode:
-        torchmod.eval()
-    
-    framework_outputs = torchmod(*inputs)
 
-    if not isinstance(framework_outputs, (list, tuple)):
-        if isinstance(framework_outputs, torch.Tensor):
-            framework_outputs = [framework_outputs]
-        elif isinstance(framework_outputs, OrderedDict):
-            framework_outputs = tuple(framework_outputs.values())
-        else:
-            assert False, "Don't know what to do with this"
-    elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
-        output_list = []
-        for sublist in framework_outputs:
-            if isinstance(sublist, (list, tuple)):
-                output_list.extend(sublist)
+    framework_outputs = []
+    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+        if training_mode:
+            torchmod.eval()
+        
+        framework_outputs = torchmod(*inputs)
+
+        if not isinstance(framework_outputs, (list, tuple)):
+            if isinstance(framework_outputs, torch.Tensor):
+                framework_outputs = [framework_outputs]
+            elif isinstance(framework_outputs, OrderedDict):
+                framework_outputs = tuple(framework_outputs.values())
             else:
-                output_list.append(sublist)
-        framework_outputs = output_list
+                assert False, "Don't know what to do with this"
+        elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
+            output_list = []
+            for sublist in framework_outputs:
+                if isinstance(sublist, (list, tuple)):
+                    output_list.extend(sublist)
+                else:
+                    output_list.append(sublist)
+            framework_outputs = output_list
 
-    framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
-    framework_outputs = [x.detach().numpy() for x in framework_outputs]
+        framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
+        framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
 
@@ -412,25 +415,26 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
     return json_graph
 
 def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, allow_unsupported):
-
-    assert path != None, "Onnx compile needs path to onnx file on disk."
-    ort_sess = ort.InferenceSession(path)
     input_names = []
     for inp in onnx_mod.graph.input:
         input_names.append(inp.name)
-
+    
+    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
     output_names = []
     for out in onnx_mod.graph.output:
         output_names.append(out.name)
-
-    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
 
     input_dict = {}
     input_shape_dict = {}
     for name, tensor in zip(input_names, inputs):
         input_dict[name] = tensor
         input_shape_dict[name] = tensor.shape
-    framework_outputs = ort_sess.run(output_names, input_dict)
+
+    framework_outputs = []
+    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+        assert path != None, "Onnx compile needs path to onnx file on disk."
+        ort_sess = ort.InferenceSession(path)
+        framework_outputs = ort_sess.run(output_names, input_dict)
 
     mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict)
 
@@ -448,12 +452,14 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, all
     return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
 
 def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsupported):
-    framework_outputs = tfmod(*inputs)
-    if not isinstance(framework_outputs, (list, tuple)):
-        framework_outputs = [framework_outputs]
+    framework_outputs = []
+    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+        framework_outputs = tfmod(*inputs)
+        if not isinstance(framework_outputs, (list, tuple)):
+            framework_outputs = [framework_outputs]
 
-    supported_outputs = (tf.Tensor, torch.Tensor)
-    framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)]
+        supported_outputs = (tf.Tensor, torch.Tensor)
+        framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)]
 
     @tf.function
     def trace(*inputs):
@@ -565,13 +571,15 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
 
 
 def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsupported):
-    # Need to figure out how to retrieve input names for multi-input case
-    assert len(inputs) == 1, "MXNet compile only support a single input for now"
-    framework_outputs = module(*inputs)
-    if not isinstance(framework_outputs, (list, tuple)):
-        framework_outputs = [framework_outputs]
+    framework_outputs = []
+    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+        # Need to figure out how to retrieve input names for multi-input case
+        assert len(inputs) == 1, "MXNet compile only support a single input for now"
+        framework_outputs = module(*inputs)
+        if not isinstance(framework_outputs, (list, tuple)):
+            framework_outputs = [framework_outputs]
 
-    framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, torch.Tensor)]
+        framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, torch.Tensor)]
 
     input_dict = {
         "data" : inputs[0].shape
