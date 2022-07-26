@@ -468,7 +468,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
     # The tensorflow trace automatically flattens inputs
     flattened_input_names = [tensor.name.split(':')[0] for tensor in frozen_func.inputs]
 
-    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=outputs)
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
     flattened_inputs, _, _ = flatten_inputs(inputs)
 
