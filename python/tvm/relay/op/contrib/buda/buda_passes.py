@@ -1530,6 +1530,26 @@ class DecomposeTile(DFPatternCallback):
 
         return act
 
+class ConvertGlobalAvgPool2dtoAvgPool2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("nn.global_avg_pool2d")(wildcard())
+    
+    def callback(self, pre, post, node_map):
+        strides = (1, 1)
+        pool_size = pre.args[0].checked_type.shape[2:]
+        layout = post.attrs.layout
+        act = post.args[0]
+
+        avg_pool2d = tvm.relay.op.nn.avg_pool2d(
+            act,
+            pool_size=pool_size,
+            strides=strides,
+            layout=layout,
+        )
+        return avg_pool2d
+
+
 def run_buda_compile_passes(relay_module, print_all=False):
 
     relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
@@ -1689,6 +1709,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(DecomposeTile(), relay_module["main"])
+    logger.trace("After DecomposeTile")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(ConvertGlobalAvgPool2dtoAvgPool2d(), relay_module["main"])
     logger.trace("After DecomposeTile")
     logger.trace(relay_module.functions)
 
