@@ -236,8 +236,6 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     training_mode = torchmod.training
     if training_mode:
         torchmod.eval()
-    
-    framework_outputs = torchmod(*inputs)
 
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
