@@ -476,13 +476,32 @@ class LiftLinearSplit(DFPatternCallback):
         self.dense_weight = wildcard()
         self.add_bias = wildcard()
         self.dense = is_op("nn.dense")(act, self.dense_weight)
-        self.add = is_op("add")(self.dense, self.add_bias)
-        self.reshape = is_op("reshape")(self.add)
-        self.split = is_op('split')(self.reshape)
-        self.pattern = self.split
+
+        self.reshape1 = is_op("reshape")(self.dense)
+        self.add1 = is_op("add")(self.reshape1, self.add_bias)
+        self.split1 = is_op('split')(self.add1)
+        self.pattern1 = self.split1
+
+        self.add2 = is_op("add")(self.dense, self.add_bias)
+        self.reshape2 = is_op("reshape")(self.add2)
+        self.split2 = is_op('split')(self.reshape2)
+        self.pattern2 = self.split2
+
+        self.pattern = self.pattern1 | self.pattern2
 
     def callback(self, pre, post, node_map):
         pre_node_map = construct_pre_node_map(self.pattern, pre)
+        if self.pattern1.match(post):
+            self.reshape = self.reshape1
+            self.add = self.add1
+            self.split = self.split1
+        elif self.pattern2.match(post):
+            self.reshape = self.reshape2
+            self.add = self.add2
+            self.split = self.split2
+        else:
+            assert False, "Should not be here"
+
         weight = node_map[self.dense_weight][0]
         bias = node_map[self.add_bias][0]
 
