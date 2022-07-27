@@ -53,7 +53,10 @@ class ConvertLayout(DFPatternCallback):
             channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
 
             weight = node_map[self.conv2d][0].args[1]
-            channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
+            if (post.attrs.channels == post.attrs.groups) and post.attrs.channels > 1:
+                channel_first_weight = tvm.relay.transpose(weight, axes=[2, 3, 0, 1])
+            else:
+                channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
 
             new_conv2d = tvm.relay.op.nn.conv2d(
                 channel_first_act,
