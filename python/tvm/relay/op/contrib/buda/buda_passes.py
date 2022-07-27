@@ -201,9 +201,8 @@ class DecomposeMultiAxisMax(DFPatternCallback):
             return post
 
         acts = node_map[self.act][0]
-        out = node_map[self.max][0]
         keepdims = bool(post.attrs.keepdims)
-        output_shape = list(out.checked_type.shape)
+        output_shape = list(pre.checked_type.shape)
 
         for axis in reduce_axes:
             acts = tvm.relay.max(acts, axis=int(axis), keepdims=True)
@@ -269,9 +268,9 @@ class DecomposeMultiAxisMean(DFPatternCallback):
             return post
 
         acts = node_map[self.act][0]
-        out = node_map[self.mean][0]
+
         keepdims = bool(post.attrs.keepdims)
-        output_shape = list(out.checked_type.shape)
+        output_shape = list(pre.checked_type.shape)
 
         for axis in reduce_axes:
             acts = tvm.relay.mean(acts, axis=int(axis), keepdims=True)
@@ -289,7 +288,7 @@ class DecomposeMultiAxisBroadcast(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         acts = node_map[self.act][0]
-        inp_shape = list(acts.checked_type.shape)
+        inp_shape = list(pre.args[0].checked_type.shape)
         target_shape = list(pre.attrs.shape)
 
         for i, (inp_dim, target_dim) in enumerate(zip(inp_shape, target_shape)):
@@ -359,11 +358,8 @@ class ReformatTFConv2d(DFPatternCallback):
     def callback(self, pre, post, node_map):
         if post.attrs.data_layout == 'NHWC' and post.attrs.kernel_layout == 'HWIO':
             # convert TF channel-last to channel-first
-            conv2d_shape = node_map[self.pattern][0].checked_type.shape
             act = node_map[self.act][0]
             weight = node_map[self.weight][0]
-            act_shape = act.checked_type.shape
-            weight_shape = weight.checked_type.shape
 
             channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
             channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
@@ -486,6 +482,7 @@ class LiftLinearSplit(DFPatternCallback):
         self.pattern = self.split
 
     def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
         weight = node_map[self.dense_weight][0]
         bias = node_map[self.add_bias][0]
 
@@ -497,7 +494,7 @@ class LiftLinearSplit(DFPatternCallback):
             indices_or_sections = [int(ios) for ios in post.attrs.indices_or_sections]
         axis = post.attrs.axis
 
-        output_shape = node_map[self.reshape][0].checked_type.shape
+        output_shape = pre.args[0].checked_type.shape
         newshape = list(output_shape)
         newshape[axis] = -1
 
@@ -505,7 +502,7 @@ class LiftLinearSplit(DFPatternCallback):
             # Weight should be transposed in nn.dense, so if splitting
             # along the final output axis, split along the first weight
             if axis == len(output_shape) - 1:
-                assert output_shape[axis] == weight.checked_type.shape[0]
+                assert output_shape[axis] == pre_node_map[self.dense_weight][0].checked_type.shape[0]
                 axis = 0
 
         act = node_map[self.dense][0].args[0]
@@ -537,17 +534,18 @@ class LowerSplitToStridedSlice(DFPatternCallback):
             return post
 
         act = split.args[0]
+        act_shape = pre.tuple_value().op.args[0].checked_type.shape
         axis = split.attrs.axis
         if axis < 0:
-            axis += len(act.checked_type.shape)
+            axis += len(act_shape)
 
         if isinstance(split.attrs.indices_or_sections, tvm.tir.expr.IntImm):
             sections = int(split.attrs.indices_or_sections)
-            total_length = int(act.checked_type.shape[axis])
+            total_length = int(act_shape[axis])
             ios = list(range(total_length//sections, total_length, total_length//sections))
         else:
             ios = [int(dim) for dim in split.attrs.indices_or_sections]
-        ios.append(act.checked_type.shape[axis])
+        ios.append(act_shape[axis])
 
         begin = 0 if post.index == 0 else ios[post.index - 1]
         end = ios[post.index]
@@ -593,7 +591,7 @@ class RemoveRedundantTake(DFPatternCallback):
             return post
 
         act = node_map[self.input_tensor][0]
-        act_shape = list(act.checked_type.shape)
+        act_shape = list(pre.args[0].checked_type.shape)
         axis = pre.attrs.axis
 
         if act_shape[int(axis)] == 1 and indices == 0:
@@ -691,9 +689,10 @@ class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
         self.pattern = self.take
 
     def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
 
         act = node_map[self.input_tensor][0]
-        input_shape = list(act.checked_type.shape)
+        input_shape = list(pre_node_map[self.input_tensor][0].checked_type.shape)
 
         argmax_op = node_map[self.argmax][0]
         if argmax_op.op.name != "argmax":
@@ -759,8 +758,8 @@ class EstimateWhereInCausalMask(DFPatternCallback):
         # so simulate causal masking with eltwise ops, i.e. simply add
         # the masked value
         causal_mask = post.args[0]
-        zero = tvm.relay.const(0.0, dtype=post.checked_type.dtype)
-        one = tvm.relay.const(1.0, dtype=post.checked_type.dtype)
+        zero = tvm.relay.const(0.0, dtype=pre.checked_type.dtype)
+        one = tvm.relay.const(1.0, dtype=pre.checked_type.dtype)
         inverse_causal_mask = tvm.relay.where(causal_mask, zero, one)
         
         value = post.args[2]
@@ -777,7 +776,7 @@ class DecomposeNegative(DFPatternCallback):
         self.pattern = is_op('negative')(self.in_a)
 
     def callback(self, pre, post, node_map):
-        negative_one = tvm.relay.const(-1.0, dtype=post.checked_type.dtype)
+        negative_one = tvm.relay.const(-1.0, dtype=pre.checked_type.dtype)
         mul = tvm.relay.multiply(post.args[0], negative_one)
         return mul
 
@@ -1026,7 +1025,7 @@ class DecomposeEinsum(DFPatternCallback):
             A_transpose = tvm.relay.transpose(srcA, axes=[1, 0])
             A_sum = tvm.relay.sum(A_transpose, axis=[0])
             out = tvm.relay.multiply(B_sum, A_sum)
-            out = tvm.relay.reshape(out, newshape=post.checked_type.shape)
+            out = tvm.relay.reshape(out, newshape=pre.checked_type.shape)
 
             return out
 
@@ -1246,7 +1245,7 @@ class LowerAdaptiveAvgPool(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
-        output_shape = [int(dim) for dim in post.checked_type.shape]
+        output_shape = [int(dim) for dim in pre.checked_type.shape]
 
         assert post.attrs.layout == "NCHW"
         assert input_shape[-1] == input_shape[-2], "Only support same factor of the input for H and W"
@@ -1275,7 +1274,7 @@ class LowerAdaptiveMaxPool(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
-        output_shape = [int(dim) for dim in post.checked_type.shape]
+        output_shape = [int(dim) for dim in pre.checked_type.shape]
 
         assert post.attrs.layout == "NCHW"
         assert input_shape[-1] == input_shape[-2], "Only support same factor of the input for H and W"
@@ -1462,12 +1461,12 @@ class SkipRedundantConcatenateSlice(DFPatternCallback):
         if not self.concat.match(post.args[0]):
             return post
 
-        slice_shape = [int(dim) for dim in post.checked_type.shape]
+        slice_shape = [int(dim) for dim in pre.checked_type.shape]
         slice_start = int(post.attrs.begin[0])
         slice_end = int(post.attrs.end[0])
         slice_axis = int(post.attrs.axes[0])
         if slice_axis < 0:
-            slice_axis += len(post.checked_type.shape)
+            slice_axis += len(pre.checked_type.shape)
         slice_strides = int(post.attrs.axes[0])
 
         concat_axis = post.args[0].attrs.axis
