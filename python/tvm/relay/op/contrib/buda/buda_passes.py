@@ -1571,6 +1571,28 @@ class ConvertGlobalAvgPool2dtoAvgPool2d(DFPatternCallback):
         )
         return avg_pool2d
 
+class ConvertUpsampleToResize2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("nn.upsampling")(wildcard())
+    
+    def callback(self, pre, post, node_map):
+        method = pre.attrs.method
+        align_corners = pre.attrs.align_corners
+        assert pre.attrs.layout == "NCHW", "Only support NCHW layout for upsample2d"
+
+        target_shape = pre.checked_type.shape[-2:]
+        mode = "half_pixel" # Default for resize2d
+        if align_corners:
+            mode = "align_corners"
+        return tvm.relay.image.resize2d(
+            post.args[0],
+            size=target_shape,
+            layout="NCHW",
+            method=method,
+            coordinate_transformation_mode=mode,
+        )
+
 
 def run_buda_compile_passes(relay_module, print_all=False):
 
@@ -1735,6 +1757,10 @@ def run_buda_compile_passes(relay_module, print_all=False):
     logger.trace(relay_module.functions)
 
     relay_module["main"] = rewrite(ConvertGlobalAvgPool2dtoAvgPool2d(), relay_module["main"])
+    logger.trace("After DecomposeTile")
+    logger.trace(relay_module.functions)
+
+    relay_module["main"] = rewrite(ConvertUpsampleToResize2d(), relay_module["main"])
     logger.trace("After DecomposeTile")
     logger.trace(relay_module.functions)
 
