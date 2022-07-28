@@ -420,8 +420,8 @@ class TupleType : public Type {
 };
 
 /*!
- * \brief Managed reference to TupleTypeNode.
- * \sa TupleTypeNode.
+ * \brief Managed reference to DictTypeNode.
+ * \sa DictTypeNode.
  */
 class DictType : public Type {
  public:
@@ -434,8 +434,8 @@ class DictType : public Type {
   TVM_DLL explicit DictType(Array<String> keys, Array<Type> values, Span span = Span());
 
   /*!
-   * \brief Create an empty tuple type that constains nothing.
-   * \return A empty tuple type.
+   * \brief Create an empty Dict type that constains nothing.
+   * \return A empty Dict type.
    */
   TVM_DLL DictType static Empty();
 
