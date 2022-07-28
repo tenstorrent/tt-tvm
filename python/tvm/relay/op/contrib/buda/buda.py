@@ -175,10 +175,21 @@ class ReconstructTFGelu(DFPatternCallback):
         self.pattern = gelu
 
     def callback(self, pre, post, node_map):
+        one = node_map[self.one][0].data.numpy()
+        half = node_map[self.half][0].data.numpy()
+        sqrt_half = node_map[self.sqrt_half][0]
 
-        one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
-        half_multiplied = math.isclose(node_map[self.half][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
-        root_two_multiplied = math.isclose(node_map[self.sqrt_half][0].args[0].data.numpy(), 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+        # Relay graph may use sqrt(1/2) outright, or take the recipricoral of sqrt(2)
+        if isinstance(sqrt_half, tvm.relay.expr.Constant):
+            sqrt_half = sqrt_half.data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            sqrt_half = sqrt_half.args[0].data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+
+        one_added = math.isclose(one, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(half, 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        
         
         if not (one_added and half_multiplied and root_two_multiplied):
             return post

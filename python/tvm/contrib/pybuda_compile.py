@@ -1,4 +1,5 @@
 from pybuda.tensor import to_tf_tensors
+from pybuda.tvm_utils import flatten_inputs
 import torch
 
 import numpy as np
@@ -180,57 +181,6 @@ def save_nid_to_input_idx(traced_model_inputs):
 
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
-def flatten_inputs(inputs, names=None):
-    new_inputs = []
-    new_names = []
-    flattened_name_map = {}
-
-    if names is None:
-        names = [f"input_{i}" for i in range(len(inputs))]
-
-    assert len(inputs) == len(names)
-    from tensorflow import Tensor as tftensor
-    from torch import Tensor as torchtensor
-    from pybuda.tensor import Tensor as pybudatensor
-
-    for i in range(len(inputs)):
-        inp = inputs[i]
-        name = names[i]
-        if isinstance(inp, (list, tuple)):
-            sub_names = [f"{name}_{j}" for j in range(len(inp))]
-            
-            sub_inputs, sub_names, _ = flatten_inputs(inp, sub_names)
-            new_inputs += sub_inputs
-            new_names += sub_names
-
-            flattened_name_map[name] = sub_names
-
-        elif isinstance(inp, dict):
-            sub_names = []
-            sub_inputs = []
-            for k, v in inp.items():
-                sub_names.append(f"{name}_{k}")
-                sub_inputs.append(v)
-            
-            sub_inputs, sub_names, _ = flatten_inputs(sub_inputs, sub_names)
-            new_inputs += sub_inputs
-            new_names += sub_names
-            flattened_name_map[name] = sub_names
-
-        elif isinstance(inp, (torchtensor)):
-            if torch.is_floating_point(inp):
-                inp = inp.float()
-            new_inputs.append(inp)
-            new_names.append(name)
-            flattened_name_map[name] = [name]
-        elif isinstance(inp, tftensor):
-            new_inputs.append(inp)
-            new_names.append(name)
-            flattened_name_map[name] = [name]
-        else:
-            raise NotImplementedError(f"Unknown input type: {type(inp)}")
-
-    return new_inputs, new_names, flattened_name_map
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
     training_mode = torchmod.training
@@ -288,6 +238,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
 
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
     flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(inputs, input_names)
+    flattened_inputs = [inp.float() if torch.is_floating_point(inp) else inp for inp in flattened_inputs]
     mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)
     
     if not compiler_cfg.enable_tvm_constant_prop:
