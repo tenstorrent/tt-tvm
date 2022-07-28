@@ -370,12 +370,12 @@ class TupleTypeNode : public TypeNode {
 };
 
 /*!
- * \brief The type of tuple values.
- * \sa TupleType
+ * \brief The type of dictionary of str, value.
+ * \sa DictType
  */
 class DictTypeNode : public TypeNode {
  public:
-  /*! \brief The type of each field in the tuple. */
+  /*! \brief the key (String) and type of each value */
   Array<String> keys;
   Array<Type> values;
 
