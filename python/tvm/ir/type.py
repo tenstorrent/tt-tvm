@@ -177,8 +177,10 @@ class DictType(Type):
 
     Parameters
     ----------
-    fields : List[Type]
-        The fields in the tuple
+    keys : List[str]
+        The keys in the dict
+    values : List[Type]
+        The values in the dict
     """
 
     def __init__(self, keys, values):
