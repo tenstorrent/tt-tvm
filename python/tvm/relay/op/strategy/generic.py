@@ -154,6 +154,29 @@ def wrap_compute_softmax(topi_compute):
 
     return _compute_softmax
 
+# dropout
+def wrap_compute_dropout(topi_compute):
+    """Wrap dropout topi compute"""
+
+    def _compute_dropout(attrs, inputs, out_type):
+        rate = attrs.rate
+        return [topi_compute(inputs[0], rate), topi_compute(inputs[0], rate)]
+
+    return _compute_dropout
+
+
+@override_native_generic_func("dropout_strategy")
+def dropout_strategy(attrs, inputs, out_type, target):
+    """dropout generic strategy"""
+    strategy = _op.OpStrategy()
+
+    strategy.add_implementation(
+        wrap_compute_dropout(topi.nn.dropout),
+        wrap_topi_schedule(topi.generic.schedule_dropout),
+        name="dropout.generic",
+    )
+    return strategy
+
 
 @override_native_generic_func("softmax_strategy")
 def softmax_strategy(attrs, inputs, out_type, target):
