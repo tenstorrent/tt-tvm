@@ -56,3 +56,4 @@ from .space_to_batch_nd import *
 from .batch_to_space_nd import *
 from .loss import *
 from .lstm import *
+from .dropout import *

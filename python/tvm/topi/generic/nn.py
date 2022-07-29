@@ -631,6 +631,23 @@ def schedule_reduce(outs):
     return _default_schedule(outs, True)
 
 
+def schedule_dropout(outs):
+    """Schedule for dropout
+
+    Parameters
+    ----------
+    outs: Array of Tensor
+          The computation graph description of softmax
+          in the format of an array of tensors.
+
+    Returns
+    -------
+    sch: Schedule
+        The computation schedule for the op.
+    """
+    return _default_schedule(outs, False)
+
+
 def schedule_softmax(outs):
     """Schedule for softmax
 

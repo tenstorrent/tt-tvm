@@ -182,7 +182,7 @@ class InferenceSimplifier : public MixedModeMutator {
  public:
   InferenceSimplifier()
       : batch_norm_op_(Op::Get("nn.batch_norm")),
-        dropout_op_(Op::Get("nn.dropout")),
+        // dropout_op_(Op::Get("nn.dropout")),
         instance_norm_op_(Op::Get("nn.instance_norm")),
         layer_norm_op_(Op::Get("nn.layer_norm")),
         group_norm_op_(Op::Get("nn.group_norm")),
@@ -197,9 +197,10 @@ class InferenceSimplifier : public MixedModeMutator {
       if (call->op == batch_norm_op_) {
         return BatchNormToInferUnpack(call->attrs, call->args[0], call->args[1], call->args[2],
                                       call->args[3], call->args[4], ty_map_.at(call->args[0]));
-      } else if (call->op == dropout_op_) {
-        return call->args[0];
-      }
+      } 
+    //   else if (call->op == dropout_op_) {
+    //     return call->args[0];
+    //   }
     }
     return new_e;
   }
@@ -231,7 +232,7 @@ class InferenceSimplifier : public MixedModeMutator {
   // operator equivalence checking so that the registry lookup overhead can be
   // reduced.
   const Op& batch_norm_op_;
-  const Op& dropout_op_;
+//   const Op& dropout_op_;
   const Op& instance_norm_op_;
   const Op& layer_norm_op_;
   const Op& group_norm_op_;

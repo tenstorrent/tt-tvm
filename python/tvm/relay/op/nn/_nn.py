@@ -47,6 +47,8 @@ reg.register_strategy("nn.fast_softmax", strategy.fast_softmax_strategy)
 # log_softmax
 reg.register_strategy("nn.log_softmax", strategy.log_softmax_strategy)
 
+# dropout
+reg.register_strategy("nn.dropout", strategy.dropout_strategy)
 
 @reg.register_legalize("nn.matmul")
 def legalize_matmul(attrs, inputs, types):

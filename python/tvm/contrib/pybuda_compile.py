@@ -195,14 +195,10 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg):
     training_mode = torchmod.training
-    if training_mode:
-        torchmod.eval()
 
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        if training_mode:
-            torchmod.eval()
-        
+        assert training_mode == False
         framework_outputs = torchmod(*inputs)
 
         if not isinstance(framework_outputs, (list, tuple)):
@@ -224,6 +220,9 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg):
         framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
         framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
+    if training_mode and compiler_cfg.enable_tvm_dropout == False:
+        # (Temporary): Remove when buda supports dropout
+        torchmod.eval()
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
     # ensures unique names for every input
     input_structure = []
