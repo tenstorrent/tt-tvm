@@ -43,9 +43,9 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       name = comp.value();
       if (name == "buda.select") {
         call = GetRootCall(body, 0, "strided_slice");
-      } else if (name == "buda.concatenate") {
+      } else if (name == "pybuda.concatenate") {
         call = GetRootCall(fn->body.as<CallNode>(), 0, "concatenate");
-      } else if (name == "buda.buda_conv2d_with_bias") {
+      } else if (name == "pybuda.buda_conv2d_with_bias") {
         std::vector<std::string> names = {"nn.conv2d", "nn.bias_add"};
         call = GetRootCall(fn->body.as<CallNode>(), 1, names);
       }
@@ -79,9 +79,8 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   std::string graph_json = serializer.GetJSON();
   auto params = serializer.GetParams();
 
-  // std::cout << "Buda json: " << std::endl << graph_json << std::endl;
-  const auto* jgr = runtime::Registry::Get("retrieve_json_graph");
-  ICHECK(jgr != nullptr) << "Cannot find retrieve_json_graph";
+  const auto* jgr = runtime::Registry::Get("retrieve_pybuda_json_graph");
+  ICHECK(jgr != nullptr) << "Cannot find retrieve_pybuda_json_graph";
   (*jgr)(func_name, graph_json, params);
 
   const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
@@ -90,7 +89,34 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   return mod;
 }
 
-TVM_REGISTER_GLOBAL("relay.ext.buda").set_body_typed(BudaCompiler);
+TVM_REGISTER_GLOBAL("relay.ext.pybuda").set_body_typed(BudaCompiler);
+
+
+
+/*!
+ * \brief The external compiler/codegen tool. It takes a Relay expression/module and
+ * compile it into a runtime module.
+ */
+runtime::Module BudaCPUCompiler(const ObjectRef& ref) {
+  ICHECK(ref->IsInstance<FunctionNode>());
+  auto func = Downcast<Function>(ref);
+  auto func_name = GetExtSymbol(func);
+  BudaJSONSerializer serializer(func_name, func);
+  serializer.serialize();
+  std::string graph_json = serializer.GetJSON();
+  auto params = serializer.GetParams();
+
+  const auto* jgr = runtime::Registry::Get("retrieve_pybuda_cpudevice_json_graph");
+  ICHECK(jgr != nullptr) << "Cannot find retrieve_pybuda_cpudevice_json_graph";
+  (*jgr)(func_name, graph_json, params);
+
+  const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
+  ICHECK(pf != nullptr) << "Cannot find JSON runtime module to create";
+  auto mod = (*pf)(func_name, graph_json, params);
+  return mod;
+}
+
+TVM_REGISTER_GLOBAL("relay.ext.pybuda_cpudevice").set_body_typed(BudaCPUCompiler);
 
 }  // namespace contrib
 }  // namespace relay
