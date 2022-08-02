@@ -11,9 +11,11 @@ def is_unsqueeze(call):
     input_shape = call.args[0].checked_type.shape
     output_shape = call.checked_type.shape
 
-    joint_size = min(len(input_shape), len(output_shape))
+    remove_one_from_output_shape = [x for x in output_shape if x != 1]
+
+    joint_size = min(len(input_shape), len(remove_one_from_output_shape))
     
-    superfluous_reshape = all([input_shape[i] == output_shape[i] for i in range(-1, -1*joint_size - 1, -1)])
+    superfluous_reshape = all([input_shape[i] == remove_one_from_output_shape[i] for i in range(-1, -1*joint_size - 1, -1)])
 
     if superfluous_reshape and len(input_shape) < len(output_shape):
         return True

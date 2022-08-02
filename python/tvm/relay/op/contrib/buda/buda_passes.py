@@ -520,7 +520,7 @@ class LiftLinearSplit(DFPatternCallback):
         if (is_unsqueeze(node_map[self.reshape][0])):
             # Weight should be transposed in nn.dense, so if splitting
             # along the final output axis, split along the first weight
-            if axis == len(output_shape) - 1:
+            if axis == len(output_shape) - 1 or axis == -1:
                 assert output_shape[axis] == pre_node_map[self.dense_weight][0].checked_type.shape[0]
                 axis = 0
 
