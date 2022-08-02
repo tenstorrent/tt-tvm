@@ -26,16 +26,11 @@ import onnx
 import onnx.numpy_helper
 import mxnet as mx
 
-passed_to_buda = None
-def retrieve_vars_passed_to_buda():
-    return passed_to_buda
+#TODO: Extend to allow multiple cpu/tt graphs
+dev_json_graph = {"function_names": [], "graph" : "", "param_names": {}, "device" : "tt"}
+cpu_json_graph = {"function_names": [], "graph" : "", "param_names": {}, "device" : "cpu"}
 
-
-json_graph = {"function_names": [], "graph" : "", "param_names": {}}
-@tvm.register_func
-def retrieve_json_graph(*args):
-    t = tuple(args)
-    global json_graph
+def retrieve_graph(json_graph, t):
     function_name = t[0]
     if function_name in json_graph["function_names"]:
         return
@@ -65,6 +60,18 @@ def retrieve_json_graph(*args):
         json_graph["graph"] = t[1]
     
     json_graph["param_names"][function_name] = t[2]
+
+@tvm.register_func
+def retrieve_pybuda_json_graph(*args):
+    t = tuple(args)
+    global dev_json_graph
+    retrieve_graph(dev_json_graph, t)
+
+@tvm.register_func
+def retrieve_pybuda_cpudevice_json_graph(*args):
+    t = tuple(args)
+    global cpu_json_graph
+    retrieve_graph(cpu_json_graph, t)
 
 
 def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=False, output_names=None, path=None):
@@ -100,13 +107,13 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graph, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported, output_names=output_names, path=path)
+    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported, output_names=output_names, path=path)
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg)
 
-    serialize_and_store_tvm_graph(json_graph, compiler_cfg)
+    serialize_and_store_tvm_graph(dev_json_graph, compiler_cfg)
 
-    return json_graph, flattened_pytorch_inputs, weights
+    return json_graphs, flattened_pytorch_inputs, weights
 
 
 def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported, output_names=None, path=None):
@@ -137,36 +144,40 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     Dictionary
         TVM ported graph
     """
-    global json_graph
-    json_graph = {"function_names": [], "graph" : "", "param_names": {}}
+    # clear out graphs before starting in case python session is ongoing
+    global dev_json_graph
+    global cpu_json_graph
+    dev_json_graph = {"function_names": [], "graph" : "", "param_names": {}, "device" : "tt"}
+    cpu_json_graph = {"function_names": [], "graph" : "", "param_names": {}, "device" : "cpu"}
+
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
-        json_graph = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
+        json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
     elif isinstance(module, torch.nn.Module):
-        json_graph, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
-        json_graph, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+        json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.compat.v1.GraphDef):
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graph = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg, output_names=output_names)
+        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg, output_names=output_names)
     elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
-        json_graph = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
+        json_graphs = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
     elif isinstance(module, mx.gluon.HybridBlock):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
-        json_graph = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
+        json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
-    return json_graph, inputs
+    return json_graphs, inputs
 
-def save_nid_to_input_idx(traced_model_inputs):
+def save_nid_to_input_idx(traced_model_inputs, json_graph):
     existing_graph = json.loads(json_graph["graph"])
 
     nid_to_input_idx = {}
@@ -252,18 +263,35 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
 
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
 
-    json_graph["params"] = {}
-    for function_name in buda_params.keys():
-        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
 
-    save_nid_to_input_idx(flattened_input_names) # Input order might not be preserved by TVM
-    json_graph["num_pybuda_inputs"] = len(flattened_inputs)
     if training_mode:
         torchmod.train()
 
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params)), flattened_inputs
+    dev_json_graph["params"] = {}
+    cpu_json_graph["params"] = {}
+    for function_name in buda_params.keys():
+        if function_name in dev_json_graph["param_names"]:
+            dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+        if function_name in cpu_json_graph["param_names"]:
+            cpu_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_json_graph["param_names"][function_name])})
+
+
+    json_graphs = []
+
+    # TODO: Extract pipeline info from partitioned_mod
+    if cpu_json_graph["graph"] != "":
+        save_nid_to_input_idx(flattened_input_names, cpu_json_graph) # Input order might not be preserved by TVM
+        cpu_json_graph["num_pybuda_inputs"] = len(flattened_inputs)
+        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_json_graph, buda_params=buda_params)))
+    else:
+        save_nid_to_input_idx(flattened_input_names, dev_json_graph) # Input order might not be preserved by TVM
+        dev_json_graph["num_pybuda_inputs"] = len(flattened_inputs)
+
+    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
+
+    return json_graphs, flattened_inputs
 
 
 def get_relay_output(mod, params, inputs, target):
@@ -312,15 +340,12 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return
     # Reconstruct Ops + export buda graph
     mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, allow_unsupported=allow_unsupported, graph_name=graph_name)
-    executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
-
-    with tvm.transform.PassContext(opt_level=5):
-        func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
+    tvm.relay.build_module.build(mod, target=target, params=params)
 
     if return_params:
-        return func, buda_params
+        return mod, buda_params
     else:
-        return func
+        return mod
 
 
 def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04, pcc=None):
@@ -353,9 +378,8 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
 
 def clean_names(json_graph, buda_params, param_name_lookup=None):
     clean_names = []
-    precursor = "tvmgen_default_buda_main_"
+    precursor = "tvmgen_default_pybuda_main_" if "cpudevice" not in json_graph['function_names'] else "tvmgen_default_pybuda_cpudevice_main_"
     if len(json_graph["params"]) > 0:
-        precursor = f"tvmgen_default_buda_main_"
 
         old_params = json_graph["params"]
         json_graph["params"] = {}
@@ -406,11 +430,13 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, all
 
     _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
 
-    json_graph["params"] = {}
+    dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+    json_graphs = []
+    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
+    return json_graphs
 
 def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsupported):
     framework_outputs = []
@@ -469,13 +495,15 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
     
-    json_graph["params"] = {}
+    dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
     traced_model_inputs = [i.name.split(':')[0] for i in frozen_func.inputs]
-    save_nid_to_input_idx(traced_model_inputs)
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)), flattened_inputs
+    save_nid_to_input_idx(traced_model_inputs, json_graph = dev_json_graph)
+    json_graphs = []
+    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+    return json_graphs, flattened_inputs
 
 # TODO (arui) : Verify graphdef output vs. TVM output
 def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, allow_unsupported, output_names=None):
@@ -524,11 +552,13 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
         func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
 
-    json_graph["params"] = {}
+    dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+    json_graphs = []
+    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
+    return json_graphs
 
 
 def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsupported):
@@ -554,11 +584,13 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsu
 
     _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
 
-    json_graph["params"] = {}
+    dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), json_graph["param_names"][function_name])})
+        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
-    return copy.deepcopy(clean_names(json_graph=json_graph, buda_params=buda_params))
+    json_graph = []
+    json_graph.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
+    return json_graph
 
 
 def load_serialized_tvm_graph(full_file_path):
@@ -617,6 +649,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
                 param.requires_grad = True
 
         torch_weights = module.state_dict()
+        named_buffers = dict(module.named_buffers())
+        torch_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
     elif isinstance(module, tf.keras.Model):
@@ -689,108 +723,3 @@ def serialize_and_store_tvm_graph(json_graph, compiler_cfg):
 
     logger.debug(f"Successfully serilized TVM graph from {compiler_cfg.tvm_graph_store_path} path")
 
-
-@tvm.register_func
-def retrieve_pybuda_graph(*args):
-    print("In retrieve_pybuda_graph")
-#     t = tuple(args)
-#     vp = t[-1].value
-#     graph = cast_c_void_p_to_graph(vp)
-#     broadcast_shapes(graph)
-
-#     inputs = []
-#     input_type = []
-#     node_name = []
-
-#     for arg in t[:-1]:
-#         if isinstance(arg, str):
-#             _type, _name = arg.split("|||")
-#             input_type.append(_type)
-#             node_name.append(_name)
-#         elif isinstance(arg, tvm.runtime.ndarray.NDArray):
-#             inputs.append(torch.from_numpy(arg.numpy()) )
-#         else:
-#             assert 0, "Unexpected data type"
-
-#     for idx, _ in enumerate(inputs):
-#         while len(inputs[idx].shape) < 4:
-#             inputs[idx] = inputs[idx].unsqueeze(0)
-
-#     # Pad input data to TILE_DIM
-#     input_shapes = get_graph_input_shapes(graph)
-#     for i, (_data, buda_shape) in enumerate(zip(inputs, input_shapes)):
-#         # Last 2 dimensions needs to be padded to TILE_DIM
-#         if _data.shape[-2:] != torch.Size(buda_shape[-2:]):
-#             numpy_data = _data.numpy()
-
-#             # calculate padding on last 2 dimensions
-#             pad = [(0, 0), (0, 0)] + [
-#                 (0, a_i - b_i) for a_i, b_i in zip(buda_shape[-2:], numpy_data.shape[-2:])
-#             ]
-#             inputs[i] = torch.from_numpy(np.pad(numpy_data, pad, mode='constant')) # default pads with zero
-
-#     # Create parameters
-#     tt0 = TTDevice("tt0", devtype=TTDeviceType.Model)
-
-#     tvm_module = PyBudaModule("tvm")
-
-#     for _type, _name, _data in zip(input_type, node_name, inputs):
-#         if _type == "parameter":
-#             param = pybuda.Parameter(
-#                 *_data.shape,
-#                 requires_grad=True,
-#                 name=_name,
-#                 value=_data,
-#             )
-#             tvm_module._parameters[_name] = param
-
-#     global passed_to_buda
-#     passed_to_buda = inputs
-#     tt0.place_module(tvm_module)
-#     inputs = tuple(inputs)
-#     res = pygraph.eval(graph, inputs, tt0, 1, 0, 1, {})
-#     passed_to_buda.append(res[0][0])
-#     return tvm.runtime.ndarray.array(res[0][0].numpy())
-
-
-
-# class SubGraph(PyBudaModule):
-#     def __init__(self, fn_name, attributes):
-#         super().__init__("subgraph")
-#         self.fn_name = fn_name
-#         self.attributes = attributes
-
-#     def forward(self, *act):
-#         if self.fn_name == "nn.softmax":
-#             return nn.Softmax("softmax", act[0], dim=self.attributes[0])
-
-#         if self.fn_name == "layernorm":
-#             return nn.Layernorm("layernorm", act[0], act[1], act[2], dim=self.attributes[0], epsilon=self.attributes[1])
-
-
-@tvm.register_func
-def expand_compound_ops(*args):
-    print("In expand_compound_ops")
-#     t = tuple(args)
-#     num_inputs = t[0]
-#     inputs = t[1 : t[0] * 4 + 1]
-
-#     num_attributes = t[t[0] * 4 + 1]
-#     attributes = t[t[0] * 4 + 2 : -1]
-#     fn_name = t[-1]
-#     mod = SubGraph(fn_name=fn_name, attributes=attributes)
-
-#     tt0 = TTDevice("tt0", devtype=TTDeviceType.Golden)
-#     tt0.place_module(mod)
-
-#     shapes = [inputs[i : i + 4] for i in range(0, len(inputs) - 1, 4)]
-
-#     acts = []
-#     for i in range(num_inputs):
-#         acts.append(Tensor.create_from_torch(torch.rand(shapes[0])))
-
-#     acts = tuple(acts)
-#     graph, _ = tt0.generate_graph(*acts, return_intermediate=False)
-#     vp = c_void_p(cast_graph_to_c_void_p(graph))
-
-#     return vp

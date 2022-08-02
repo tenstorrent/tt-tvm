@@ -29,57 +29,70 @@ from tvm.relay.dataflow_pattern import *
 
 from loguru import logger
 
-def _register_external_op_helper(op_name, supported=True):
-    @tvm.ir.register_op_attr(op_name, "target.buda")
+
+from pybuda.config import _get_global_compiler_config
+
+def _register_external_op_helper_pytorch(op_name, supported=True):
+    @tvm.ir.register_op_attr(op_name, "target.pybuda_cpudevice")
+    def _func_wrapper(expr):
+        compiler_cfg = _get_global_compiler_config()
+        return compiler_cfg.enable_tvm_cpu_fallback
+    return _func_wrapper
+
+
+_register_external_op_helper_pytorch("take")
+
+def _register_external_op_helper_pybuda(op_name, supported=True):
+    @tvm.ir.register_op_attr(op_name, "target.pybuda")
     def _func_wrapper(expr):
         return supported
     return _func_wrapper
 
-_register_external_op_helper("add")
-_register_external_op_helper("exp")
-_register_external_op_helper("gelu")
-_register_external_op_helper("layernorm")
-_register_external_op_helper("log")
-_register_external_op_helper("mean")
-_register_external_op_helper("multiply")
-_register_external_op_helper("nn.batch_matmul")
-_register_external_op_helper("nn.matmul")
-_register_external_op_helper("nn.conv2d")
-_register_external_op_helper("nn.max_pool2d")
-_register_external_op_helper("nn.relu")
-_register_external_op_helper("nn.softmax")
-_register_external_op_helper("reciprocal")
-_register_external_op_helper("reshape")
-_register_external_op_helper("sigmoid")
-_register_external_op_helper("sqrt")
-_register_external_op_helper("strided_slice")
-_register_external_op_helper("subtract")
-_register_external_op_helper("transpose")
-_register_external_op_helper("where")
-_register_external_op_helper("nn.conv2d_transpose")
-_register_external_op_helper("image.resize2d")
-_register_external_op_helper("nn.avg_pool2d")
-_register_external_op_helper("clip")
-_register_external_op_helper("abs")
-_register_external_op_helper("argmax")
-_register_external_op_helper("cos")
-_register_external_op_helper("sin")
-_register_external_op_helper("nn.pad")
-_register_external_op_helper("max")
-_register_external_op_helper("broadcast_to")
-_register_external_op_helper("sum")
-_register_external_op_helper("power")
-_register_external_op_helper("ones")
-_register_external_op_helper("zeros")
-_register_external_op_helper("tanh")
-_register_external_op_helper("scatter")
-_register_external_op_helper("nn.leaky_relu")
-_register_external_op_helper("nn.max_pool1d")
-_register_external_op_helper("take")
-_register_external_op_helper("stack")
-_register_external_op_helper("cumsum")
-_register_external_op_helper("logical_not")
-_register_external_op_helper("maximum")
+_register_external_op_helper_pybuda("abs")
+_register_external_op_helper_pybuda("add")
+_register_external_op_helper_pybuda("argmax")
+_register_external_op_helper_pybuda("broadcast_to")
+_register_external_op_helper_pybuda("clip")
+_register_external_op_helper_pybuda("cos")
+_register_external_op_helper_pybuda("cumsum")
+_register_external_op_helper_pybuda("exp")
+_register_external_op_helper_pybuda("gelu")
+_register_external_op_helper_pybuda("image.resize2d")
+_register_external_op_helper_pybuda("layernorm")
+_register_external_op_helper_pybuda("log")
+_register_external_op_helper_pybuda("logical_not")
+_register_external_op_helper_pybuda("max")
+_register_external_op_helper_pybuda("maximum")
+_register_external_op_helper_pybuda("mean")
+_register_external_op_helper_pybuda("multiply")
+_register_external_op_helper_pybuda("nn.avg_pool2d")
+_register_external_op_helper_pybuda("nn.batch_matmul")
+_register_external_op_helper_pybuda("nn.conv2d_transpose")
+_register_external_op_helper_pybuda("nn.conv2d")
+_register_external_op_helper_pybuda("nn.dense")
+_register_external_op_helper_pybuda("nn.leaky_relu")
+_register_external_op_helper_pybuda("nn.matmul")
+_register_external_op_helper_pybuda("nn.max_pool1d")
+_register_external_op_helper_pybuda("nn.max_pool2d")
+_register_external_op_helper_pybuda("nn.pad")
+_register_external_op_helper_pybuda("nn.relu")
+_register_external_op_helper_pybuda("nn.softmax")
+_register_external_op_helper_pybuda("ones")
+_register_external_op_helper_pybuda("power")
+_register_external_op_helper_pybuda("reciprocal")
+_register_external_op_helper_pybuda("reshape")
+_register_external_op_helper_pybuda("scatter")
+_register_external_op_helper_pybuda("sigmoid")
+_register_external_op_helper_pybuda("sin")
+_register_external_op_helper_pybuda("sqrt")
+_register_external_op_helper_pybuda("stack")
+_register_external_op_helper_pybuda("strided_slice")
+_register_external_op_helper_pybuda("subtract")
+_register_external_op_helper_pybuda("sum")
+_register_external_op_helper_pybuda("tanh")
+_register_external_op_helper_pybuda("transpose")
+_register_external_op_helper_pybuda("where")
+_register_external_op_helper_pybuda("zeros")
 
 
 def nn_layernorm_to_buda_layernorm():
@@ -137,20 +150,20 @@ def merge_conv2d_with_bias():
 
     return bias_add
 
-@register_pattern_table("buda")
+@register_pattern_table("pybuda")
 def pattern_table():
-    matmul = ("buda.matmul", dense_to_matmul())
-    hslice = ("buda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
+    matmul = ("pybuda.matmul", dense_to_matmul())
+    hslice = ("pybuda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
     hstack = [
-        ("buda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
-        ("buda.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
+        ("pybuda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
+        ("pybuda.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
         ]
-    vstack = ("buda.vstack", reshape_to_vstack(), is_reshape_vstack)
-    vslice = ("buda.vslice", reshape_to_vslice(), is_reshape_vslice)
-    layernorm = ("buda.layernorm", nn_layernorm_to_buda_layernorm())
-    binary_stack = ("buda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
-    concatenate = ("buda.concatenate", decompose_concat_input_tuple())
-    buda_conv2d_with_bias = ("buda.buda_conv2d_with_bias", merge_conv2d_with_bias())
+    vstack = ("pybuda.vstack", reshape_to_vstack(), is_reshape_vstack)
+    vslice = ("pybuda.vslice", reshape_to_vslice(), is_reshape_vslice)
+    layernorm = ("pybuda.layernorm", nn_layernorm_to_buda_layernorm())
+    binary_stack = ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
+    concatenate = ("pybuda.concatenate", decompose_concat_input_tuple())
+    buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
 
     buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias]
 
@@ -423,6 +436,8 @@ class AddNopsToPassthrough(ExprMutator):
         new_body = self.visit(fn.body)
         return tvm.relay.Function(list(fn.params), new_body, fn.ret_type, fn.type_params, fn.attrs)
 
+def _always_true(expr):
+    return True
 
 class AllowUnsupportedOps(ExprMutator):
     def __init__(self, check_only=False):
@@ -433,13 +448,72 @@ class AllowUnsupportedOps(ExprMutator):
         if isinstance(call.op, tvm.ir.Op):
             if self.check_only:
                 assert False, f"Operator {call.op} is not supported"
-            elif call.op.get_attr("target.buda") is None:
-                def _func_wrapper(expr):
-                    return True
-                tvm.ir.register_op_attr(call.op.name, "target.buda", _func_wrapper)
+            elif call.op.get_attr("target.pybuda") is None:
+                tvm.ir.register_op_attr(call.op.name, "target.pybuda", _always_true)
 
         return super().visit_call(call)
 
+max_depth_to_input_for_fallback = 4
+max_users_of_unsupported_ops = 4
+inputs_to_cpu_eval = []
+class DetermineTarget(ExprMutator):
+    def __init__(self):
+        super().__init__()
+        self.users_of_unsupported_ops = 0
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is None:
+            has_dev = call.op.get_attr("target.pybuda") is not None
+
+            # for non-unary ops, if one of the args is unsupported, do the op on CPU, up to a total of max_users_of_unsupported_ops ops
+            # to reduce data movement
+            def _if_operand_unsupported(expr):
+                for arg in expr.args:
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None:
+                        if self.users_of_unsupported_ops <= max_users_of_unsupported_ops:
+                            self.users_of_unsupported_ops += 1
+                            logger.info(f"{expr.op.name} will be executed on CPU")
+                            return True
+                return False
+
+            if len(call.args) > 1:
+                for arg in call.args:
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None:
+                        tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _if_operand_unsupported, level=5)
+
+        elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is None:
+            # operands of unsupported ops to be executed on CPU if they are less that max_depth_to_input_for_fallback ops from input
+            def _if_depth_small(expr):
+                args = list(expr.args)
+                index = 0
+                depth_to_input = 0
+                while index < len(args):
+                    if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
+                        if depth_to_input < max_depth_to_input_for_fallback:
+                            args.extend(list([node for node in args[index].args if node not in args]))
+                            depth_to_input += 1
+                    elif isinstance(args[index], tvm.relay.Var) and args[index] in inputs_to_cpu_eval:
+                        logger.info(f"{expr.op.name} will be executed on CPU")
+                        return True
+
+                    index += 1
+                return False
+
+            args = list(call.args)
+            index = 0
+            depth_to_input = 0
+            while index < len(args):
+                if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
+                    if args[index].op.get_attr("target.pybuda_cpudevice") is None:
+                        tvm.ir.register_op_attr(args[index].op.name, "target.pybuda_cpudevice", _if_depth_small, level=5)
+                    if depth_to_input < max_depth_to_input_for_fallback:
+                        args.extend(list([node for node in args[index].args if node not in args]))
+                        depth_to_input += 1
+                elif isinstance(args[index], tvm.relay.Var) and depth_to_input:
+                    inputs_to_cpu_eval.append(args[index])
+                index += 1
+
+
+        return super().visit_call(call)
 
 def reconstruct_ops_for_buda(mod):
     print_all = False
@@ -601,7 +675,13 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
         logger.trace("After FoldConstant")
         logger.trace(mod.functions)
 
-        mod = tvm.transform.Sequential([transform.AnnotateTarget("buda")])(mod)
+        compiler_cfg = _get_global_compiler_config()
+        if compiler_cfg.enable_tvm_cpu_fallback:
+            mod["main"] = DetermineTarget().visit(mod["main"])
+            logger.trace("After DetermineTarget")
+            logger.trace(mod.functions)
+
+        mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
         logger.trace("After AnnotateTarget")
         logger.trace(mod.functions)
 
@@ -627,8 +707,8 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
                 for arg in item.args:
                     if isinstance(arg, tvm.relay.expr.Var):
                         continue
-                    assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
-                    assert arg.op in mod.global_var_map_.values(), mod["main"]
+                    # assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
+                    # assert arg.op in mod.global_var_map_.values(), mod["main"]
 
         assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
 
