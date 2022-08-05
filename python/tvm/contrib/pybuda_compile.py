@@ -74,7 +74,7 @@ def retrieve_pybuda_cpudevice_json_graph(*args):
     retrieve_graph(cpu_json_graph, t)
 
 
-def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=False, output_names=None, path=None):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -107,7 +107,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, allow_unsupported=allow_unsupported, output_names=output_names, path=path)
+    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, output_names=output_names, path=path)
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg)
 
@@ -116,7 +116,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported=F
     return json_graphs, flattened_pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupported, output_names=None, path=None):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -153,25 +153,25 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, allow_unsupporte
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
     elif isinstance(module, torch.nn.Module):
-        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.keras.Model):
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
-        json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+        json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg)
     elif isinstance(module, tf.compat.v1.GraphDef):
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg, output_names=output_names)
+        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, output_names=output_names)
     elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
-        json_graphs = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
+        json_graphs = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg)
     elif isinstance(module, mx.gluon.HybridBlock):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
-        json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, allow_unsupported=allow_unsupported, )
+        json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg)
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -193,7 +193,7 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
 
-def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, compiler_cfg):
+def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg):
     training_mode = torchmod.training
     if training_mode:
         torchmod.eval()
@@ -264,7 +264,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, allow_unsupported, c
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
 
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
 
     if training_mode:
         torchmod.train()
@@ -327,7 +327,7 @@ def get_relay_output(mod, params, inputs, target):
     return relay_outputs
 
 
-def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, allow_unsupported=False, compiler_cfg=None):
+def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, compiler_cfg=None):
     target = "llvm"
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
@@ -339,7 +339,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return
 
     # Reconstruct Ops + export buda graph
     mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
-    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, allow_unsupported=allow_unsupported, graph_name=graph_name)
+    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
     tvm.relay.build_module.build(mod, target=target, params=params)
 
     if return_params:
@@ -399,7 +399,7 @@ def clean_names(json_graph, buda_params, param_name_lookup=None):
 
     return json_graph
 
-def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, allow_unsupported):
+def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg):
     input_names = []
     for inp in onnx_mod.graph.input:
         input_names.append(inp.name)
@@ -428,7 +428,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, all
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
 
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
@@ -438,7 +438,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, all
     json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
     return json_graphs
 
-def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsupported):
+def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg):
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
         framework_outputs = tfmod(*inputs)
@@ -493,7 +493,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported, compiler_cfg=compiler_cfg)
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
     
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
@@ -506,7 +506,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, allow_unsuppor
     return json_graphs, flattened_inputs
 
 # TODO (arui) : Verify graphdef output vs. TVM output
-def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, allow_unsupported, output_names=None):
+def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, output_names=None):
     if output_names == None:
         output_list_ = []
     else:
@@ -544,7 +544,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
 
     # Reconstruct Ops + export buda graph
     mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
-    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, allow_unsupported=allow_unsupported, graph_name=graph_name)
+    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
 
@@ -561,7 +561,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, a
     return json_graphs
 
 
-def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsupported):
+def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
         # Need to figure out how to retrieve input names for multi-input case
@@ -582,7 +582,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, allow_unsu
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, allow_unsupported=allow_unsupported)
+    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
 
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
