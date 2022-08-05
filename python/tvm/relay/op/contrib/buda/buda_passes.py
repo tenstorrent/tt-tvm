@@ -671,7 +671,7 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         try:
             indices = node_map[self.indices][0].data.numpy().item()
         except ValueError as v:
-            assert False, "we only support take with a single index currently"
+            return post
         
         axis = pre.attrs.axis
         strided_slice = tvm.relay.strided_slice(act, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
@@ -754,7 +754,7 @@ class DecomposeMultiRangeTake(DFPatternCallback):
         try:
             indices = node_map[self.indices][0].data.numpy().item()
         except ValueError as v:
-            assert False, "we only support take with a single index currently"
+            return post
         
         return post
 

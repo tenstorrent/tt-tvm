@@ -476,7 +476,9 @@ class DetermineTarget(ExprMutator):
             if len(call.args) > 1:
                 for arg in call.args:
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None:
-                        tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _if_operand_unsupported, level=5)
+                        if call.op.get_attr("target.pybuda_cpudevice") is None:
+                            tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _if_operand_unsupported, level=5)
+                        break
 
         elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is None:
             # operands of unsupported ops to be executed on CPU if they are less that max_depth_to_input_for_fallback ops from input
