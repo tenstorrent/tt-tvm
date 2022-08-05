@@ -29,12 +29,10 @@ from tvm.relay.dataflow_pattern import *
 
 from loguru import logger
 
-
-from pybuda.config import _get_global_compiler_config
-
 def _register_external_op_helper_pytorch(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda_cpudevice")
     def _func_wrapper(expr):
+        from pybuda.config import _get_global_compiler_config
         compiler_cfg = _get_global_compiler_config()
         return compiler_cfg.enable_tvm_cpu_fallback
     return _func_wrapper
@@ -645,7 +643,7 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
 
     return mod
     
-def partition_for_buda(mod, graph_name, allow_unsupported=False):
+def partition_for_buda(mod, graph_name, compiler_cfg):
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
@@ -658,7 +656,7 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
         logger.trace("After MergeComposite")
         logger.trace(mod.functions)
 
-        if allow_unsupported:
+        if compiler_cfg.enable_tvm_unsupported_ops:
             mod["main"] = AllowUnsupportedOps().visit(mod["main"])
             logger.trace("After AllowUnsupportedOps")
             logger.trace(mod.functions)
@@ -675,7 +673,6 @@ def partition_for_buda(mod, graph_name, allow_unsupported=False):
         logger.trace("After FoldConstant")
         logger.trace(mod.functions)
 
-        compiler_cfg = _get_global_compiler_config()
         if compiler_cfg.enable_tvm_cpu_fallback:
             mod["main"] = DetermineTarget().visit(mod["main"])
             logger.trace("After DetermineTarget")
