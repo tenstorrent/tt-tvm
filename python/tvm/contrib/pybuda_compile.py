@@ -378,7 +378,7 @@ def verify_tvm_compile(framework_outputs, relay_outputs, rtol=1e-02, atol=1e-04,
 
 def clean_names(json_graph, buda_params, param_name_lookup=None):
     clean_names = []
-    precursor = "tvmgen_default_pybuda_main_" if "cpudevice" not in json_graph['function_names'] else "tvmgen_default_pybuda_cpudevice_main_"
+    precursor = "tvmgen_default_pybuda_main_" if json_graph["device"] != "cpu" else "tvmgen_default_pybuda_cpudevice_main_"
     if len(json_graph["params"]) > 0:
 
         old_params = json_graph["params"]
