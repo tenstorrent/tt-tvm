@@ -1582,15 +1582,21 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
         assert pre.attrs.layout == "NCHW", "Only support NCHW layout for upsample2d"
 
         target_shape = pre.checked_type.shape[-2:]
-        mode = "half_pixel" # Default for resize2d
-        if align_corners:
-            mode = "align_corners"
+
+        if method == "nearest_neighbor":
+            coord_trans = "asymmetric"
+        elif align_corners:
+            coord_trans = "align_corners"
+        else:
+            coord_trans = "half_pixel"
+
         return tvm.relay.image.resize2d(
             post.args[0],
             size=target_shape,
             layout="NCHW",
             method=method,
-            coordinate_transformation_mode=mode,
+            coordinate_transformation_mode=coord_trans,
+            cubic_alpha=-0.75,
         )
 
 
