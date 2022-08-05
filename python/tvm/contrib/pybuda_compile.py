@@ -570,10 +570,11 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
 
-        framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, torch.Tensor)]
+        framework_outputs = [x.asnumpy() for x in framework_outputs if isinstance(x, mx.ndarray.ndarray.NDArray)]
 
     input_dict = {
-        "data" : inputs[0].shape
+        "input_" + str(i) : inp.shape
+        for i, inp in enumerate(inputs)
     }
     mod, params = relay.frontend.from_mxnet(module, shape=input_dict)
 
@@ -582,7 +583,10 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
+    inp_names = [x.name_hint for x in mod["main"].params if x.name_hint not in params.keys()]
+    assert len(inp_names) == len(inputs)
+    np_inputs = {name : x.asnumpy() for name, x in zip(inp_names, inputs)}
+    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
 
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
