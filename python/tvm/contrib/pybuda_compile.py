@@ -564,8 +564,6 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
 def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
     framework_outputs = []
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        # Need to figure out how to retrieve input names for multi-input case
-        assert len(inputs) == 1, "MXNet compile only support a single input for now"
         framework_outputs = module(*inputs)
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
@@ -576,6 +574,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
         "input_" + str(i) : inp.shape
         for i, inp in enumerate(inputs)
     }
+    input_name_to_tensor = {name : tensor.asnumpy() for name, tensor in zip(input_dict.keys(), inputs)}
     mod, params = relay.frontend.from_mxnet(module, shape=input_dict)
 
     if not compiler_cfg.enable_tvm_constant_prop:
@@ -583,10 +582,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg):
     else:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
-    inp_names = [x.name_hint for x in mod["main"].params if x.name_hint not in params.keys()]
-    assert len(inp_names) == len(inputs)
-    np_inputs = {name : x.asnumpy() for name, x in zip(inp_names, inputs)}
-    _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
+    _, buda_params = compile_tvm_for_buda(mod, params, input_name_to_tensor, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg)
 
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
