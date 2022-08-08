@@ -112,7 +112,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, 
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg)
 
-    serialize_and_store_tvm_graph(dev_json_graph, compiler_cfg)
+    serialize_and_store_tvm_graph(json_graphs, compiler_cfg)
 
     return json_graphs, flattened_pytorch_inputs, weights
 
@@ -168,7 +168,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
     elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
-        json_graphs = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, _ = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif isinstance(module, mx.gluon.HybridBlock):
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
@@ -367,12 +367,29 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     _, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     dev_json_graph["params"] = {}
+    cpu_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+        if function_name in dev_json_graph["param_names"]:
+            dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+        if function_name in cpu_json_graph["param_names"]:
+            cpu_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_json_graph["param_names"][function_name])})
+
 
     json_graphs = []
+
+    # TODO: Extract pipeline info from partitioned_mod
+    if cpu_json_graph["graph"] != "":
+        save_nid_to_input_idx(input_names, cpu_json_graph) # Input order might not be preserved by TVM
+        cpu_json_graph["num_pybuda_inputs"] = len(inputs)
+        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_json_graph, buda_params=buda_params)))
+    else:
+        save_nid_to_input_idx(input_names, dev_json_graph) # Input order might not be preserved by TVM
+        dev_json_graph["num_pybuda_inputs"] = len(inputs)
+
     json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
-    return json_graphs
+
+    return json_graphs, inputs
+
 
 def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     framework_outputs = []
@@ -549,14 +566,18 @@ def load_serialized_tvm_graph(full_file_path):
     with open(full_file_path, "r") as file:
         serialized_graph_str = json.load(file)
 
-    serialized_dict = {}
-    serialized_dict["graph"] = json.dumps(serialized_graph_str["graph"])
-    serialized_dict["params"] = serialized_graph_str["params"]
-    if "nid_to_input_idx" in serialized_graph_str.keys():
-        serialized_dict["nid_to_input_idx"] = {int(k) : v for k, v in serialized_graph_str["nid_to_input_idx"].items()}
+    json_graphs = []
+    for id, json_graph in serialized_graph_str.items():
+        serialized_dict = {}
+        serialized_dict["graph"] = json.dumps(json_graph["graph"])
+        serialized_dict["params"] = json_graph["params"]
+        serialized_dict["device"] = json_graph["device"]
+        if "nid_to_input_idx" in json_graph.keys():
+            serialized_dict["nid_to_input_idx"] = {int(k) : v for k, v in json_graph["nid_to_input_idx"].items()}
+        json_graphs.append(serialized_dict)
     logger.debug(f"Successfully load serialized TVM graph from {full_file_path} path")
 
-    return serialized_dict
+    return json_graphs
 
 
 def format_tvm_graph_weights(inputs, module, compiler_cfg):
@@ -619,7 +640,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
     return inputs, weights
 
 
-def serialize_and_store_tvm_graph(json_graph, compiler_cfg):
+def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
     """
     Serializes TVM graph representation ported to PyBuda in form of JSON and stores it 
     on the desired destination.
@@ -644,14 +665,18 @@ def serialize_and_store_tvm_graph(json_graph, compiler_cfg):
     if compiler_cfg.tvm_graph_store_path == "" or compiler_cfg.tvm_graph_load_path != "" or not compiler_cfg.enable_consteval:
         return
 
-    graph_dict = json.loads(json_graph["graph"])
-    params_dict = json_graph["params"]
-
     serilized_dict = {}
-    serilized_dict["graph"] = graph_dict
-    serilized_dict["params"] = params_dict
-    if "nid_to_input_idx" in json_graph.keys():
-        serilized_dict["nid_to_input_idx"] = json_graph["nid_to_input_idx"]
+
+    for id, json_graph in enumerate(json_graphs):
+        graph_dict = json.loads(json_graph["graph"])
+        params_dict = json_graph["params"]
+        serilized_dict[str(id)] = {}
+        serilized_dict[str(id)]["graph"] = graph_dict
+        serilized_dict[str(id)]["params"] = params_dict
+        serilized_dict[str(id)]["device"] = json_graph["device"]
+        if "nid_to_input_idx" in json_graph.keys():
+            serilized_dict[str(id)]["nid_to_input_idx"] = json_graph["nid_to_input_idx"]
+
     serilized_str = json.dumps(serilized_dict, cls=NumpyArrayEncoder, indent=2)
     
     with open(compiler_cfg.tvm_graph_store_path, 'w') as file:
