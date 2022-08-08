@@ -1,3 +1,4 @@
+from ast import Invert
 import logging
 
 from pkg_resources import require
@@ -1599,175 +1600,108 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
             cubic_alpha=-0.75,
         )
 
+def run_pattern_callback(relay_module, callback, params=None, inputs=None, target=None, golden_outputs=None, verify_cfg=None, run_verify=False):
+    callback_name = type(callback).__name__
 
-def run_buda_compile_passes(relay_module, print_all=False):
+    _run_verify = run_verify and params and inputs and target and golden_outputs and verify_cfg
+    if run_verify and not _run_verify:
+        logger.warning(f"Cannot verify relay module after buda pass: {callback_name} because one of (params, inputs, target, golden_outputs, veirfy_cfg) is None")
 
-    relay_module["main"] = rewrite(ConvertLayout(), relay_module["main"])
-    logger.trace("After ConvertLayout")
+    relay_module['main'] = rewrite(callback, relay_module['main'])
+    logger.trace(f"After {callback_name}")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(RemoveCast(), relay_module["main"])
-    logger.trace("After RemoveCast")
-    logger.trace(relay_module.functions)
+    if _run_verify:
+        tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, golden_outputs, callback_name, verify_cfg)
 
-    relay_module["main"] = rewrite(DecomposeStack(), relay_module["main"])
-    logger.trace("After DecomposeStack")
-    logger.trace(relay_module.functions)
+def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None, golden_outputs=None, verify_cfg=None):
+
+    verify_args = (params, inputs, target, golden_outputs, verify_cfg)
+
+    run_pattern_callback(relay_module, ConvertLayout(), *verify_args)
+
+    run_pattern_callback(relay_module, RemoveCast(), *verify_args)
+
+    run_pattern_callback(relay_module, DecomposeStack(), *verify_args)
 
     relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
     logger.trace("After DecomposeVariance")
     logger.trace(relay_module.functions)
 
-    relay_module["main"] = rewrite(ConvertArgmaxTakeToReduceMax(), relay_module["main"])
-    logger.trace("After ConvertArgmaxTakeToReduceMax")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ConvertArgmaxTakeToReduceMax(), *verify_args)
 
-    relay_module["main"] = rewrite(AddSqueezeForArgmax(), relay_module["main"])
-    logger.trace("After AddSqueezeForArgmax")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, AddSqueezeForArgmax(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeEinsum(), relay_module["main"])
-    logger.trace("After DecomposeEinsum")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeEinsum(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeLayoutTransform(), relay_module["main"])
-    logger.trace("After DecomposeLayoutTransform")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeLayoutTransform(), *verify_args)
 
-    relay_module["main"] = rewrite(LiftLinearSplit(), relay_module["main"])
-    logger.trace("After LiftLinearSplit")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LiftLinearSplit(), *verify_args)
 
-    relay_module["main"] = rewrite(LowerSplitToStridedSlice(), relay_module["main"])
-    logger.trace("After LowerSplitToStridedSlice")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LowerSplitToStridedSlice(), *verify_args)
 
-    relay_module["main"] = rewrite(DenseWeightTranspose(), relay_module["main"])
-    logger.trace("After DenseWeightTranspose")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DenseWeightTranspose(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposePower(), relay_module["main"])
-    logger.trace("After DecomposePower")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposePower(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeNegative(), relay_module["main"])
-    logger.trace("After DecomposeNegative")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeNegative(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeRsqrt(), relay_module["main"])
-    logger.trace("After DecomposeRsqrt")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeRsqrt(), *verify_args)
 
-    relay_module["main"] = rewrite(InvertDivide(), relay_module["main"])
-    logger.trace("After InvertDivide")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, InvertDivide(), *verify_args)
 
-    relay_module["main"] = rewrite(ExplicateTranspose(), relay_module["main"])
-    logger.trace("After ExplicateTranspose")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ExplicateTranspose(), *verify_args)
 
-    relay_module["main"] = rewrite(ExplicateHSliceTranspose(), relay_module["main"])
-    logger.trace("After ExplicateHSliceTranspose")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ExplicateHSliceTranspose(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeConv1DToConv2D(), relay_module["main"])
-    logger.trace("After DecomposeConv1DtoConv2D")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeConv1DToConv2D(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeMultiAxisMax(), relay_module["main"])
-    logger.trace("After DecomposeMultiAxisMax")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeMultiAxisMax(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeMultiAxisTranspose(), relay_module["main"])
-    logger.trace("After DecomposeMultiAxisTranspose")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeMultiAxisTranspose(), *verify_args)
 
-    relay_module["main"] = rewrite(EstimateWhereInCausalMask(), relay_module["main"])
-    logger.trace("After EstimateWhereInCausalMask")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, EstimateWhereInCausalMask(), *verify_args)
 
-    relay_module["main"] = rewrite(LowerAdaptiveAvgPool(), relay_module["main"])
-    logger.trace("After LowerAdaptiveAvgPool")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LowerAdaptiveAvgPool(), *verify_args)
 
-    relay_module["main"] = rewrite(LowerAdaptiveMaxPool(), relay_module["main"])
-    logger.trace("After LowerAdaptiveMaxPool")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LowerAdaptiveMaxPool(), *verify_args)
 
-    relay_module["main"] = rewrite(EnsureKeepdims(), relay_module["main"])
-    logger.trace("After DecomposeReduceSum")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, EnsureKeepdims(), *verify_args)
 
-    relay_module["main"] = rewrite(LowerSqueezeToReshape(), relay_module["main"])
-    logger.trace("After LowerSqueezeToReshape")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LowerSqueezeToReshape(), *verify_args)
 
-    relay_module["main"] = rewrite(PopulateTransposeAxes(), relay_module["main"])
-    logger.trace("After PopulateTransposeAxes")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, PopulateTransposeAxes(), *verify_args)
 
-    relay_module["main"] = rewrite(PopulateStridedSliceAxes(), relay_module["main"])
-    logger.trace("After PopulateStridedSliceAxes")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, PopulateStridedSliceAxes(), *verify_args)
 
-    relay_module["main"] = rewrite(ConvertExpandDimsToReshape(), relay_module["main"])
-    logger.trace("After ConvertExpandDimsToReshape")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ConvertExpandDimsToReshape(), *verify_args)
+    
+    run_pattern_callback(relay_module, DecomposeMultiAxisMean(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeMultiAxisMean(), relay_module["main"])
-    logger.trace("After DecomposeMultiAxisMean")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeMultiAxisBroadcast(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeMultiAxisBroadcast(), relay_module["main"])
-    logger.trace("After DecomposeMultiAxisMean")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, RemoveRedundantTake(), *verify_args)
 
-    relay_module["main"] = rewrite(RemoveRedundantTake(), relay_module["main"])
-    logger.trace("After RemoveRedundantTake")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, RemoveRedundantReshape(), *verify_args)
 
-    relay_module["main"] = rewrite(RemoveRedundantReshape(), relay_module["main"])
-    logger.trace("After RemoveRedundantReshape")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, TransposePad(), *verify_args)
 
-    relay_module["main"] = rewrite(TransposePad(), relay_module["main"])
-    logger.trace("After TransposePad")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeMultiRangeTake(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeMultiRangeTake(), relay_module["main"])
-    logger.trace("After DecomposeMultiRangeTake")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, LowerTakeToStridedSlice(), *verify_args)
 
-    relay_module["main"] = rewrite(LowerTakeToStridedSlice(), relay_module["main"])
-    logger.trace("After LowerTakeToStridedSlice")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ConvertAddToBiasAddAfterConv2d(), *verify_args)
 
-    relay_module["main"] = rewrite(ConvertAddToBiasAddAfterConv2d(), relay_module["main"])
-    logger.trace("After ConvertAddToBiasAddAfterConv2d")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, SkipRedundantConcatenateSlice(), *verify_args)
 
-    relay_module["main"] = rewrite(SkipRedundantConcatenateSlice(), relay_module["main"])
-    logger.trace("After SkipRedundantConcatenateSlice")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeBatchFlatten(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeBatchFlatten(), relay_module["main"])
-    logger.trace("After DecomposeBatchFlatten")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeRepeat(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeRepeat(), relay_module["main"])
-    logger.trace("After DecomposeRepeat")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, DecomposeTile(), *verify_args)
 
-    relay_module["main"] = rewrite(DecomposeTile(), relay_module["main"])
-    logger.trace("After DecomposeTile")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ConvertGlobalAvgPool2dtoAvgPool2d(), *verify_args)
 
-    relay_module["main"] = rewrite(ConvertGlobalAvgPool2dtoAvgPool2d(), relay_module["main"])
-    logger.trace("After DecomposeTile")
-    logger.trace(relay_module.functions)
-
-    relay_module["main"] = rewrite(ConvertUpsampleToResize2d(), relay_module["main"])
-    logger.trace("After DecomposeTile")
-    logger.trace(relay_module.functions)
+    run_pattern_callback(relay_module, ConvertUpsampleToResize2d(), *verify_args)
 
     return relay_module
