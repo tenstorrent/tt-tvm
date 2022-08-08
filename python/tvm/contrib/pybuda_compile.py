@@ -314,21 +314,22 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return
 
 
 def clean_names(json_graph, buda_params, param_name_lookup=None):
-    clean_names = []
     precursor = "tvmgen_default_pybuda_main_" if json_graph["device"] != "cpu" else "tvmgen_default_pybuda_cpudevice_main_"
     if len(json_graph["params"]) > 0:
 
         old_params = json_graph["params"]
         json_graph["params"] = {}
         for k, v in old_params.items():
-            key = k.replace(precursor, "")[2:] + k.replace(precursor, "")[0]
+            num_digits = k.replace(precursor, "").find("_")
+            key = k.replace(precursor, "")[num_digits + 1:] + k.replace(precursor, "")[:num_digits]
             json_graph["params"][key] = v
 
     graph = json.loads(json_graph["graph"])
 
     for node in graph["nodes"]:
         if precursor in node["name"]:
-            node["name"] = node["name"].replace(precursor, "")[2:] + node["name"].replace(precursor, "")[0]
+            num_digits = node["name"].replace(precursor, "").find("_")
+            node["name"] = node["name"].replace(precursor, "")[num_digits + 1:] + node["name"].replace(precursor, "")[:num_digits]
         elif param_name_lookup is not None and node["name"] in param_name_lookup:
             node["name"] = param_name_lookup[node["name"]]
 

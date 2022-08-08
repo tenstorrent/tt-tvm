@@ -30,7 +30,13 @@ from tvm.relay.dataflow_pattern import *
 
 from loguru import logger
 
+import networkx as nx
+
 def _register_external_op_helper_pytorch(op_name, supported=True):
+    op = tvm.ir.op.Op.get(op_name)
+    if op.has_attr("target.pybuda_cpudevice"):
+        op.reset_attr("target.pybuda_cpudevice")
+
     @tvm.ir.register_op_attr(op_name, "target.pybuda_cpudevice")
     def _func_wrapper(expr):
         from pybuda.config import _get_global_compiler_config
@@ -39,7 +45,8 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
     return _func_wrapper
 
 
-_register_external_op_helper_pytorch("take")
+def initialize_pybuda_cpudevice_ops():
+    _register_external_op_helper_pytorch("take")
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda")
@@ -453,23 +460,37 @@ class AllowUnsupportedOps(ExprMutator):
 
         return super().visit_call(call)
 
-max_depth_to_input_for_fallback = 4
-max_users_of_unsupported_ops = 4
-inputs_to_cpu_eval = []
-class DetermineTarget(ExprMutator):
+class ResetOpAttributes(ExprVisitor):
     def __init__(self):
         super().__init__()
-        self.users_of_unsupported_ops = 0
-    def visit_call(self, call):
-        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is None:
-            has_dev = call.op.get_attr("target.pybuda") is not None
 
+    def visit_op(self, op):
+        if op.has_attr("target.pybuda_cpudevice"):
+            op.reset_attr("target.pybuda_cpudevice")
+        return super().visit_op(op)
+
+class DetermineTarget(ExprVisitor):
+    def __init__(self, graph):
+        super().__init__()
+        self.users_of_unsupported_ops = 0
+        self.graph = graph
+        self.inputs_to_cpu_eval = []
+        self.max_depth_to_input_for_fallback = 4
+        self.max_users_of_unsupported_ops = 4
+
+    def visit_call(self, call):
+        if tvm.ir.structural_hash(call, map_free_vars=True) not in self.graph:
+            assert False
+
+        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is None:
             # for non-unary ops, if one of the args is unsupported, do the op on CPU, up to a total of max_users_of_unsupported_ops ops
             # to reduce data movement
             def _if_operand_unsupported(expr):
+                node = tvm.ir.structural_hash(expr, map_free_vars=True)
                 for arg in expr.args:
-                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None:
-                        if self.users_of_unsupported_ops <= max_users_of_unsupported_ops:
+                    output_nodes = self.graph.out_degree(tvm.ir.structural_hash(arg, map_free_vars=True))
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
+                        if self.users_of_unsupported_ops <= self.max_users_of_unsupported_ops:
                             self.users_of_unsupported_ops += 1
                             logger.info(f"{expr.op.name} will be executed on CPU")
                             return True
@@ -485,15 +506,16 @@ class DetermineTarget(ExprMutator):
         elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is None:
             # operands of unsupported ops to be executed on CPU if they are less that max_depth_to_input_for_fallback ops from input
             def _if_depth_small(expr):
+                # nx.single_source_dijkstra_path_length(self.graph, source=node, weight='length', cutoff=10)
                 args = list(expr.args)
                 index = 0
                 depth_to_input = 0
                 while index < len(args):
                     if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
-                        if depth_to_input < max_depth_to_input_for_fallback:
+                        if depth_to_input < self.max_depth_to_input_for_fallback:
                             args.extend(list([node for node in args[index].args if node not in args]))
                             depth_to_input += 1
-                    elif isinstance(args[index], tvm.relay.Var) and args[index] in inputs_to_cpu_eval:
+                    elif isinstance(args[index], tvm.relay.Var) and tvm.ir.structural_hash(args[index], map_free_vars=True) in self.inputs_to_cpu_eval:
                         logger.info(f"{expr.op.name} will be executed on CPU")
                         return True
 
@@ -507,15 +529,27 @@ class DetermineTarget(ExprMutator):
                 if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
                     if args[index].op.get_attr("target.pybuda_cpudevice") is None:
                         tvm.ir.register_op_attr(args[index].op.name, "target.pybuda_cpudevice", _if_depth_small, level=5)
-                    if depth_to_input < max_depth_to_input_for_fallback:
+                    if depth_to_input < self.max_depth_to_input_for_fallback:
                         args.extend(list([node for node in args[index].args if node not in args]))
                         depth_to_input += 1
                 elif isinstance(args[index], tvm.relay.Var) and depth_to_input:
-                    inputs_to_cpu_eval.append(args[index])
+                    self.inputs_to_cpu_eval.append(tvm.ir.structural_hash(args[index], map_free_vars=True))
                 index += 1
 
 
         return super().visit_call(call)
+
+class ConstructDiGraph(ExprVisitor):
+    def __init__(self):
+        super().__init__()
+        self.graph = nx.MultiDiGraph()
+
+    def visit_call(self, call):
+        if isinstance(call.op, (tvm.ir.op.Op, tvm.relay.function.Function)):
+            for arg in call.args:
+                self.graph.add_edge(tvm.ir.structural_hash(arg, map_free_vars=True), tvm.ir.structural_hash(call, map_free_vars=True))
+        return super().visit_call(call)
+
 
 def reconstruct_ops_for_buda(mod):
     print_all = False
@@ -709,7 +743,7 @@ class FlattenInputs(ExprMutator):
         new_body = self.visit(fn.body)
         return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs)
 
-
+    
 def flatten_inputs(mod, flattened_inputs, flattened_name_map):
 
     # flattens inputs in IR
@@ -720,6 +754,8 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
     return mod
     
 def partition_for_buda(mod, graph_name, compiler_cfg):
+    initialize_pybuda_cpudevice_ops()
+    
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
@@ -750,7 +786,9 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
         logger.trace(mod.functions)
 
         if compiler_cfg.enable_tvm_cpu_fallback:
-            mod["main"] = DetermineTarget().visit(mod["main"])
+            graph_constructor = ConstructDiGraph()
+            graph_constructor.visit(mod["main"])
+            DetermineTarget(graph_constructor.graph).visit(mod["main"])
             logger.trace("After DetermineTarget")
             logger.trace(mod.functions)
 
@@ -780,15 +818,19 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
                 for arg in item.args:
                     if isinstance(arg, tvm.relay.expr.Var):
                         continue
-                    # assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
-                    # assert arg.op in mod.global_var_map_.values(), mod["main"]
+                    assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
+                    assert arg.op in mod.global_var_map_.values(), mod["main"]
 
         assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
 
         constant_updator = UpdateConstants()
 
-        for i in range(1, len(mod.global_var_map_), 1):
-            constant_updator.function_name = mod.get_global_vars()[i].name_hint
+        for i in range(len(mod.global_var_map_)):
+            function_name = mod.get_global_vars()[i].name_hint
+            ResetOpAttributes().visit(mod[mod.get_global_vars()[i]])
+            if function_name == "main":
+                continue
+            constant_updator.function_name = function_name
             rewrite(constant_updator, mod[mod.get_global_vars()[i]])
         params = constant_updator.params
 
