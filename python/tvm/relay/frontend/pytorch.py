@@ -1096,10 +1096,25 @@ class PyTorchOpConverter:
         # normcdf expressed as erf because we don't currently have that intrinsic
         # note that there is also a fastgelu variant approximating normcdf
         # with tanh and third order polynomials, but this is "true" gelu
-        return data * (
-            _expr.const(0.5, dtype=dtype)
-            + _op.erf(data * _expr.const(0.5**0.5, dtype=dtype)) * _expr.const(0.5, dtype=dtype)
-        )
+        if len(inputs) == 2: # For pytorch 1.12
+            if inputs[1] == 'none':
+                return data * (
+                    _expr.const(0.5, dtype=dtype)
+                    + _op.erf(data * _expr.const(0.5**0.5, dtype=dtype)) * _expr.const(0.5, dtype=dtype)
+                )
+            elif inputs[1] == 'tanh':
+                import math
+                return (
+                    (_op.tanh((data + (data * data * data * _expr.const(0.044715, dtype=dtype)))
+                    * _expr.const(math.sqrt(2.0 / math.pi), dtype=dtype)) + _expr.const(1, dtype=dtype))
+                    * (data * _expr.const(0.5, dtype=dtype))
+                )
+
+        else:
+            return data * (
+                _expr.const(0.5, dtype=dtype)
+                + _op.erf(data * _expr.const(0.5**0.5, dtype=dtype)) * _expr.const(0.5, dtype=dtype)
+            )
 
     def selu(self, inputs, input_types):
         data = inputs[0]
