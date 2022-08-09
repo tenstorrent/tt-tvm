@@ -296,7 +296,8 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
 
 def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, return_params=False, compiler_cfg=None, verify_cfg=None):
     target = "llvm"
-    mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
+    verify_args = {'inputs': inputs, 'framework_outputs': golden_outputs, 'verify_cfg': verify_cfg}
+    mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
         verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)

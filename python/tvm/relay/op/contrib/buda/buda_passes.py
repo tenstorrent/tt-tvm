@@ -1,13 +1,7 @@
-from ast import Invert
-import logging
-
 from pkg_resources import require
 
 import tvm
-from tvm import relay
-from tvm.relay.expr_functor import ExprVisitor, ExprMutator
-from tvm._ffi.base import TVMError
-from tvm.ir.transform import PassContext
+
 from tvm.relay import transform
 from ....dataflow_pattern import wildcard, is_op
 
@@ -1600,108 +1594,97 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
             cubic_alpha=-0.75,
         )
 
-def run_pattern_callback(relay_module, callback, params=None, inputs=None, target=None, golden_outputs=None, verify_cfg=None, run_verify=False):
-    callback_name = type(callback).__name__
+def _get_callback_name(callback):
+    if isinstance(callback, DFPatternCallback):
+        return type(callback).__name__
+    elif isinstance(callback, tvm.transform.Pass):
+        return callback.info.name
+    else:
+        raise NotImplementedError(f"Type of callback ({type(callback)}) not implemented")
 
-    _run_verify = run_verify and params and inputs and target and golden_outputs and verify_cfg
-    if run_verify and not _run_verify:
-        logger.warning(f"Cannot verify relay module after buda pass: {callback_name} because one of (params, inputs, target, golden_outputs, veirfy_cfg) is None")
 
-    relay_module['main'] = rewrite(callback, relay_module['main'])
+def _run_pattern_callback(relay_module, callback, callback_name):
+
+    if isinstance(callback, DFPatternCallback):
+        relay_module['main'] = rewrite(callback, relay_module['main'])
+    elif isinstance(callback, tvm.transform.Pass):
+        relay_module = tvm.transform.Sequential([callback])(relay_module)
+    else:
+        raise NotImplementedError(f"Type of callback ({type(callback)}) not implemented")
+
     logger.trace(f"After {callback_name}")
     logger.trace(relay_module.functions)
 
-    if _run_verify:
-        tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, golden_outputs, callback_name, verify_cfg)
-
-def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None, golden_outputs=None, verify_cfg=None):
-
-    verify_args = (params, inputs, target, golden_outputs, verify_cfg)
-
-    run_pattern_callback(relay_module, ConvertLayout(), *verify_args)
-
-    run_pattern_callback(relay_module, RemoveCast(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeStack(), *verify_args)
-
-    relay_module = tvm.transform.Sequential([transform.DecomposeVariance()])(relay_module)
-    logger.trace("After DecomposeVariance")
-    logger.trace(relay_module.functions)
-
-    run_pattern_callback(relay_module, ConvertArgmaxTakeToReduceMax(), *verify_args)
-
-    run_pattern_callback(relay_module, AddSqueezeForArgmax(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeEinsum(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeLayoutTransform(), *verify_args)
-
-    run_pattern_callback(relay_module, LiftLinearSplit(), *verify_args)
-
-    run_pattern_callback(relay_module, LowerSplitToStridedSlice(), *verify_args)
-
-    run_pattern_callback(relay_module, DenseWeightTranspose(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposePower(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeNegative(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeRsqrt(), *verify_args)
-
-    run_pattern_callback(relay_module, InvertDivide(), *verify_args)
-
-    run_pattern_callback(relay_module, ExplicateTranspose(), *verify_args)
-
-    run_pattern_callback(relay_module, ExplicateHSliceTranspose(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeConv1DToConv2D(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeMultiAxisMax(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeMultiAxisTranspose(), *verify_args)
-
-    run_pattern_callback(relay_module, EstimateWhereInCausalMask(), *verify_args)
-
-    run_pattern_callback(relay_module, LowerAdaptiveAvgPool(), *verify_args)
-
-    run_pattern_callback(relay_module, LowerAdaptiveMaxPool(), *verify_args)
-
-    run_pattern_callback(relay_module, EnsureKeepdims(), *verify_args)
-
-    run_pattern_callback(relay_module, LowerSqueezeToReshape(), *verify_args)
-
-    run_pattern_callback(relay_module, PopulateTransposeAxes(), *verify_args)
-
-    run_pattern_callback(relay_module, PopulateStridedSliceAxes(), *verify_args)
-
-    run_pattern_callback(relay_module, ConvertExpandDimsToReshape(), *verify_args)
-    
-    run_pattern_callback(relay_module, DecomposeMultiAxisMean(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeMultiAxisBroadcast(), *verify_args)
-
-    run_pattern_callback(relay_module, RemoveRedundantTake(), *verify_args)
-
-    run_pattern_callback(relay_module, RemoveRedundantReshape(), *verify_args)
-
-    run_pattern_callback(relay_module, TransposePad(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeMultiRangeTake(), *verify_args)
-
-    run_pattern_callback(relay_module, LowerTakeToStridedSlice(), *verify_args)
-
-    run_pattern_callback(relay_module, ConvertAddToBiasAddAfterConv2d(), *verify_args)
-
-    run_pattern_callback(relay_module, SkipRedundantConcatenateSlice(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeBatchFlatten(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeRepeat(), *verify_args)
-
-    run_pattern_callback(relay_module, DecomposeTile(), *verify_args)
-
-    run_pattern_callback(relay_module, ConvertGlobalAvgPool2dtoAvgPool2d(), *verify_args)
-
-    run_pattern_callback(relay_module, ConvertUpsampleToResize2d(), *verify_args)
-
     return relay_module
+
+
+def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
+    
+    run_verify = verify_cfg and params and inputs and target and framework_outputs and verify_cfg.verify_each_buda_pass
+    if verify_cfg and verify_cfg.verify_each_buda_pass and not run_verify:
+        logger.warning(f"Cannot verify relay module after buda passes because one of (params, inputs, target, golden_outputs, veirfy_cfg) is None")
+
+    for callback in callbacks:
+        callback_name = _get_callback_name(callback)
+        relay_module = _run_pattern_callback(relay_module, callback, callback_name)
+        if run_verify:
+            tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, framework_outputs, callback_name, verify_cfg)
+    
+    return relay_module
+
+
+def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
+
+    return run_pattern_callbacks(
+        relay_module,
+        [
+            ConvertLayout(),
+            RemoveCast(),
+            DecomposeStack(),
+            transform.DecomposeVariance(),
+            ConvertArgmaxTakeToReduceMax(),
+            AddSqueezeForArgmax(),
+            DecomposeEinsum(),
+            DecomposeLayoutTransform(),
+            LiftLinearSplit(),
+            LowerSplitToStridedSlice(),
+            DenseWeightTranspose(),
+            DecomposePower(),
+            DecomposeNegative(),
+            DecomposeRsqrt(),
+            InvertDivide(),
+            ExplicateTranspose(),
+            ExplicateHSliceTranspose(),
+            DecomposeConv1DToConv2D(),
+            DecomposeMultiAxisMax(),
+            DecomposeMultiAxisTranspose(),
+            EstimateWhereInCausalMask(),
+            LowerAdaptiveAvgPool(),
+            LowerAdaptiveMaxPool(),
+            EnsureKeepdims(),
+            LowerSqueezeToReshape(),
+            PopulateTransposeAxes(),
+            PopulateStridedSliceAxes(),
+            ConvertExpandDimsToReshape(),
+            DecomposeMultiAxisMean(),
+            DecomposeMultiAxisBroadcast(),
+            RemoveRedundantTake(),
+            RemoveRedundantReshape(),
+            TransposePad(),
+            DecomposeMultiRangeTake(),
+            LowerTakeToStridedSlice(),
+            ConvertAddToBiasAddAfterConv2d(),
+            SkipRedundantConcatenateSlice(),
+            DecomposeBatchFlatten(),
+            DecomposeRepeat(),
+            DecomposeTile(),
+            ConvertGlobalAvgPool2dtoAvgPool2d(),
+            ConvertUpsampleToResize2d(), 
+        ],
+        params=params,
+        inputs=inputs,
+        target=target,
+        framework_outputs=framework_outputs,
+        verify_cfg=verify_cfg
+    )
+
