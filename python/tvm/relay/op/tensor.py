@@ -357,7 +357,7 @@ def reciprocal(data):
     return _make.reciprocal(data)
 
 
-def gelu(data):
+def gelu(data, approximate="none"):
     """Compute elementwise gelu of data.
 
     .. math::
@@ -374,7 +374,7 @@ def gelu(data):
     result : relay.Expr
         The computed result.
     """
-    return _make.gelu(data)
+    return _make.gelu(data, approximate)
 
 
 def layernorm(data, gamma, beta, eps=0, axis=-1):

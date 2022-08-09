@@ -160,7 +160,7 @@ TVM_REGISTER_GLOBAL("topi.reciprocal").set_body([](TVMArgs args, TVMRetValue* rv
 });
 
 TVM_REGISTER_GLOBAL("topi.gelu").set_body([](TVMArgs args, TVMRetValue* rv) {
-  *rv = reciprocal(args[0]);
+  *rv = gelu(args[0]);
 });
 
 TVM_REGISTER_GLOBAL("topi.layernorm").set_body([](TVMArgs args, TVMRetValue* rv) {
