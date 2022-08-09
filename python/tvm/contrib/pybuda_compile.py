@@ -155,7 +155,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
         json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
     elif isinstance(module, torch.nn.Module):
         json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
-    elif isinstance(module, tf.keras.Model):
+    elif isinstance(module, (tf.keras.Model, tf.keras.layers.Layer)):
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
         json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
@@ -611,7 +611,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
         torch_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
-    elif isinstance(module, tf.keras.Model):
+    elif isinstance(module, (tf.keras.Model, tf.keras.layers.Layer)):
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
