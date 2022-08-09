@@ -622,7 +622,7 @@ def verify_tvm_compile(mod, params, inputs, target, framework_outputs, compile_l
         verify_outputs(framework_outputs, relay_outputs, compile_location)
 
 
-def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
+def compile_for_buda(relay_module, graph_name, target='llvm', params=None, inputs=None, framework_outputs=None, verify_cfg=None):
 
     if not isinstance(relay_module, (IRModule, _function.Function)):
         raise ValueError("Type of input parameter mod must be tvm.IRModule")
@@ -650,7 +650,7 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None):
 
         relay_module = run_relay_compile_passes(relay_module)
         dump_graph(relay_module, graph_name, "after_relay_passes")
-        compiled_relay_module = run_buda_compile_passes(relay_module)
+        compiled_relay_module = run_buda_compile_passes(relay_module, params, inputs, target, framework_outputs, verify_cfg)
         dump_graph(compiled_relay_module, graph_name, "after_buda_passes")
 
     return compiled_relay_module, params
