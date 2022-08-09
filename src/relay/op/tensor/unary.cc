@@ -534,16 +534,46 @@ RELAY_REGISTER_UNARY_OP("reciprocal")
     .set_support_level(3)
     .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::reciprocal));
 
-RELAY_REGISTER_UNARY_OP("gelu")
-    .describe(R"code(Returns the gelu activation of input array, computed element-wise.
 
-.. math::
-   GELU(x)
+Array<te::Tensor> GeluCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                                const Type& out_type) {
+  const GeluAttrs* param = attrs.as<GeluAttrs>();
+  ICHECK(param != nullptr);
+  return Array<te::Tensor>{topi::gelu(inputs[0])};
+}
 
-)code" TVM_ADD_FILELINE)
+TVM_REGISTER_NODE_TYPE(GeluAttrs);
+bool GeluRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+                 const TypeReporter& reporter) {
+    ICHECK_EQ(types.size(), 2) << "Expects 2 types, [input, output]";
+    const auto* data = types[0].as<TensorTypeNode>();
+    if (data == nullptr) {
+        ICHECK(types[0].as<IncompleteTypeNode>())
+        << "Layernorm: expect input type to be TensorType but get " << types[0];
+        return false;
+    }
+
+    reporter->Assign(types[1], TensorType(data->shape, data->dtype));
+
+  return true;
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.gelu").set_body_typed([](Expr act, String approximate) {
+    static const Op& op = Op::Get("gelu");
+    auto attrs = make_object<GeluAttrs>();
+    attrs->approximate = approximate;
+    return Call(op, {act,}, Attrs(attrs), {});
+});
+
+RELAY_REGISTER_OP("gelu")
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_type_rel("Gelu", GeluRel)
+    .set_attr<TOpPattern>("TOpPattern", kElemWise)
+    .set_attr<TOpIsStateful>("TOpIsStateful", false)
+    .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
     .set_support_level(3)
-    .set_attr<FTVMCompute>("FTVMCompute", RELAY_UNARY_COMPUTE(topi::reciprocal));
-
+    .set_attr<FTVMCompute>("FTVMCompute", GeluCompute);
 
 
 }  // namespace relay

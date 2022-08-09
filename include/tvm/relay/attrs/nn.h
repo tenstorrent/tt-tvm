@@ -1369,6 +1369,15 @@ struct LayerNormAttrs : public tvm::AttrsNode<LayerNormAttrs> {
   }
 };  // struct LayerNormAttrs
 
+/*! \brief Attributes used in Gelu operator */
+struct GeluAttrs : public tvm::AttrsNode<GeluAttrs> {
+  std::string approximate;
+
+  TVM_DECLARE_ATTRS(GeluAttrs, "relay.attrs.GeluAttrs") {
+    TVM_ATTR_FIELD(approximate).set_default("none").describe("Specify approximate mode for Gelu");
+  }
+};  // struct GeluAttrs
+
 /*! \brief Attributes used in group_norm operator */
 struct GroupNormAttrs : public tvm::AttrsNode<GroupNormAttrs> {
   int num_groups;

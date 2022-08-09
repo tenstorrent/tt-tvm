@@ -246,7 +246,7 @@ class ReconstructPyTorchGeluNew(DFPatternCallback):
         if not constnats_correct:
             return post
 
-        return tvm.relay.gelu(node_map[self.act][0])
+        return tvm.relay.gelu(node_map[self.act][0], approximate="tanh")
 
 class ReconstructPyTorchGelu(DFPatternCallback):
     def __init__(self):
