@@ -2790,7 +2790,9 @@ class Gather(OnnxOpConverter):
         axis = attr.get("axis", 0)
         data = inputs[0]
         indices = inputs[1]
-        indices = normalize_gather_indices(data, indices, axis)
+
+        # WIP DO NOT ADD THAT LESS OP
+        # indices = normalize_gather_indices(data, indices, axis)
         return _op.take(data, indices, axis)
 
 
@@ -2802,7 +2804,7 @@ class GatherElements(OnnxOpConverter):
         data = inputs[0]
         indices = inputs[1]
         axis = attr.get("axis", 0)
-        indices = normalize_gather_indices(data, indices, axis)
+        # indices = normalize_gather_indices(data, indices, axis)
         return _op.gather(data, axis, indices)
 
 
