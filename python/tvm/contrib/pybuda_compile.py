@@ -282,6 +282,19 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
 
     # TODO: Extract pipeline info from partitioned_mod
     if cpu_json_graph["graph"] != "":
+        cpu_graph = json.loads(cpu_json_graph["graph"])
+        dev_graph = json.loads(dev_json_graph["graph"])
+        passthrough_needed = [[input_name == node["name"] for node in dev_graph["nodes"]].index(True) if any([input_name == node["name"] for node in dev_graph["nodes"]]) else -1 for input_name in input_names]
+
+        if any([p >= 0 for p in passthrough_needed]):
+            for passthrough_node, name in zip(passthrough_needed, input_names):
+                if passthrough_node >= 0:
+                    cpu_graph["nodes"].append(dev_graph["nodes"][passthrough_node])
+                    cpu_graph["arg_nodes"].append(len(cpu_graph["nodes"]) - 1)
+                    cpu_graph["heads"].append([len(cpu_graph["nodes"]) - 1, 0, 0])
+
+            cpu_json_graph["graph"] = json.dumps(cpu_graph)
+
         save_nid_to_input_idx(flattened_input_names, cpu_json_graph) # Input order might not be preserved by TVM
         cpu_json_graph["num_pybuda_inputs"] = len(flattened_inputs)
         json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_json_graph, buda_params=buda_params)))
