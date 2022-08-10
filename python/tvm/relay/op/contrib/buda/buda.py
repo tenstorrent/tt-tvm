@@ -778,7 +778,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
             DetermineTarget(graph_constructor.graph).visit(mod["main"])
             logger.trace("After DetermineTarget")
             logger.trace(mod.functions)
-
+        
         mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
         logger.trace("After AnnotateTarget")
         logger.trace(mod.functions)
