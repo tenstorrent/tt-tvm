@@ -474,7 +474,7 @@ class DetermineTarget(ExprVisitor):
         super().__init__()
         self.users_of_unsupported_ops = 0
         self.graph = graph
-        self.inputs_to_cpu_eval = []
+        self.nodes_to_cpu_eval = []
         self.max_depth_to_input_for_fallback = 4
         self.max_users_of_unsupported_ops = 4
 
@@ -482,58 +482,45 @@ class DetermineTarget(ExprVisitor):
         if tvm.ir.structural_hash(call, map_free_vars=True) not in self.graph:
             assert False
 
-        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is None:
-            # for non-unary ops, if one of the args is unsupported, do the op on CPU, up to a total of max_users_of_unsupported_ops ops
-            # to reduce data movement
-            def _if_operand_unsupported(expr):
-                node = tvm.ir.structural_hash(expr, map_free_vars=True)
-                for arg in expr.args:
-                    output_nodes = self.graph.out_degree(tvm.ir.structural_hash(arg, map_free_vars=True))
-                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
-                        if self.users_of_unsupported_ops <= self.max_users_of_unsupported_ops:
-                            self.users_of_unsupported_ops += 1
-                            logger.info(f"{expr.op.name} will be executed on CPU")
-                            return True
-                return False
+        def _cpu_eval(expr):
+            cpu_eval = tvm.ir.structural_hash(expr, map_free_vars=True) in self.nodes_to_cpu_eval
+            if cpu_eval:
+                logger.info(f"{expr.op.name} will be executed on CPU")
+            return cpu_eval
 
+        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
+            # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, up to a total of
+            # max_users_of_unsupported_ops ops to reduce data movement
             if len(call.args) > 1:
                 for arg in call.args:
-                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None:
-                        if call.op.get_attr("target.pybuda_cpudevice") is None:
-                            tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _if_operand_unsupported, level=5)
+                    output_nodes = self.graph.out_degree(tvm.ir.structural_hash(arg, map_free_vars=True))
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
+                        self.nodes_to_cpu_eval.append(tvm.ir.structural_hash(call, map_free_vars=True))
+                        try:
+                            tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                        except:
+                            logger.info(f"{call.op.name} already registered")
                         break
 
         elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is None:
             # operands of unsupported ops to be executed on CPU if they are less that max_depth_to_input_for_fallback ops from input
-            def _if_depth_small(expr):
-                # nx.single_source_dijkstra_path_length(self.graph, source=node, weight='length', cutoff=10)
-                args = list(expr.args)
-                index = 0
-                depth_to_input = 0
-                while index < len(args):
-                    if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
-                        if depth_to_input < self.max_depth_to_input_for_fallback:
-                            args.extend(list([node for node in args[index].args if node not in args]))
-                            depth_to_input += 1
-                    elif isinstance(args[index], tvm.relay.Var) and tvm.ir.structural_hash(args[index], map_free_vars=True) in self.inputs_to_cpu_eval:
-                        logger.info(f"{expr.op.name} will be executed on CPU")
-                        return True
-
-                    index += 1
-                return False
-
             args = list(call.args)
             index = 0
             depth_to_input = 0
+            nodes_to_eval_if_successful = []
             while index < len(args):
                 if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
-                    if args[index].op.get_attr("target.pybuda_cpudevice") is None:
-                        tvm.ir.register_op_attr(args[index].op.name, "target.pybuda_cpudevice", _if_depth_small, level=5)
+                    nodes_to_eval_if_successful.append(tvm.ir.structural_hash(args[index], map_free_vars=True))
+                    try:
+                        tvm.ir.register_op_attr(args[index].op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                    except:
+                        logger.info(f"{args[index].op.name} already registered")
                     if depth_to_input < self.max_depth_to_input_for_fallback:
                         args.extend(list([node for node in args[index].args if node not in args]))
                         depth_to_input += 1
                 elif isinstance(args[index], tvm.relay.Var) and depth_to_input:
-                    self.inputs_to_cpu_eval.append(tvm.ir.structural_hash(args[index], map_free_vars=True))
+                    self.nodes_to_cpu_eval.extend(nodes_to_eval_if_successful)
+
                 index += 1
 
 
