@@ -216,6 +216,40 @@ class ReconstructTFGelu(DFPatternCallback):
 
         return tvm.relay.gelu(node_map[self.act][0])
 
+class ReconstructOnnxGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.one_over_root_two = wildcard()
+        self.one = is_constant()
+        self.half_added = is_constant()
+
+        times_root_two = is_op("multiply")(self.act, self.one_over_root_two)
+        erf = is_op("erf")(times_root_two)
+        add = is_op("add")(erf, self.one)
+        mult2 = is_op("multiply")(self.act, add)
+        gelu = is_op("multiply")(mult2, self.half_added)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        half_added = math.isclose(node_map[self.half_added][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
+
+        sqrt_half = node_map[self.one_over_root_two][0]
+        # Relay graph may use sqrt(1/2) outright, or take the recipricoral of sqrt(2)
+        if isinstance(sqrt_half, tvm.relay.expr.Constant):
+            sqrt_half = sqrt_half.data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            sqrt_half = sqrt_half.args[0].data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not (half_added and one_added and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
 class ReconstructPyTorchGeluNew(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -550,6 +584,10 @@ def reconstruct_ops_for_buda(mod):
 
     mod["main"] = rewrite(ReconstructPyTorchGeluNew(), mod["main"])
     logger.trace("After ReconstructPyTorchGeluNew")
+    logger.trace(mod.functions)
+
+    mod["main"] = rewrite(ReconstructOnnxGelu(), mod["main"])
+    logger.trace("After ReconstructOnnxGelu")
     logger.trace(mod.functions)
 
     mod["main"] = rewrite(ReconstructTFGelu(), mod["main"])
