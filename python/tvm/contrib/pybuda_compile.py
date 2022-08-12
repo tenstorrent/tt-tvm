@@ -464,13 +464,40 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     _, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     
     dev_json_graph["params"] = {}
+    cpu_json_graph["params"] = {}
     for function_name in buda_params.keys():
-        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+        if function_name in dev_json_graph["param_names"]:
+            dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+        if function_name in cpu_json_graph["param_names"]:
+            cpu_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_json_graph["param_names"][function_name])})
 
-    traced_model_inputs = [i.name.split(':')[0] for i in frozen_func.inputs]
-    save_nid_to_input_idx(traced_model_inputs, json_graph = dev_json_graph)
+
     json_graphs = []
+
+    # TODO: Extract pipeline info from partitioned_mod
+    if cpu_json_graph["graph"] != "":
+        cpu_graph = json.loads(cpu_json_graph["graph"])
+        dev_graph = json.loads(dev_json_graph["graph"])
+        passthrough_needed = [[input_name == node["name"] for node in dev_graph["nodes"]].index(True) if any([input_name == node["name"] for node in dev_graph["nodes"]]) else -1 for input_name in flattened_input_names]
+
+        if any([p >= 0 for p in passthrough_needed]):
+            for passthrough_node, name in zip(passthrough_needed, flattened_input_names):
+                if passthrough_node >= 0:
+                    cpu_graph["nodes"].append(dev_graph["nodes"][passthrough_node])
+                    cpu_graph["arg_nodes"].append(len(cpu_graph["nodes"]) - 1)
+                    cpu_graph["heads"].append([len(cpu_graph["nodes"]) - 1, 0, 0])
+
+            cpu_json_graph["graph"] = json.dumps(cpu_graph)
+
+        save_nid_to_input_idx(flattened_input_names, cpu_json_graph) # Input order might not be preserved by TVM
+        cpu_json_graph["num_pybuda_inputs"] = len(flattened_inputs)
+        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+    else:
+        save_nid_to_input_idx(flattened_input_names, dev_json_graph) # Input order might not be preserved by TVM
+        dev_json_graph["num_pybuda_inputs"] = len(flattened_inputs)
+
     json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+
     return json_graphs, flattened_inputs
 
 # TODO (arui) : Verify graphdef output vs. TVM output
