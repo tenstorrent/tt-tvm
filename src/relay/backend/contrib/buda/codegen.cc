@@ -48,6 +48,8 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
       } else if (name == "pybuda.buda_conv2d_with_bias") {
         std::vector<std::string> names = {"nn.conv2d", "nn.bias_add"};
         call = GetRootCall(fn->body.as<CallNode>(), 1, names);
+      } else if (name == "pybuda.adv_index") {
+        call = GetRootCall(fn->body.as<CallNode>(), 0, "adv_index");
       }
     } else {
       LOG(FATAL) << "Buda JSON runtime does not support calls to " << cn->op->GetTypeKey();

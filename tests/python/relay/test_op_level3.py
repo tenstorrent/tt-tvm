@@ -1835,6 +1835,29 @@ def test_adv_index(target, dev, executor_kind):
     )
     verify_adv_index((10, 5, 15), [(1, 2, 1), (1, 2, 7)])
 
+# Reference for testing direct support for adv_index op with bool indices support
+# 
+# def test_adv_index_with_mask(target, dev, executor_kind):
+#     def verify_adv_index(data_shape, index, bool_mask_shape):
+#         dtype = "float32"
+#         inputs = [relay.var("data", relay.TensorType(data_shape, dtype))]
+#         np_data = np.random.uniform(size=data_shape).astype(dtype)
+#         np_indices = np.ones(bool_mask_shape, dtype=bool)
+#         np_indices[-1] = False
+#         inputs.append(relay.var("index_{}".format(index), shape=(), dtype="int"))
+#         inputs.append(relay.var("mask_{}".format(index), relay.TensorType(bool_mask_shape, "bool")))
+#         np_out = np_data[index, np_indices]
+#         np_args = [np_data] + [index, np_indices]
+#         out = relay.op.adv_index(inputs)
+
+#         func = relay.Function(inputs, out)
+#         op_res = relay.create_executor(executor_kind, device=dev, target=target).evaluate(func)(
+#             *np_args
+#         )
+#         tvm.testing.assert_allclose(op_res.numpy(), np_out, rtol=1e-5)
+
+#     verify_adv_index((2, 3), 1, (3,))
+
 
 # Helper for testing binop functions
 scanops_supported = {"cumsum": relay.op.cumsum, "cumprod": relay.op.cumprod}
