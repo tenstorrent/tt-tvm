@@ -71,7 +71,15 @@ class CreateJson(ExprVisitor):
     def visit_var(self, call):
         name = call.name_hint
         op = self.get_default_op(name)
-        op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
+
+        if type(call.checked_type) == tvm.ir.type.TupleType:
+            shape = []
+            for field in call.checked_type.fields:
+                if hasattr(field, "shape"):
+                    shape.append([int(dim) for dim in field.shape])
+            op["cache"] = {"shape": shape}
+        else:
+            op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
         op["opcode"] = "Input"
         op["class"] = "Input::"
         op["type"] = "Input::input"
