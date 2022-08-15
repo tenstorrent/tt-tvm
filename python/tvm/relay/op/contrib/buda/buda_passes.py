@@ -659,9 +659,13 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         self.pattern = is_op("take")(self.input_tensor, self.indices)
 
     def callback(self, pre, post, node_map):
-        act = node_map[self.input_tensor][0]
-        
-        act_shape = list(pre.args[0].checked_type.shape)
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        act = pre_node_map[self.input_tensor][0]
+        try:
+            act_shape = list(pre_node_map[self.input_tensor][0].checked_type.shape)
+        except ValueError as e:
+            act_shape = list(pre_node_map[self.input_tensor][0].attrs.newshape)
 
         try:
             indices = node_map[self.indices][0].data.numpy().item()
