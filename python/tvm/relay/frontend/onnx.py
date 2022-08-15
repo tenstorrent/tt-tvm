@@ -6912,12 +6912,19 @@ class GraphProto:
             if self._freeze_params:
                 self._nodes[init_tensor.name] = _expr.const(array)
             else:
-                self._params[init_tensor.name] = array
-                self._nodes[init_tensor.name] = new_var(
-                    init_tensor.name,
-                    shape=self._params[init_tensor.name].shape,
-                    dtype=self._params[init_tensor.name].dtype,
-                )
+                if (
+                    "weight" not in init_tensor.name
+                    and "bias" not in init_tensor.name
+                    and ("int" in array.dtype or "bool" in array.dtype)
+                ):
+                    self._nodes[init_tensor.name] = _expr.const(array)
+                else:
+                    self._params[init_tensor.name] = array
+                    self._nodes[init_tensor.name] = new_var(
+                        init_tensor.name,
+                        shape=self._params[init_tensor.name].shape,
+                        dtype=self._params[init_tensor.name].dtype,
+                    )
 
     def _parse_graph_input(self, graph):
         for i in graph.input:

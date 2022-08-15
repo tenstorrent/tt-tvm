@@ -372,7 +372,8 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
         ort_sess = ort.InferenceSession(path)
         framework_outputs = ort_sess.run(output_names, input_dict)
 
-    mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict)
+    mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict, freeze_params=False)
+    mod = relay.transform.DynamicToStatic()(mod)
 
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
