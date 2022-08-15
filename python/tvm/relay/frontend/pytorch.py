@@ -44,6 +44,7 @@ from ..prelude import Prelude, StaticTensorArrayOps
 from ..ty import Any, TensorType, TupleType
 from . import qnn_torch
 from .common import AttrCvt, get_relay_op, gru_cell, logger, rnn_cell
+from .common import infer_type as _infer_type
 from .common import infer_shape as _infer_shape
 from .common import infer_value as _infer_value
 from .common import infer_value_simulated as _infer_value_simulated
@@ -432,6 +433,16 @@ class PyTorchOpConverter:
 
         data = inputs[0]
         axis = inputs[1]
+
+        ref_dtype = _infer_type(data[0]).checked_type.dtype
+        for i in range(1, len(data)):
+            cur_dtype = _infer_type(data[i]).checked_type.dtype
+
+            if ref_dtype != cur_dtype:
+                data[i] = _op.cast(data[i], ref_dtype)
+
+        if len(data) == 2 and len(_infer_shape(data[0])) != len(_infer_shape(data[1])) and (len(_infer_shape(data[0])) - len(_infer_shape(data[1]))) == 1:
+            data[0] = _op.transform.squeeze(data[0], _op.const([0,]))
 
         if not isinstance(data, list):
             return tensor_array_concat(data, axis)
@@ -4335,6 +4346,7 @@ class PyTorchOpConverter:
             "aten::tril": self.tril,
             "aten::as_strided": self.as_strided,
             "aten::_weight_norm": self.weight_norm,
+            "aten::new_full": self.new_full,
         }
 
     def update_convert_map(self, custom_map):
