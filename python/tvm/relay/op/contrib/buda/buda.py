@@ -56,6 +56,7 @@ def _register_external_op_helper_pybuda(op_name, supported=True):
 
 _register_external_op_helper_pybuda("abs")
 _register_external_op_helper_pybuda("add")
+_register_external_op_helper_pybuda("adv_index")
 _register_external_op_helper_pybuda("argmax")
 _register_external_op_helper_pybuda("broadcast_to")
 _register_external_op_helper_pybuda("clip")
@@ -88,6 +89,7 @@ _register_external_op_helper_pybuda("ones")
 _register_external_op_helper_pybuda("power")
 _register_external_op_helper_pybuda("reciprocal")
 _register_external_op_helper_pybuda("reshape")
+_register_external_op_helper_pybuda("scatter_add")
 _register_external_op_helper_pybuda("scatter")
 _register_external_op_helper_pybuda("sigmoid")
 _register_external_op_helper_pybuda("sin")
@@ -96,6 +98,7 @@ _register_external_op_helper_pybuda("stack")
 _register_external_op_helper_pybuda("strided_slice")
 _register_external_op_helper_pybuda("subtract")
 _register_external_op_helper_pybuda("sum")
+_register_external_op_helper_pybuda("take")
 _register_external_op_helper_pybuda("tanh")
 _register_external_op_helper_pybuda("transpose")
 _register_external_op_helper_pybuda("where")
@@ -146,6 +149,12 @@ def decompose_concat_input_tuple():
     act = is_tuple(None)
     return is_op("concatenate")(act)
 
+def decompose_adv_index_input_tuple():
+    act = wildcard()
+    indices = wildcard()
+    input = is_tuple([act, indices])
+
+    return is_op("adv_index")(input)
 
 def merge_conv2d_with_bias():
     input = wildcard()
@@ -170,9 +179,10 @@ def pattern_table():
     layernorm = ("pybuda.layernorm", nn_layernorm_to_buda_layernorm())
     binary_stack = ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
     concatenate = ("pybuda.concatenate", decompose_concat_input_tuple())
+    adv_index = ("pybuda.adv_index", decompose_adv_index_input_tuple())
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
 
-    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias]
+    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias, adv_index]
 
     return buda_patterns
 
@@ -842,6 +852,8 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
             if isinstance(item, tvm.relay.expr.Call):
                 for arg in item.args:
                     if isinstance(arg, tvm.relay.expr.Var):
+                        continue
+                    if isinstance(arg, tvm.relay.expr.Tuple):
                         continue
                     assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
                     assert arg.op in mod.global_var_map_.values(), mod["main"]
