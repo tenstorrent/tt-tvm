@@ -279,6 +279,9 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
     const_name_to_constant_.emplace(name, constant_node->data);
     const_names_.push_back(name);
     auto node = std::make_shared<JSONGraphNode>(name, /*op_type=*/"const");
+    int is_param = 0;
+    if (constant_node->is_param) {is_param = 1;}
+    node->SetAttr("is_param", std::to_string(is_param));
     return AddNode(node, GetRef<Expr>(constant_node));
   }
 

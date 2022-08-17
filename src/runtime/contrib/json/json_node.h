@@ -155,6 +155,9 @@ class JSONGraphNode {
         ICHECK(reader->NextArrayItem());
         reader->Read(&shape_);
         ICHECK(!reader->NextArrayItem());
+      } else if (key == "is_param"){
+        reader->Read(&value);
+        attrs_[key] = strtoul(value.c_str(), nullptr, 10);
       } else {
         reader->BeginArray();
         ICHECK(reader->NextArrayItem());

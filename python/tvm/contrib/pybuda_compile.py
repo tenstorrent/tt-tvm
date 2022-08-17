@@ -512,15 +512,15 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
                 break
         if not weight_found:
             param_name_lookup[bad_name] = bad_name
-            non_weight_params[bad_name] = value
+            non_weight_params[bad_name] = (value, False)
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
     else:
         if len(compiler_cfg.tvm_constnat_prop_mask):
-            propped_params = {k : v for k, v, in params.items() if any([mask in param_name_lookup[k] for mask in compiler_cfg.tvm_constnat_prop_mask])}
+            propped_params = {k : (v, True) for k, v, in params.items() if any([mask in param_name_lookup[k] for mask in compiler_cfg.tvm_constnat_prop_mask])}
             propped_params.update(non_weight_params)
         else:
-            propped_params = params
+            propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}

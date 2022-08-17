@@ -47,9 +47,14 @@ from .transform import InferType
 def _convert_param_map(params):
     inputs = {}
     for name, param in params.items():
+        is_param = False
         if isinstance(param, np.ndarray):
             param = _nd.array(param)
-        inputs[name] = _expr.const(param)
+        elif isinstance(param, tuple):
+            is_param = param[1]
+            param = _nd.array(param[0])
+
+        inputs[name] = _expr.const(param, is_param=is_param)
     return inputs
 
 
