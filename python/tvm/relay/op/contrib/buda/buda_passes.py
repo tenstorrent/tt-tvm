@@ -1,3 +1,4 @@
+from curses import A_BLINK
 from pkg_resources import require
 
 import tvm
@@ -222,15 +223,7 @@ class DecomposeMultiAxisTranspose(DFPatternCallback):
         if transpose_axes == None:
             return post
 
-        changed_axis = []
-
-        for i, axis in enumerate(transpose_axes):
-            if i != axis:
-                changed_axis.append([i, axis])
-
-
-        assert len(changed_axis) >= 2, "Transpose op has at least 2 axes changed"
-        if len(changed_axis) == 2:
+        if len(transpose_axes) == 2:
             return post
 
         ndim = len(act_shape)
@@ -1180,6 +1173,55 @@ class DecomposeEinsum(DFPatternCallback):
             result = tvm.relay.reshape(result, newshape=[int(srcA_shape[2]), int(srcA_shape[3]), int(srcA_shape[0]), int(srcB_shape[3]),]) #bnid
 
             return tvm.relay.transpose(result, axes=[2, 0, 1, 3]) # ijbn
+
+        elif match_einsum_pattern("jbki,jfki->jkbf", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            assert len(srcA_shape) == 4 and len(srcB_shape) == 4
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            transpose_srcA = tvm.relay.transpose(A, axes=[0, 2, 1, 3]) # jkbi
+            transpose_srcB = tvm.relay.transpose(B, axes=[0, 2, 3, 1]) # jkif
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[1]), int(srcA_shape[3]),] # j*k bi
+            new_shape_srcB = [int(srcB_shape[0]) * int(srcB_shape[2]), int(srcB_shape[3]), int(srcB_shape[1]),] # j*k if
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+            result = tvm.relay.reshape(result, newshape=[int(srcA_shape[0]), int(srcA_shape[2]), int(srcA_shape[1]), int(srcB_shape[1]),]) #jkbf
+
+            return result
+
+        elif match_einsum_pattern("f,bfde->fbde", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            assert len(srcA_shape) == 1 and len(srcB_shape) == 4
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            reshape_srcA = tvm.relay.reshape(A, newshape=[1, int(srcA_shape[0]), 1, 1]) # 1 f 1 1
+            result = tvm.relay.multiply(reshape_srcA, B) # b f d e
+            return tvm.relay.transpose(result, axes=[1, 0, 2, 3]) # fbde
+        elif match_einsum_pattern("jikd,jkgi->jkdg", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+            assert len(srcA_shape) == 4 and len(srcB_shape) == 4
+            A = node_map[self.act][0][0]
+            B = node_map[self.act][0][1]
+
+            transpose_srcA = tvm.relay.transpose(A, axes=[0, 2, 3, 1]) # jkdi
+            transpose_srcB = tvm.relay.transpose(B, axes=[0, 1, 3, 2]) # jkig
+            new_shape_srcA = [int(srcA_shape[0]) * int(srcA_shape[2]), int(srcA_shape[3]), int(srcA_shape[1]),] # j*k bi
+            new_shape_srcB = [int(srcB_shape[0]) * int(srcB_shape[1]), int(srcB_shape[3]), int(srcB_shape[2]),] # j*k if
+            reshape_srcA = tvm.relay.reshape(transpose_srcA, newshape=new_shape_srcA)
+            reshape_srcB = tvm.relay.reshape(transpose_srcB, newshape=new_shape_srcB)
+
+            result = tvm.relay.nn.batch_matmul(reshape_srcA, reshape_srcB, transpose_a=False, transpose_b=False)
+            result = tvm.relay.reshape(result, newshape=[int(srcA_shape[0]), int(srcA_shape[2]), int(srcA_shape[3]), int(srcB_shape[2]),]) #jkbf
+
+            return result
+
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
