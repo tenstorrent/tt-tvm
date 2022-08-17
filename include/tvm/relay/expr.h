@@ -73,6 +73,9 @@ class ConstantNode : public ExprNode {
   /*! \brief The data of the tensor */
   runtime::NDArray data;
 
+  /*! \brief Whether the constant is a parameter of the model */
+  bool is_param;
+
   /*! \return The corresponding tensor type of the data */
   TensorType tensor_type() const;
 
@@ -84,6 +87,7 @@ class ConstantNode : public ExprNode {
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
     v->Visit("_checked_type_", &checked_type_);
+    v->Visit("is_param", &is_param);
   }
 
   bool SEqualReduce(const ConstantNode* other, SEqualReducer equal) const {
@@ -102,8 +106,10 @@ class Constant : public Expr {
    * \brief The constructor
    * \param data The data of the constant tensor.
    * \param span The source span of the expression.
+   * \param is_param Whether or not this constant is a parameter of the model
    */
-  TVM_DLL explicit Constant(runtime::NDArray data, Span span = Span());
+  TVM_DLL explicit Constant(runtime::NDArray data, Span span);
+  TVM_DLL explicit Constant(runtime::NDArray data, bool is_param = false, Span span = Span());
 
   TVM_DEFINE_OBJECT_REF_METHODS(Constant, RelayExpr, ConstantNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(ConstantNode);
@@ -115,7 +121,7 @@ class Constant : public Expr {
  * fields.
  */
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data = {},
-                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {});
+                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {}, Optional<Bool> opt_is_param = {});
 
 /*! \brief Tuple of multiple Exprs */
 class Tuple;

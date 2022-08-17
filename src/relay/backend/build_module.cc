@@ -511,9 +511,9 @@ TVM_REGISTER_GLOBAL("relay.build_module._BuildModule").set_body([](TVMArgs args,
 TVM_REGISTER_GLOBAL("relay.build_module.BindParamsByName")
     .set_body([](TVMArgs args, TVMRetValue* rv) {
       Map<String, Constant> params = args[1];
-      std::unordered_map<std::string, runtime::NDArray> params_;
+      std::unordered_map<std::string, Constant> params_;
       for (const auto& kv : params) {
-        params_[kv.first] = kv.second->data;
+        params_[kv.first] = kv.second;
       }
       *rv = relay::backend::BindParamsByName(args[0], params_);
     });

@@ -39,6 +39,18 @@ namespace tvm {
 namespace relay {
 namespace transform {
 
+class IsParamChecker : public ExprVisitor {
+  public:
+    bool is_param = false;
+  private:
+    void VisitExpr_(const ConstantNode* c) {
+      if (c->is_param) {
+        is_param = true;
+      }
+    }
+};
+
+
 namespace {
 /*!
  * \brief Returns whether \p expr is a literal \p Constant, optionally wrapped by an "on_device"
@@ -164,6 +176,10 @@ class ConstantFolder : public MixedModeMutator {
       // Only evaluate primitives.
       return std::move(post_call);
     }
+
+    auto checker = IsParamChecker();
+    checker.VisitExpr(pre_call);
+
     Op op = GetRef<Op>(op_node);
     static auto op_stateful = Op::GetAttrMap<TOpIsStateful>("TOpIsStateful");
     if (op_stateful.get(op, false)) {
@@ -199,7 +215,7 @@ class ConstantFolder : public MixedModeMutator {
     }
     // During evaluation we have obviously lost all on_device annotations. However any
     // on_device wrapping this call will be left in place.
-    return ConstEvaluate(post_call);
+    return ConstEvaluate(post_call, checker.is_param);
   }
 
   Expr VisitExpr_(const IfNode* if_node) final {
@@ -231,15 +247,15 @@ class ConstantFolder : public MixedModeMutator {
   }
 
   // Convert value to expression.
-  Expr ObjectToExpr(const ObjectRef& value) {
+  Expr ObjectToExpr(const ObjectRef& value, bool is_param = false) {
     if (value->IsInstance<runtime::NDArray::ContainerType>()) {
       auto nd_array = Downcast<runtime::NDArray>(value);
-      return Constant(nd_array);
+      return Constant(nd_array, is_param);
     } else if (auto opt = value.as<runtime::ADT>()) {
       runtime::ADT adt = opt.value();
       Array<Expr> fields;
       for (size_t i = 0; i < adt.size(); ++i) {
-        fields.push_back(ObjectToExpr(adt[i]));
+        fields.push_back(ObjectToExpr(adt[i], is_param));
       }
       return Tuple(fields);
     } else {
@@ -248,7 +264,7 @@ class ConstantFolder : public MixedModeMutator {
   }
 
   // Constant evaluate an expression.
-  Expr ConstEvaluate(const Expr& expr) {
+  Expr ConstEvaluate(const Expr& expr, bool is_param = false) {
     VLOG_CONTEXT << "ConstEvaluate";
     VLOG(1) << "Evaluating :" << std::endl << PrettyPrint(expr);
 
@@ -268,7 +284,7 @@ class ConstantFolder : public MixedModeMutator {
     dict.Set(tvm::attr::kExecutor,
              relay::Executor::Create("graph", {{"link-params", Bool(false)}}));
     Expr result = ObjectToExpr(Eval(expr, module_->type_definitions, module_->Imports(),
-                                    eval_cpu_dev_, eval_cpu_target_, dict));
+                                    eval_cpu_dev_, eval_cpu_target_, dict), is_param);
     VLOG(1) << "Evaluated to constant:" << std::endl << PrettyPrint(result);
     return result;
   }

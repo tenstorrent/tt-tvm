@@ -482,6 +482,9 @@ inline std::string DType2String(const tvm::DataType dtype) {
 relay::Function BindParamsByName(relay::Function func,
                                  const std::unordered_map<std::string, runtime::NDArray>& params);
 
+relay::Function BindParamsByName(relay::Function func,
+                                 const std::unordered_map<std::string, Constant>& params);
+
 /*!
  * \brief Bind params to the main function in Relay module, using BindParamsByName
  * \param mod Relay module

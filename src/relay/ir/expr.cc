@@ -62,18 +62,28 @@ namespace relay {
 using tvm::ReprPrinter;
 using namespace tvm::runtime;
 
+Constant::Constant(runtime::NDArray data, bool is_param, Span span) {
+  ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
+  n->data = std::move(data);
+  n->virtual_device_ = VirtualDevice::FullyUnconstrained();
+  n->span = std::move(span);
+  n->is_param = std::move(is_param);
+  data_ = std::move(n);
+}
+
 Constant::Constant(runtime::NDArray data, Span span) {
   ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
   n->data = std::move(data);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->is_param = std::move(false);
   data_ = std::move(n);
 }
 
 TVM_REGISTER_NODE_TYPE(ConstantNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, Span span) {
-  return Constant(data, span);
+TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, Span span, bool is_param) {
+  return Constant(data, is_param, span);
 });
 TVM_REGISTER_GLOBAL("relay.ir.ConstantWithFields")
     .set_body_typed([](Constant constant, Optional<runtime::NDArray> opt_data,
@@ -103,20 +113,23 @@ TensorType ConstantNode::tensor_type() const {
 }
 
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
-                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
+                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Bool> opt_is_param) {
   runtime::NDArray data = opt_data.value_or(constant->data);
   VirtualDevice virtual_device = opt_virtual_device.value_or(constant->virtual_device());
   Span span = opt_span.value_or(constant->span);
+  bool is_param = bool(opt_is_param.value_or(Bool(constant->is_param)));
 
   bool all_fields_unchanged = data.same_as(constant->data) &&
                               virtual_device.same_as(constant->virtual_device()) &&
-                              span.same_as(constant->span);
+                              span.same_as(constant->span) &&
+                              is_param == constant->is_param;
 
   if (!all_fields_unchanged) {
     ConstantNode* cow_constant_node = constant.CopyOnWrite();
     cow_constant_node->data = data;
     cow_constant_node->virtual_device_ = virtual_device;
     cow_constant_node->span = span;
+    cow_constant_node->is_param = is_param;
   }
   return constant;
 }
