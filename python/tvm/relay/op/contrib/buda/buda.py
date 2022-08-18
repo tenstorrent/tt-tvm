@@ -48,6 +48,7 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
 def initialize_pybuda_cpudevice_ops(mod):
     ResetOpAttributes().visit(mod["main"])
     _register_external_op_helper_pytorch("take")
+    _register_external_op_helper_pytorch("equal")
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda")
@@ -60,6 +61,7 @@ _register_external_op_helper_pybuda("add")
 _register_external_op_helper_pybuda("adv_index")
 _register_external_op_helper_pybuda("argmax")
 _register_external_op_helper_pybuda("broadcast_to")
+_register_external_op_helper_pybuda("cast")
 _register_external_op_helper_pybuda("clip")
 _register_external_op_helper_pybuda("cos")
 _register_external_op_helper_pybuda("cumsum")
@@ -522,7 +524,6 @@ class DetermineTarget(ExprVisitor):
         self.users_of_unsupported_ops = 0
         self.graph = graph
         self.nodes_to_cpu_eval = set()
-        
         for node in fallback_nodes:
             ancestors = nx.ancestors(graph, node)
             descendants = nx.descendants(graph, node)
@@ -533,7 +534,7 @@ class DetermineTarget(ExprVisitor):
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
                 logger.info(f"CPU ancestors: {ancestors}")
 
-
+        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | set(fallback_nodes)
 
     def visit_call(self, call):
         def _cpu_eval(expr):
@@ -581,7 +582,19 @@ class ConstructDiGraph(ExprVisitor):
         node = node_hash(call)
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.append(node)
-        
+
+        # Make sure CPU output shape starts with 1
+        if (
+            isinstance(call.op, tvm.ir.op.Op) 
+            and call.op.name == "reshape"
+            and call.checked_type.shape[0] == 1
+            and isinstance(call.args[0], tvm.relay.expr.Call)
+            and isinstance(call.args[0].op, tvm.ir.op.Op)
+            and call.args[0].op.name == "take"
+            and call.args[0].op.get_attr("target.pybuda_cpudevice") is not None
+        ):
+            self.fallback_nodes.append(node)
+
         self.register_args(call, node)
         return super().visit_call(call)
     
