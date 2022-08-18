@@ -1685,7 +1685,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
         relay_module,
         [
             ConvertLayout(),
-            RemoveCast(),
+            # RemoveCast(),
             DecomposeStack(),
             transform.DecomposeVariance(),
             ConvertArgmaxTakeToReduceMax(),
