@@ -31,6 +31,7 @@ class CreateJson(ExprVisitor):
         self.graph["nodes"] = {}
 
         self.node_map = {}
+        self.visited_tgvs = {}
 
     def get_default_op(self, name):
         op = {}
@@ -46,26 +47,29 @@ class CreateJson(ExprVisitor):
         return op
 
     def visit_call(self, call):
-        if hasattr(call.op, 'name'):
-            name_partial = call.op.name
-        elif hasattr(call.op, 'name_hint'):
-            name_partial = call.op.name_hint
-        else:
-            name_partial = call.op.attrs["Composite"] # Composite functions
-        name = f"{name_partial}_{self.node_idx}"
-        op = self.get_default_op(name)
-        if isinstance(call.checked_type, tvm.ir.type.TupleType):
-            shape = []
-            for field in call.checked_type.fields:
-                if hasattr(field, "shape"):
-                    shape.append([int(dim) for dim in field.shape])
-            op["cache"] = {"shape": shape}
-        else:
-            op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
-        op["class"] = name_partial
-        op["type"] = name_partial
-        op["opcode"] = "RelayOp"
-        self.node_map[call] = name
+        if call not in self.visited_tgvs:
+            if hasattr(call.op, 'name'):
+                name_partial = call.op.name
+            elif hasattr(call.op, 'name_hint'):
+                name_partial = call.op.name_hint
+            else:
+                name_partial = call.op.attrs["Composite"] # Composite functions
+            name = f"{name_partial}_{self.node_idx}"
+            op = self.get_default_op(name)
+            if isinstance(call.checked_type, tvm.ir.type.TupleType):
+                shape = []
+                for field in call.checked_type.fields:
+                    if hasattr(field, "shape"):
+                        shape.append([int(dim) for dim in field.shape])
+                op["cache"] = {"shape": shape}
+            else:
+                op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
+            op["class"] = name_partial
+            op["type"] = name_partial
+            op["opcode"] = "RelayOp"
+            self.node_map[call] = name
+            if "nn.dropout_5" in name:
+                import pdb; pdb.set_trace()
         return super().visit_call(call)
 
     def visit_var(self, call):
@@ -98,24 +102,28 @@ class CreateJson(ExprVisitor):
         return super().visit_constant(const)
 
     def visit_tuple_getitem(self, t):
-        if isinstance(t.tuple_value, tvm.relay.expr.Tuple):
-            op_type = "tuple"
-        elif hasattr(t.tuple_value.op, 'name'):
-            op_type = t.tuple_value.op.name
-        elif hasattr(t.tuple_value.op, 'name_hint'):
-            op_type = t.tuple_value.op.name_hint
+        if t.tuple_value in self.visited_tgvs:
+            self.node_map[t] = self.visited_tgvs[t.tuple_value]
         else:
-            op_type = "Unknown"
-        name = f"{op_type}_{self.node_idx}"
-        op = self.get_default_op(name)
-        if hasattr(t.checked_type, "shape"):
-            op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
-        else:
-            op["cache"] = {"shape": []}
-        op["class"] = op_type
-        op["type"] = op_type
-        op["opcode"] = "RelayOp"
-        self.node_map[t] = name
+            if isinstance(t.tuple_value, tvm.relay.expr.Tuple):
+                op_type = "tuple"
+            elif hasattr(t.tuple_value.op, 'name'):
+                op_type = t.tuple_value.op.name
+            elif hasattr(t.tuple_value.op, 'name_hint'):
+                op_type = t.tuple_value.op.name_hint
+            else:
+                op_type = "Unknown"
+            name = f"{op_type}_{self.node_idx}"
+            op = self.get_default_op(name)
+            if hasattr(t.checked_type, "shape"):
+                op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
+            else:
+                op["cache"] = {"shape": []}
+            op["class"] = op_type
+            op["type"] = op_type
+            op["opcode"] = "RelayOp"
+            self.visited_tgvs[t.tuple_value] = name
+            self.node_map[t] = name
         return super().visit_tuple_getitem(t)
 
     def visit_tuple(self, tup):
@@ -139,12 +147,31 @@ def convert_serialized_tvm_to_reportify_graph(mod):
     json_creator.visit(mod)
 
     graph = json_creator.graph
+
+    def link_tuple(node, name):
+        for field in node.fields:
+            if isinstance(field, tvm.relay.expr.Tuple):
+                link_tuple(field, field)
+                continue
+            else:
+                graph["nodes"][name]["input_nodes"].append(json_creator.node_map[field])
+                graph["nodes"][json_creator.node_map[field]]["output_nodes"].append(name)
+
     # because expr visitor does not operate in topologial order, link all
     # the nodes after they are visited
     for node, name in json_creator.node_map.items():
-        if not hasattr(node, "args"):
+        if isinstance(node, tvm.relay.expr.Tuple):
+            link_tuple(node, name)
+        if isinstance(node, tvm.relay.expr.TupleGetItem):
+            if isinstance(node.tuple_value, tvm.relay.expr.Tuple):
+                link_tuple(node.tuple_value, name)
+                continue
+            args = node.tuple_value.args
+        elif not hasattr(node, "args"):
             continue
-        for in_node in node.args:
+        else:
+            args = node.args
+        for in_node in args:
             graph["nodes"][name]["input_nodes"].append(json_creator.node_map[in_node])
             graph["nodes"][json_creator.node_map[in_node]]["output_nodes"].append(name)
 

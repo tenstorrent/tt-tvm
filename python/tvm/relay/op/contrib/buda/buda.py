@@ -45,7 +45,8 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
     return _func_wrapper
 
 
-def initialize_pybuda_cpudevice_ops():
+def initialize_pybuda_cpudevice_ops(mod):
+    ResetOpAttributes().visit(mod["main"])
     _register_external_op_helper_pytorch("take")
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
@@ -512,60 +513,57 @@ class ResetOpAttributes(ExprVisitor):
             op.reset_attr("target.pybuda_cpudevice")
         return super().visit_op(op)
 
+def node_hash(node):
+    return (tvm.ir.structural_hash(node, map_free_vars=True), node.op if hasattr(node, "op") else type(node))
+
 class DetermineTarget(ExprVisitor):
-    def __init__(self, graph):
+    def __init__(self, graph, fallback_nodes):
         super().__init__()
         self.users_of_unsupported_ops = 0
         self.graph = graph
-        self.nodes_to_cpu_eval = []
-        self.max_depth_to_input_for_fallback = 4
-        self.max_users_of_unsupported_ops = 4
+        self.nodes_to_cpu_eval = set()
+        
+        for node in fallback_nodes:
+            ancestors = nx.ancestors(graph, node)
+            descendants = nx.descendants(graph, node)
+            if len(ancestors) > len(descendants):
+                self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | descendants
+                logger.info(f"CPU descendants: {descendants}")
+            else:
+                self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
+                logger.info(f"CPU ancestors: {ancestors}")
+
+
 
     def visit_call(self, call):
-        if tvm.ir.structural_hash(call, map_free_vars=True) not in self.graph:
-            assert False
-
         def _cpu_eval(expr):
-            cpu_eval = tvm.ir.structural_hash(expr, map_free_vars=True) in self.nodes_to_cpu_eval
+            cpu_eval = node_hash(expr) in self.nodes_to_cpu_eval
             if cpu_eval:
                 logger.info(f"{expr.op.name} will be executed on CPU")
             return cpu_eval
+
+        if node_hash(call) not in self.graph:
+            assert False
+
+        if node_hash(call) in self.nodes_to_cpu_eval:
+            try:
+                tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+            except:
+                pass
 
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
             # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, up to a total of
             # max_users_of_unsupported_ops ops to reduce data movement
             if len(call.args) > 1:
                 for arg in call.args:
-                    output_nodes = self.graph.out_degree(tvm.ir.structural_hash(arg, map_free_vars=True))
+                    output_nodes = self.graph.out_degree(node_hash(arg))
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
-                        self.nodes_to_cpu_eval.append(tvm.ir.structural_hash(call, map_free_vars=True))
+                        self.nodes_to_cpu_eval.add(node_hash(call))
                         try:
                             tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
                         except:
-                            logger.info(f"{call.op.name} already registered")
+                            pass
                         break
-
-        elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is None:
-            # operands of unsupported ops to be executed on CPU if they are less that max_depth_to_input_for_fallback ops from input
-            args = list(call.args)
-            index = 0
-            depth_to_input = 0
-            nodes_to_eval_if_successful = []
-            while index < len(args):
-                if isinstance(args[index], tvm.relay.expr.Call) and isinstance(args[index].op, tvm.ir.op.Op):
-                    nodes_to_eval_if_successful.append(tvm.ir.structural_hash(args[index], map_free_vars=True))
-                    try:
-                        tvm.ir.register_op_attr(args[index].op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
-                    except:
-                        logger.info(f"{args[index].op.name} already registered")
-                    if depth_to_input < self.max_depth_to_input_for_fallback:
-                        args.extend(list([node for node in args[index].args if node not in args]))
-                        depth_to_input += 1
-                elif isinstance(args[index], tvm.relay.Var) and depth_to_input:
-                    self.nodes_to_cpu_eval.extend(nodes_to_eval_if_successful)
-
-                index += 1
-
 
         return super().visit_call(call)
 
@@ -573,13 +571,24 @@ class ConstructDiGraph(ExprVisitor):
     def __init__(self):
         super().__init__()
         self.graph = nx.MultiDiGraph()
+        self.fallback_nodes = []
+
+    def register_args(self, parent, parent_node):
+        for arg in parent.args:
+            self.graph.add_edge(node_hash(arg), parent_node)
 
     def visit_call(self, call):
-        if isinstance(call.op, (tvm.ir.op.Op, tvm.relay.function.Function)):
-            for arg in call.args:
-                self.graph.add_edge(tvm.ir.structural_hash(arg, map_free_vars=True), tvm.ir.structural_hash(call, map_free_vars=True))
+        node = node_hash(call)
+        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
+            self.fallback_nodes.append(node)
+        
+        self.register_args(call, node)
         return super().visit_call(call)
-
+    
+    def visit_tuple_getitem(self, t):
+        node = node_hash(t)
+        self.register_args(t.tuple_value, node)
+        return super().visit_tuple_getitem(t)
 
 def reconstruct_ops_for_buda(mod):
     print_all = False
@@ -788,7 +797,7 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
     return mod
     
 def partition_for_buda(mod, graph_name, compiler_cfg):
-    initialize_pybuda_cpudevice_ops()
+    initialize_pybuda_cpudevice_ops(mod)
     
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
@@ -822,7 +831,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
         if compiler_cfg.enable_tvm_cpu_fallback:
             graph_constructor = ConstructDiGraph()
             graph_constructor.visit(mod["main"])
-            DetermineTarget(graph_constructor.graph).visit(mod["main"])
+            DetermineTarget(graph_constructor.graph, graph_constructor.fallback_nodes).visit(mod["main"])
             logger.trace("After DetermineTarget")
             logger.trace(mod.functions)
         
