@@ -158,6 +158,11 @@ def decompose_adv_index_input_tuple():
 
     return is_op("adv_index")(input)
 
+def dropout_tuple_get_item():
+    act = wildcard()
+    dropout = is_op("nn.dropout")(act)
+    return is_tuple_get_item(dropout)
+
 def merge_conv2d_with_bias():
     input = wildcard()
     weight = wildcard()
@@ -183,8 +188,9 @@ def pattern_table():
     concatenate = ("pybuda.concatenate", decompose_concat_input_tuple())
     adv_index = ("pybuda.adv_index", decompose_adv_index_input_tuple())
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
+    dropout = ("pybuda.dropout", dropout_tuple_get_item())
 
-    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias, adv_index]
+    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias, adv_index, dropout]
 
     return buda_patterns
 
@@ -516,25 +522,64 @@ class ResetOpAttributes(ExprVisitor):
         return super().visit_op(op)
 
 def node_hash(node):
-    return (tvm.ir.structural_hash(node, map_free_vars=True), node.op if hasattr(node, "op") else type(node))
+    if hasattr(node, "op"):
+        if isinstance(node.op, tvm.relay.function.Function):
+            node_descriptor = ("Function", False)
+        else:
+            node_descriptor = (node.op, False)
+    elif isinstance(node, tvm.relay.expr.Var):
+        node_descriptor = (node.name_hint, True)
+    else:
+        node_descriptor = (type(node), False)
+    return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
 
-class DetermineTarget(ExprVisitor):
+class NodeIndexer():
+    def __init__(self):
+        self.counters = ["function","call","let","var","global_var","if","tuple","tuple_getitem","constant"]
+        self.increment = 100
+        self.index = 0
+        self.node_map = {}
+    
+    def reset_index(self):
+        self.index = 0
+    
+    def count_visit(self, visitee, node=None):
+        assert visitee in self.counters
+        index = self.counters.index(visitee) + 1
+        self.index += index * self.increment
+        if node is not None:
+            self.node_map[self.index] = node
+        return self.index
+
+class NodeReMapper(ExprVisitor):
+    def __init__(self, node_list, node_map):
+        self.node_indexer = NodeIndexer()
+        self.node_map = node_map
+        self.node_list = node_list
+        super().__init__()
+
+    def visit_call(self, call):
+        index = self.node_indexer.count_visit("call")
+        node = node_hash(call)
+        if node != self.node_map[index] and self.node_map[index] in self.node_list:
+            self.node_list.remove(self.node_map[index])
+            self.node_list.add(node)
+    
+class DetermineTarget(ExprMutator):
     def __init__(self, graph, fallback_nodes):
         super().__init__()
         self.users_of_unsupported_ops = 0
         self.graph = graph
         self.nodes_to_cpu_eval = set()
+        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | fallback_nodes
+        self.graph_changed = True
         for node in fallback_nodes:
             ancestors = nx.ancestors(graph, node)
             descendants = nx.descendants(graph, node)
             if len(ancestors) > len(descendants):
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | descendants
-                logger.info(f"CPU descendants: {descendants}")
             else:
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
-                logger.info(f"CPU ancestors: {ancestors}")
-
-        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | set(fallback_nodes)
 
     def visit_call(self, call):
         def _cpu_eval(expr):
@@ -543,14 +588,17 @@ class DetermineTarget(ExprVisitor):
                 logger.info(f"{expr.op.name} will be executed on CPU")
             return cpu_eval
 
-        if node_hash(call) not in self.graph:
-            assert False
-
         if node_hash(call) in self.nodes_to_cpu_eval:
-            try:
-                tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
-            except:
-                pass
+            if isinstance(call.op, tvm.relay.function.Function):
+                self.graph_changed = True
+                new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
+                new_fn = call.op.with_attr(new_attrs)
+                return tvm.relay.expr.Call(new_fn, call.args)
+            else:
+                try:
+                    tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                except:
+                    pass
 
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
             # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, up to a total of
@@ -568,11 +616,42 @@ class DetermineTarget(ExprVisitor):
 
         return super().visit_call(call)
 
+
+    # def visit_function(self, fn):
+    #     import pdb; pdb.set_trace()
+    #     return super().visit_function(fn)
+    
+
+def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
+    added_nodes = set()
+    input_nodes = [node for node in graph.nodes if node[1][1] and node[1][0] in input_names]
+    topo_graph = list(nx.topological_sort(graph))
+    for fallback_node in fallback_nodes:
+        for ancestor in nx.ancestors(graph, fallback_node):
+            name, maybe_param = ancestor[1]
+            if not maybe_param or name in input_names:
+                continue
+            for output_node in graph.successors(ancestor):
+                # if the output node or any of its discendants is not the fallback node
+                if output_node != fallback_node and fallback_node not in nx.descendants(graph, output_node):
+                    index = 0
+                    nodes_to_check = [output_node]
+                    while index < len(nodes_to_check):
+                        node = nodes_to_check[index]
+                        added_nodes.add(node)
+                        if any(an for an in nx.ancestors(graph, node) if an in input_nodes):
+                            break
+                        nodes_to_check.extend(graph.successors(node))
+                        index += 1
+
+    return added_nodes | fallback_nodes
+
 class ConstructDiGraph(ExprVisitor):
     def __init__(self):
         super().__init__()
         self.graph = nx.MultiDiGraph()
-        self.fallback_nodes = []
+        self.fallback_nodes = set()
+        self.node_indexer = NodeIndexer()
 
     def register_args(self, parent, parent_node):
         for arg in parent.args:
@@ -580,8 +659,9 @@ class ConstructDiGraph(ExprVisitor):
 
     def visit_call(self, call):
         node = node_hash(call)
+        self.node_indexer.count_visit("call", node)
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
-            self.fallback_nodes.append(node)
+            self.fallback_nodes.add(node)
 
         # Make sure CPU output shape starts with 1
         if (
@@ -593,9 +673,8 @@ class ConstructDiGraph(ExprVisitor):
             and call.args[0].op.name == "take"
             and call.args[0].op.get_attr("target.pybuda_cpudevice") is not None
         ):
-            self.fallback_nodes.append(node)
+            self.fallback_nodes.add(node)
 
-        self.register_args(call, node)
         return super().visit_call(call)
     
     def visit_tuple_getitem(self, t):
@@ -799,7 +878,6 @@ class FlattenInputs(ExprMutator):
         new_body = self.visit(fn.body)
         return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs)
 
-    
 def flatten_inputs(mod, flattened_inputs, flattened_name_map):
 
     # flattens inputs in IR
@@ -809,7 +887,7 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
 
     return mod
     
-def partition_for_buda(mod, graph_name, compiler_cfg):
+def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod)
     
     with tvm.transform.PassContext(opt_level=5):
@@ -842,12 +920,38 @@ def partition_for_buda(mod, graph_name, compiler_cfg):
         logger.trace(mod.functions)
 
         if compiler_cfg.enable_tvm_cpu_fallback:
+            import time
+            logger.debug(f"Running cpu fallback compilation")
+            logger.debug(f"Constructing digraph...")
+            start = time.time()
             graph_constructor = ConstructDiGraph()
             graph_constructor.visit(mod["main"])
-            DetermineTarget(graph_constructor.graph, graph_constructor.fallback_nodes).visit(mod["main"])
+            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+            # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
+            # print(dot)
+
+            logger.debug(f"Finding and adding shared weights...")
+            start = time.time()
+            fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
+            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+            logger.debug(f"Determining target for ops...")
+            terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
+            new_mod = None
+            start = time.time()
+            while terget_determiner.graph_changed:
+                logger.debug(".")
+                terget_determiner.graph_changed = False
+                mod["main"] = terget_determiner.visit(mod["main"])
+            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+            logger.debug(f"Remapping nodes...")
+            start = time.time()
+            node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
+            node_remapper.visit(mod["main"])
+            terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
             logger.trace("After DetermineTarget")
             logger.trace(mod.functions)
-        
+            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+
         mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
         logger.trace("After AnnotateTarget")
         logger.trace(mod.functions)
