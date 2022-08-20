@@ -2161,14 +2161,26 @@ def _gather():
         if int(attr.get("batch_dims", 0)) != 0:
             batch_dims = int(attr.get("batch_dims", 0))
         new_input = inputs[0:2]
-        op_ = AttrCvt(
-            op_name="take",
-            extras={
-                "axis": tvm.tir.const(axis, "int32"),
-                "batch_dims": tvm.tir.const(batch_dims, "int32"),
-            },
-            ignores=["Tindices", "Tparams", "validate_indices", "Taxis", "_class"],
-        )(new_input, attr)
+
+        if isinstance(inputs[0], tvm.relay.expr.Var):
+            # Embedding weights have to be variable
+            op_ = AttrCvt(
+                op_name="embedding",
+                extras={
+                    "axis": tvm.tir.const(axis, "int32"),
+                    "batch_dims": tvm.tir.const(batch_dims, "int32"),
+                },
+                ignores=["Tindices", "Tparams", "validate_indices", "Taxis", "_class"],
+            )(new_input, attr)
+        else:
+            op_ = AttrCvt(
+                op_name="take",
+                extras={
+                    "axis": tvm.tir.const(axis, "int32"),
+                    "batch_dims": tvm.tir.const(batch_dims, "int32"),
+                },
+                ignores=["Tindices", "Tparams", "validate_indices", "Taxis", "_class"],
+            )(new_input, attr)
         return op_
 
     return _impl

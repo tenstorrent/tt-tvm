@@ -239,5 +239,19 @@ TVM_REGISTER_GLOBAL("topi.adv_index").set_body([](TVMArgs args, TVMRetValue* rv)
   *rv = adv_index(args[0], args[1]);
 });
 
+TVM_REGISTER_GLOBAL("topi.embedding").set_body([](TVMArgs args, TVMRetValue* rv) {
+  if (args.size() == 4) {
+    std::string mode = args[3];
+    int batch_dims = args[2];
+    *rv = embedding(args[0], args[1], batch_dims, mode);
+  } else {
+    ICHECK_EQ(args.size(), 5) << "topi.embedding expects 4 or 5 arguments";
+    int batch_dims = args[2];
+    int axis = args[3];
+    std::string mode = args[4];
+    *rv = embedding(args[0], args[1], batch_dims, axis, mode);
+  }
+});
+
 }  // namespace topi
 }  // namespace tvm

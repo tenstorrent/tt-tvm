@@ -506,6 +506,37 @@ def take(data, indices, axis=None, batch_dims=0, mode="clip"):
     """
     return _make.take(data, indices, batch_dims, axis, mode)
 
+def embedding(data, indices, axis=None, batch_dims=0, mode="clip"):
+    """Equivalent to TVM take op.
+
+    Parameters
+    ----------
+    data : relay.Expr
+        The source array.
+
+    indices : rely.Expr
+        The indices of the values to extract.
+
+    axis : int, optional
+        The axis over which to select values. By default,
+        the flattened input array is used.
+
+    batch_dims : int
+        The number of batch dimensions. By default is 0.
+
+    mode : str, optional
+        Specifies how out-of-bound indices will behave [clip, wrap, fast].
+        clip: clip to the range (default).
+        wrap: wrap around the indices.
+        fast: no clip or wrap around (user must make sure indices are in-bound).
+
+    Returns
+    -------
+    ret : relay.Expr
+        The computed result.
+    """
+    return _make.embedding(data, indices, batch_dims, axis, mode)
+
 
 def full(fill_value, shape=(), dtype=""):
     """Fill array with scalar value.

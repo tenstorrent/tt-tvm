@@ -47,9 +47,9 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
 
 def initialize_pybuda_cpudevice_ops(mod):
     ResetOpAttributes().visit(mod["main"])
-    _register_external_op_helper_pytorch("take")
-    _register_external_op_helper_pytorch("nn.log_softmax")
+    _register_external_op_helper_pytorch("embedding")
     _register_external_op_helper_pytorch("equal")
+    _register_external_op_helper_pytorch("nn.log_softmax")
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda")
@@ -672,7 +672,7 @@ class ConstructDiGraph(ExprVisitor):
             and call.checked_type.shape[0] == 1
             and isinstance(call.args[0], tvm.relay.expr.Call)
             and isinstance(call.args[0].op, tvm.ir.op.Op)
-            and call.args[0].op.name == "take"
+            and call.args[0].op.name == "embedding"
             and call.args[0].op.get_attr("target.pybuda_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)

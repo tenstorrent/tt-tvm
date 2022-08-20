@@ -1348,6 +1348,119 @@ Examples::
     .set_attr<FTVMCompute>("FTVMCompute", TakeCompute)
     .set_attr<TOpPattern>("TOpPattern", kInjective);
 
+
+// Embedding op
+TVM_REGISTER_NODE_TYPE(EmbeddingAttrs);
+
+bool EmbeddingRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+             const TypeReporter& reporter) {
+  // `types` contains: [data, indices, result]
+  ICHECK_EQ(types.size(), 3);
+  const auto* data = types[0].as<TensorTypeNode>();
+  if (data == nullptr) {
+    return false;
+  }
+  const auto* indices = types[1].as<TensorTypeNode>();
+  if (indices == nullptr) {
+    return false;
+  }
+  ICHECK(indices->dtype.is_int() || indices->dtype.is_uint())
+      << "indices of Embedding must be tensor of integer";
+  const auto param = attrs.as<EmbeddingAttrs>();
+  ICHECK(param != nullptr);
+
+  if (!param->axis.defined()) {
+    std::vector<IndexExpr> oshape(indices->shape.begin(), indices->shape.end());
+    reporter->Assign(types[2], TensorType(oshape, data->dtype));
+    return true;
+  }
+
+  std::vector<IndexExpr> oshape;
+  const auto ndim_data = static_cast<int>(data->shape.size());
+  const auto ndim_indices = static_cast<int>(indices->shape.size());
+  int axis = static_cast<int>(param->axis->value);
+  int batch_dims = static_cast<int>(param->batch_dims->value);
+  if (axis < 0) axis += ndim_data;
+  if (batch_dims < 0) axis += ndim_indices;
+  ICHECK_LE(axis, ndim_data) << "axis should be with in data shape"
+                             << ", but got = " << axis;
+  ICHECK_LE(batch_dims, ndim_indices) << "batch_dims should be with in indices shape"
+                                      << ", but got = " << batch_dims;
+  ICHECK_LE(batch_dims, axis) << "batch_dims should be less than or equal to axis"
+                              << ", but got = " << batch_dims;
+
+  oshape.reserve(ndim_data - 1 + ndim_indices - batch_dims);
+  for (int i = 0; i < batch_dims; ++i) {
+    oshape.emplace_back(data->shape[i]);
+  }
+  for (int i = batch_dims; i < axis; ++i) {
+    oshape.emplace_back(data->shape[i]);
+  }
+  for (int i = batch_dims; i < ndim_indices; ++i) {
+    oshape.emplace_back(indices->shape[i]);
+  }
+  for (int i = axis + 1; i < ndim_data; ++i) {
+    oshape.emplace_back(data->shape[i]);
+  }
+
+  reporter->Assign(types[2], TensorType(oshape, data->dtype));
+  return true;
+}
+
+Array<te::Tensor> EmbeddingCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                              const Type& out_type) {
+  const auto* param = attrs.as<EmbeddingAttrs>();
+  ICHECK(param != nullptr);
+  if (!param->axis.defined()) {
+    return Array<te::Tensor>{topi::embedding(inputs[0], inputs[1], param->batch_dims, param->mode)};
+  } else {
+    return Array<te::Tensor>{
+        topi::embedding(inputs[0], inputs[1], param->batch_dims, param->axis, param->mode)};
+  }
+}
+
+Expr MakeEmbedding(Expr data, Expr indices, Integer batch_dims, Integer axis, String mode) {
+  auto attrs = make_object<EmbeddingAttrs>();
+  attrs->batch_dims = std::move(batch_dims);
+  attrs->axis = std::move(axis);
+  attrs->mode = std::move(mode);
+  static const Op& op = Op::Get("embedding");
+  return Call(op, {data, indices}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.embedding").set_body_typed(MakeEmbedding);
+
+RELAY_REGISTER_OP("embedding")
+    .describe(R"code(Embedding elements from an array along an axis.
+
+When axis is not None, this function does the same thing as 'fancy' indexing
+(indexing arrays using arrays); however, it can be easier to use if you need
+elements along a given axis.
+
+**Note** that when axis is none the flattened input array is used.
+
+Examples::
+
+  a = [[ 1, 2],
+       [ 3, 4]]
+  indices = [3, 0, 2]
+  embedding(a, indices) = [ 4, 1, 3]
+
+  a = [[ 1., 2.],
+       [ 3., 4.]]
+  indices = [1, 0]
+  embedding(a, indices, axis=1) = [[ 2., 1.],
+                              [ 4., 3.]]
+
+)code" TVM_ADD_FILELINE)
+    .set_attrs_type<EmbeddingAttrs>()
+    .set_num_inputs(2)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_argument("indices", "Tensor", "The indices tensor.")
+    .set_support_level(3)
+    .add_type_rel("Embedding", EmbeddingRel)
+    .set_attr<FTVMCompute>("FTVMCompute", EmbeddingCompute)
+    .set_attr<TOpPattern>("TOpPattern", kInjective);
 // Init ops
 TVM_REGISTER_NODE_TYPE(InitOpAttrs);
 
