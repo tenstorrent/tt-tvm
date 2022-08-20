@@ -65,6 +65,7 @@ _reg.register_injective_schedule("unravel_index")
 _reg.register_injective_schedule("sparse_to_dense")
 _reg.register_injective_schedule("matrix_set_diag")
 _reg.register_injective_schedule("adv_index")
+_reg.register_injective_schedule("embedding")
 
 
 # concatenate
@@ -579,6 +580,25 @@ def take_shape_func(attrs, inputs, out_ndims):
         batch_dims += indices_ndim
     return [_take_with_axis_shape_func(*inputs, convert(axis), convert(batch_dims), out_ndims[0])]
 
+@_reg.register_shape_func("embedding", False)
+def embedding_shape_func(attrs, inputs, out_ndims):
+    """
+    Shape function for take op.
+    """
+    if attrs.axis is None:
+        return [_take_no_axis_shape_func(inputs[1], out_ndims[0])]
+    axis = get_const_int(attrs.axis)
+    batch_dims = get_const_int(attrs.batch_dims)
+    data_ndim = int(inputs[0].shape[0])
+    if inputs[1].shape:
+        indicies_ndim = int(inputs[1].shape[0])
+    if axis < 0:
+        axis += data_ndim
+    assert 0 <= axis < data_ndim
+    if batch_dims < 0:
+        batch_dims += indicies_ndim
+    return [_take_with_axis_shape_func(*inputs, convert(axis), convert(batch_dims), out_ndims[0])]
+
 
 @_reg.register_legalize("take")
 def legalize_dyn_topk(attrs, inputs, types):
@@ -598,6 +618,23 @@ def legalize_dyn_topk(attrs, inputs, types):
     """
     return topi.take_legalize(attrs, inputs, types)
 
+@_reg.register_legalize("embedding")
+def legalize_dyn_topk(attrs, inputs, types):
+    """Legalize take op.
+    Parameters
+    ----------
+    attrs : tvm.ir.Attrs
+        Attributes of current op
+    inputs : list of tvm.relay.Expr
+        The args of the Relay expr to be legalized
+    types : list of types
+        List of input and output types
+    Returns
+    -------
+    result : tvm.relay.Expr
+        The legalized expr
+    """
+    return topi.embedding_legalize(attrs, inputs, types)
 
 @script
 def _argwhere_shape_func_1d(condition):

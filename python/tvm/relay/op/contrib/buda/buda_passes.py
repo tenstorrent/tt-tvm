@@ -661,15 +661,19 @@ class LowerTakeToStridedSlice(DFPatternCallback):
             act_shape = list(pre_node_map[self.input_tensor][0].attrs.newshape)
 
         try:
-            indices = node_map[self.indices][0].data.numpy().item()
+            indices = node_map[self.indices][0].data.numpy().flatten()
+            start_value = indices[0]
+            # Make sure indices are continuously ascending with stride of 1
+            for idx, val in enumerate(indices):
+                if start_value + idx != val:
+                    raise ValueError
         except ValueError as v:
             return post
-        
+
         axis = pre.attrs.axis
-        strided_slice = tvm.relay.strided_slice(act, begin=(indices, ), end=(indices + 1,), strides=(1, ), axes=(axis, ))
-        newshape = act_shape
-        del newshape[int(axis)]
-        reshape = tvm.relay.reshape(strided_slice, newshape=newshape)
+        strided_slice = tvm.relay.strided_slice(act, begin=(indices[0], ), end=(indices[-1] + 1,), strides=(1, ), axes=(axis, ))
+
+        reshape = tvm.relay.reshape(strided_slice, newshape=pre.checked_type.shape)
         return reshape
 
 class AddSqueezeForArgmax(DFPatternCallback):

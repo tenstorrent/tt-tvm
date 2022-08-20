@@ -214,6 +214,26 @@ struct TakeAttrs : public tvm::AttrsNode<TakeAttrs> {
   }
 };
 
+struct EmbeddingAttrs : public tvm::AttrsNode<EmbeddingAttrs> {
+  Integer batch_dims;
+  Integer axis;
+  tvm::String mode;
+
+  TVM_DECLARE_ATTRS(EmbeddingAttrs, "relay.attrs.EmbeddingAttrs") {
+    TVM_ATTR_FIELD(batch_dims)
+        .set_default(0)
+        .describe("The batch_dims over which to select values.");
+    TVM_ATTR_FIELD(axis)
+        .set_default(NullValue<Integer>())
+        .describe("The axis over which to select values.");
+    TVM_ATTR_FIELD(mode).set_default("clip").describe(
+        "Specify how out-of-bound indices will behave."
+        "clip - clip to the range (default)"
+        "wrap - wrap around the indices"
+        "fast - no clip or wrap around (user must make sure indices are in-bound)");
+  }
+};
+
 /*! \brief Attributes that specify a tensor */
 struct InitOpAttrs : public tvm::AttrsNode<InitOpAttrs> {
   Optional<Array<Integer>> shape;

@@ -2569,7 +2569,7 @@ class PyTorchOpConverter:
     def embedding(self, inputs, input_types):
         weight = inputs[0]
         indices = inputs[1]
-        return _op.take(weight, indices.astype("int32"), axis=0)
+        return _op.embedding(weight, indices.astype("int32"), axis=0)
 
     def embedding_bag(self, inputs, input_types):
 

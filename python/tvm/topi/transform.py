@@ -458,6 +458,59 @@ def take_legalize(attrs, inputs, types):
     return None
 
 
+def embedding(a, indices, axis=None, batch_dims=0, mode="clip"):
+    """Take elements from an array along an axis.
+
+    Parameters
+    ----------
+    a : tvm.te.Tensor
+        The source array.
+
+    indices : tvm.te.Tensor
+        The indices of the values to extract.
+
+    axis : int, optional
+        The axis over which to select values. By default,
+        the flattened input array is used.
+
+    batch_dims : int
+        The number of batch dimensions. By default is 0.
+
+    mode : str, optional
+        Specifies how out-of-bound indices will behave.
+        clip - clip to the range (default)
+        wrap - wrap around the indices
+        fast - no clip or wrap around (user must make sure indices are in-bound)
+
+    Returns
+    -------
+    ret : tvm.te.Tensor
+    """
+    if axis is None:
+        return cpp.embedding(a, indices, int(batch_dims), mode)
+    return cpp.embedding(a, indices, int(batch_dims), int(axis), mode)
+
+@tvm.target.generic_func
+def embedding_legalize(attrs, inputs, types):
+    """Legalizes dyn.topk op.
+
+    Parameters
+    ----------
+    attrs : tvm.ir.Attrs
+        Attributes of current op
+    inputs : list of tvm.relay.Expr
+        The args of the Relay expr to be legalized
+    types : list of types
+        List of input and output types
+    Returns
+    -------
+    result : tvm.relay.Expr
+        The legalized expr
+    """
+    if tvm.relay.ty.is_dynamic(types[0]):
+        return tvm.relay.embedding(tvm.relay.annotation.stop_fusion(inputs[0]), inputs[1], **attrs)
+    return None
+
 def gather(data, axis, indices):
     """Gather values along given axis from given indices.
 

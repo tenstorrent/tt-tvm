@@ -1231,7 +1231,7 @@ def _mx_broadcast_axis(inputs, attrs):
 def _mx_embedding(inputs, _):
     assert len(inputs) == 2
     indices, weight = inputs
-    return _op.take(weight, indices.astype("int32"), axis=0)
+    return _op.embedding(weight, indices.astype("int32"), axis=0)
 
 
 def _mx_smooth_l1(inputs, attrs):
