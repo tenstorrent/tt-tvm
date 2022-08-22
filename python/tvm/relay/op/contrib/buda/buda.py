@@ -663,6 +663,7 @@ class ConstructDiGraph(ExprVisitor):
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
 
+        self.register_args(call, node)
         # Make sure CPU output shape starts with 1
         if (
             isinstance(call.op, tvm.ir.op.Op) 
