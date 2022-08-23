@@ -512,6 +512,24 @@ class AllowUnsupportedOps(ExprMutator):
                 tvm.ir.register_op_attr(call.op.name, "target.pybuda", _always_true)
 
         return super().visit_call(call)
+    
+class FixCPULinear(ExprMutator):
+    def __init__(self):
+        super().__init__()
+
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.function.Function):
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.matmul":
+                if call.args[0].op.name == "reshape":
+                    arg0 = call.args[0].args[0]
+                else:
+                    arg0 = call.args[0]
+                arg1 = call.args[1].args[0]
+
+                logger.info("Fixed linear")
+                return tvm.relay.nn.dense(arg0, arg1)
+
+        return super().visit_call(call)
 
 class ResetOpAttributes(ExprVisitor):
     def __init__(self):
@@ -642,6 +660,10 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
                         node = nodes_to_check[index]
                         added_nodes.add(node)
                         if any(an for an in nx.ancestors(graph, node) if an in input_nodes):
+                            #TODO: Remove hack once Allan's changes are in
+                            for child in graph.predecessors(node):
+                                if child not in added_nodes and child[1][0].name == "reshape":
+                                    added_nodes.add(child)
                             break
                         nodes_to_check.extend(graph.successors(node))
                         index += 1
@@ -965,6 +987,12 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
         mod = tvm.transform.Sequential([transform.PartitionGraph(bind_constants=True)])(mod)
         logger.trace("After PartitionGraph")
+        logger.trace(mod.functions)
+
+        for k, v in mod.global_var_map_.items():
+            if "cpudevice" in k:
+                mod[v] = FixCPULinear().visit(mod[v])
+        logger.trace("After FixCPULinear")
         logger.trace(mod.functions)
 
         mod["main"] = AllowUnsupportedOps(check_only=True).visit(mod["main"])
