@@ -26,6 +26,7 @@ import numpy as np
 import tvm
 from tvm import relay
 from tvm.ir import IRModule
+from tvm.relay.testing import run_infer_type
 from tvm.topi.utils import get_const_tuple
 
 from ... import nd as _nd
@@ -2674,6 +2675,8 @@ class Slice(OnnxOpConverter):
 
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
+        data = run_infer_type(inputs[0])
+        input_shape = data.checked_type.shape
         starts = inputs[1]
         ends = inputs[2]
         axes = inputs[3]
@@ -2708,8 +2711,15 @@ class Slice(OnnxOpConverter):
             else:
                 strides_np = steps.data.numpy().astype("int64")
             if all([isinstance(ishape[i], int) for i in axes_np]):
+                ends = list(end_np)
+                axes = list(axes_np)
+                import sys
+                for i, (axis, end) in enumerate(zip(axes, ends)):
+                    if end == sys.maxsize:
+                        ends[i] = input_shape[axis]
+
                 return _op.strided_slice(
-                    inputs[0], list(begin_np), list(end_np), list(strides_np), axes=list(axes_np)
+                    inputs[0], list(begin_np), ends, list(strides_np), axes=list(axes_np)
                 )
 
         # Update the starts and ends according to axes if required.
