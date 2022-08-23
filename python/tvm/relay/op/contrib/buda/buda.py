@@ -604,7 +604,8 @@ class DetermineTarget(ExprMutator):
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
             # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, up to a total of
             # max_users_of_unsupported_ops ops to reduce data movement
-            if len(call.args) > 1:
+            non_weight_args = [arg for arg in call.args if not isinstance(arg, tvm.relay.expr.Var)]
+            if len(non_weight_args) > 1:
                 for arg in call.args:
                     output_nodes = self.graph.out_degree(node_hash(arg))
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
