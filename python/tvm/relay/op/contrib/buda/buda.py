@@ -48,6 +48,7 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
 def initialize_pybuda_cpudevice_ops(mod):
     ResetOpAttributes().visit(mod["main"])
     _register_external_op_helper_pytorch("take")
+    _register_external_op_helper_pytorch("nn.log_softmax")
     _register_external_op_helper_pytorch("equal")
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
