@@ -627,7 +627,9 @@ class DetermineTarget(ExprMutator):
                 for arg in call.args:
                     output_nodes = self.graph.out_degree(node_hash(arg))
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
-                        self.nodes_to_cpu_eval.add(node_hash(call))
+                        nx_node_hash = node_hash(call)
+                        ancestors = nx.ancestors(self.graph, nx_node_hash)
+                        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
                         try:
                             tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
                         except:
