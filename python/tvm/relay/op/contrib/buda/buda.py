@@ -520,7 +520,7 @@ class FixCPULinear(ExprMutator):
     def visit_call(self, call):
         if isinstance(call.op, tvm.relay.function.Function):
             if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.matmul":
-                if call.args[0].op.name == "reshape":
+                if isinstance(call.args[0], tvm.relay.expr.Call) and call.args[0].op.name == "reshape":
                     arg0 = call.args[0].args[0]
                 else:
                     arg0 = call.args[0]
@@ -662,10 +662,6 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
                         node = nodes_to_check[index]
                         added_nodes.add(node)
                         if any(an for an in nx.ancestors(graph, node) if an in input_nodes):
-                            #TODO: Remove hack once Allan's changes are in
-                            for child in graph.predecessors(node):
-                                if child not in added_nodes and child[1][0].name == "reshape":
-                                    added_nodes.add(child)
                             break
                         nodes_to_check.extend(graph.successors(node))
                         index += 1
