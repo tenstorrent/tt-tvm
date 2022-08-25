@@ -583,6 +583,7 @@ class NodeReMapper(ExprVisitor):
         if node != self.node_map[index] and self.node_map[index] in self.node_list:
             self.node_list.remove(self.node_map[index])
             self.node_list.add(node)
+        return super().visit_call(call)
     
 class DetermineTarget(ExprMutator):
     def __init__(self, graph, fallback_nodes):
@@ -602,7 +603,8 @@ class DetermineTarget(ExprMutator):
 
     def visit_call(self, call):
         def _cpu_eval(expr):
-            cpu_eval = node_hash(expr) in self.nodes_to_cpu_eval
+            node = node_hash(expr)
+            cpu_eval = node in self.nodes_to_cpu_eval
             if cpu_eval:
                 logger.info(f"{expr.op.name} will be executed on CPU")
             return cpu_eval
