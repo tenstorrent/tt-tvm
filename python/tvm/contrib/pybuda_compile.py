@@ -252,7 +252,7 @@ def add_passthrough_if_needed(first, second, third, input_names):
 
     return first, second
 
-def extract_graphs(mod, buda_params, input_names, param_name_lookup=None):
+def extract_graphs(mod, buda_params, input_names, param_name_lookup={}):
     main_graph = str(mod.astext())
     cpu_functions = list(cpu_json_graph["functions"].keys())
     dev_functions = list(dev_json_graph["functions"].keys())
@@ -401,15 +401,27 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
         return mod
 
 
-def clean_names(json_graph, buda_params, param_name_lookup=None):
+def clean_names(json_graph, buda_params, param_name_lookup={}):
     precursor = "tvmgen_default_pybuda_main_" if json_graph["device"] != "cpu" else "tvmgen_default_pybuda_cpudevice_main_"
+
+    def trim_count(name):
+        for i in range(-1, -len(name), -1):
+            if name[i] == '_':
+                return name[:i], name[i+1:]
+
     if len(json_graph["params"]) > 0:
 
         old_params = json_graph["params"]
         json_graph["params"] = {}
         for k, v in old_params.items():
-            num_digits = k.replace(precursor, "").find("_")
-            key = k.replace(precursor, "")[num_digits + 1:] + k.replace(precursor, "")[:num_digits]
+            if precursor in k:
+                num_digits = k.replace(precursor, "").find("_")
+                key = k.replace(precursor, "")[num_digits + 1:] + k.replace(precursor, "")[:num_digits]
+            else:
+                name, num_digits = trim_count(k)
+                old_name = param_name_lookup[name] if name in param_name_lookup else name
+                param_name_lookup[k] = old_name + f"_{num_digits}"
+                key = param_name_lookup[k] # This is done to sync the node names with the param names
             json_graph["params"][key] = v
 
     graph = json.loads(json_graph["graph"])
@@ -605,8 +617,8 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
 
-    with tvm.transform.PassContext(opt_level=5):
-        func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
+    # with tvm.transform.PassContext(opt_level=5):
+    #     func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
 
 
     dev_json_graph["params"] = {}
