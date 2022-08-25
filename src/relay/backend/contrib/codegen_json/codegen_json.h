@@ -272,6 +272,17 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
   }
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const ConstantNode* constant_node) {
+    std::string name;
+    if (constant_node->name == "_const_") {
+      name = symbol_ + "_const_" + std::to_string(const_names_.size());
+    } else {
+      if (const_name_counts_.find(cn->name) == const_name_counts_.end()) {
+        const_name_counts_[cn->name] = 0;
+      }else {
+        const_name_counts_[cn->name] = const_name_counts_[cn->name] + 1;
+      }
+      name = cn->name + "_" + std::to_string(const_name_counts_[cn->name]);
+    }
     std::string name = symbol_ + "_const_" + std::to_string(const_names_.size());
     VLOG(1) << "Will require parameter '" << name
             << "' to be supplied by the ConstLoaderModule at runtime";
@@ -279,6 +290,7 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
     const_name_to_constant_.emplace(name, constant_node->data);
     const_names_.push_back(name);
     auto node = std::make_shared<JSONGraphNode>(name, /*op_type=*/"const");
+
     int is_param = 0;
     if (constant_node->is_param) {is_param = 1;}
     node->SetAttr("is_param", std::to_string(is_param));
@@ -374,21 +386,25 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
   std::vector<JSONGraphObjectPtr> nodes_;
   /*! \brief Output of the JSON graph. */
   std::vector<JSONGraphNodeEntry> heads_;
+
   /*!
    * \brief A map from constant names to NDArrays for each Constant encountered during
    * translation to JSON. The JSON will record only the constant name. The actual NDArray must
    * be made available at runtime from a ConstLoaderModule.
-   */
   std::unordered_map<std::string, runtime::NDArray> const_name_to_constant_;
   /*!
    * \brief The domain of the above map, but in order the constants were encountered during
    * translation.
    */
   Array<String> const_names_;
+  
+  /*! \brief The list of required constants. */
+  Array<String> params_;
+  /*! \brief A map that keeps track of the number of occurences of a unique constant name. Only used for const names != "_const_" */
+  std::unordered_map<std::string, int> const_name_counts_;
 };
 
 }  // namespace contrib
 }  // namespace backend
-}  // namespace relay
 }  // namespace tvm
 #endif  // TVM_RELAY_BACKEND_CONTRIB_CODEGEN_JSON_CODEGEN_JSON_H_

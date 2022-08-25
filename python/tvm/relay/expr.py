@@ -208,8 +208,8 @@ class Constant(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, data, span=None, is_param=False):
-        self.__init_handle_by_constructor__(_ffi_api.Constant, data, span, is_param)
+    def __init__(self, data, span=None, is_param=False, name="_const_"):
+        self.__init_handle_by_constructor__(_ffi_api.Constant, data, span, is_param, name)
 
 
 @tvm._ffi.register_func("relay.ConstantWithFields")
@@ -646,10 +646,14 @@ def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None)
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def const(value, dtype=None, span=None):
 =======
 def const(value, dtype=None, is_param=False):
 >>>>>>> 2430124db... Adding is_param attribute to relay Constants so params may be bound to module and retain requires_grad status
+=======
+def const(value, dtype=None, is_param=False, name='_const_'):
+>>>>>>> 09d0adf48... propping const names
     """Create a constant value.
 
     Parameters
@@ -690,10 +694,14 @@ def const(value, dtype=None, is_param=False):
         raise ValueError("value has to be scalar or NDArray")
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     return Constant(value, span)
 =======
     return Constant(value, is_param)
 >>>>>>> 2430124db... Adding is_param attribute to relay Constants so params may be bound to module and retain requires_grad status
+=======
+    return Constant(value, is_param, name)
+>>>>>>> 09d0adf48... propping const names
 
 
 def bind(expr, binds):

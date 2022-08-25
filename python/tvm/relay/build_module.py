@@ -54,7 +54,7 @@ def _convert_param_map(params):
             is_param = param[1]
             param = _nd.array(param[0])
 
-        inputs[name] = _expr.const(param, is_param=is_param)
+        inputs[name] = _expr.const(param, is_param=is_param, name=name)
     return inputs
 
 
