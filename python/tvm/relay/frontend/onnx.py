@@ -6475,6 +6475,58 @@ class ConcatFromSequence(OnnxOpConverter):
 
 class SplitToSequence(OnnxOpConverter):
     """Operator converter for split to sequence op."""
+    @classmethod
+    def _impl_v14(cls, inputs, attr, params):
+        assert len(inputs) == 2, "SplitToSequence: Doesn't support inputs len different from 2"
+        assert len(inputs) == 2, "SplitToSequence: Doesn't support inputs len different from 2"
+
+        # Infered reference tesnsor
+        numpy_const_based_slice = True
+        try:
+            ref_input = infer_value(inputs[0], {}).numpy()
+        except AssertionError as err:
+            numpy_const_based_slice = False
+
+        # Infered splits
+        try:
+            split_input = infer_value(inputs[1], {}).numpy()
+        except AssertionError as err:
+            raise ValueError("SplitToSequence: Doesn't support non-constant splits inputs")
+
+        # Attrs
+        axis = attr['axis']
+
+        # Check split type
+        scalar_based_split = False
+        if split_input.size == 1:
+            split_input = int(split_input)
+            scalar_based_split = True
+
+        # Generate indices
+        indices = []
+        if scalar_based_split:
+            dim_size = infer_shape(inputs[0])[axis]
+            for i in range(1, dim_size):
+                if i * split_input >= dim_size:
+                    break
+                indices.append(i * split_input)
+        else:
+            indices = list(np.cumsum(split_input))
+            indices.pop()
+
+        if numpy_const_based_slice:
+            # Numpy based split on known constant values
+            res = np.array_split(ref_input, indices, axis)
+            const_arr = []
+            for val in res:
+                const_arr.append(_op.const(val))
+            res = _expr.Tuple(const_arr)
+            res = _expr.TupleWrapper(res, len(res))
+        else:
+            # Utilize TVM split op with indices
+            res = _op.split(inputs[0], indices, axis)
+
+        return res
 
     @classmethod
     def _impl_v11(cls, inputs, attr, params):
@@ -6771,11 +6823,8 @@ def _get_convert_map(opset):
         "SequenceInsert": SequenceInsert.get_converter(opset),
         "SequenceLength": SequenceLength.get_converter(opset),
         "ConcatFromSequence": ConcatFromSequence.get_converter(opset),
-<<<<<<< HEAD
         "SplitToSequence": SplitToSequence.get_converter(opset),
-=======
         "SequenceEmpty": SequenceEmpty.get_converter(opset),
->>>>>>> db14250f4... [ONNX] Support for SequenceEmpty and SequenceAt ops
         "SequenceAt": SequenceAt.get_converter(opset),
     }
 
