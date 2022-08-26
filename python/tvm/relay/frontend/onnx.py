@@ -6396,6 +6396,26 @@ class SequenceErase(OnnxOpConverter):
         tensor_list = [input_sequence[i] for i in range(seq_len) if i != position]
         # Create new tuple and return.
         return _expr.Tuple(tensor_list)
+    def _impl_v14(cls, inputs, attr, params):
+        return _op.const([])
+
+
+class SequenceAt(OnnxOpConverter):
+    """Operator converter for sequence at op."""
+
+    @classmethod
+    def _impl_v14(cls, inputs, attr, params):
+        ref_tensor = inputs[0]
+        position = inputs[1]
+
+        indexed =  _op.take(ref_tensor, position)
+
+        # Fix invalid scalar shape
+        if infer_shape(indexed) == ():
+            ref_dim = len(infer_shape(ref_tensor))
+            indexed = _op.expand_dims(indexed, axis=0, num_newaxis=ref_dim)
+
+        return indexed
 
 
 class SequenceInsert(OnnxOpConverter):
@@ -6751,7 +6771,11 @@ def _get_convert_map(opset):
         "SequenceInsert": SequenceInsert.get_converter(opset),
         "SequenceLength": SequenceLength.get_converter(opset),
         "ConcatFromSequence": ConcatFromSequence.get_converter(opset),
+<<<<<<< HEAD
         "SplitToSequence": SplitToSequence.get_converter(opset),
+=======
+        "SequenceEmpty": SequenceEmpty.get_converter(opset),
+>>>>>>> db14250f4... [ONNX] Support for SequenceEmpty and SequenceAt ops
         "SequenceAt": SequenceAt.get_converter(opset),
     }
 
