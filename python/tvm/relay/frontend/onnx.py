@@ -2256,6 +2256,13 @@ class Concat(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, args, params):
+        # Correct inputs dtypes
+        ref_dtype = infer_type(inputs[0]).checked_type.dtype
+        for i in range(1, len(inputs)):
+            op_dtype = infer_type(inputs[i]).checked_type.dtype
+            if op_dtype != ref_dtype:
+                inputs[i] = _op.cast(inputs[i], ref_dtype)
+
         return AttrCvt(op_name="concatenate")((inputs,), args)
 
 
