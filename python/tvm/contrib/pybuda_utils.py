@@ -95,3 +95,70 @@ def extract_flatten_inputs(framework: str, model, inputs):
         raise RuntimeError("Unsupported framework type: {}".format(framework))
 
     return flattened_inputs, flattened_input_names, flattened_name_map, input_structure
+
+def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: CompilerConfig):
+    if framework == "pytorch":
+        param_name_lookup = {}
+
+        if not compiler_cfg.enable_tvm_constant_prop:
+            tvm_mod = tvm.IRModule.from_expr(
+                tvm.relay.build_module.bind_params_by_name(tvm_mod["main"], {})
+            )
+        else:
+            if len(compiler_cfg.tvm_constnat_prop_mask):
+                propped_params = {
+                    k: (v, True)
+                    for k, v, in params.items()
+                    if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])
+                }
+            else:
+                propped_params = {k: (v, True) for k, v, in params.items()}
+            tvm_mod = tvm.IRModule.from_expr(
+                tvm.relay.build_module.bind_params_by_name(tvm_mod["main"], propped_params)
+            )
+
+    elif framework == "tensorflow":
+        # TODO: Destupidify this! (Maybe we can sort by a substring of the weight names to make this more efficient)
+        found_weights = []
+        param_name_lookup = {}
+        non_weight_params = {}  # Some parameters (like causal mask) are not weights
+
+        for (bad_name, value) in params.items():
+            weight_found = False
+            for tf_weight in model.weights:
+                if (
+                    np.array_equal(tf_weight.value().numpy(), value.numpy())
+                    and tf_weight.name not in found_weights
+                ):
+                    param_name_lookup[bad_name] = tf_weight.name
+                    weight_found = True
+                    found_weights.append(tf_weight.name)
+                    break
+            if not weight_found:
+                param_name_lookup[bad_name] = bad_name
+                non_weight_params[bad_name] = (value, False)
+
+        if not compiler_cfg.enable_tvm_constant_prop:
+            tvm_mod = tvm.IRModule.from_expr(
+                tvm.relay.build_module.bind_params_by_name(tvm_mod["main"], non_weight_params)
+            )
+        else:
+            if len(compiler_cfg.tvm_constnat_prop_mask):
+                propped_params = {
+                    k: (v, True)
+                    for k, v, in params.items()
+                    if any(
+                        [
+                            mask in param_name_lookup[k]
+                            for mask in compiler_cfg.tvm_constnat_prop_mask
+                        ]
+                    )
+                }
+                propped_params.update(non_weight_params)
+            else:
+                propped_params = {k: (v, True) for k, v in params.items()}
+            tvm_mod = tvm.IRModule.from_expr(
+                tvm.relay.build_module.bind_params_by_name(tvm_mod["main"], propped_params)
+            )
+
+    return tvm_mod, param_name_lookup
