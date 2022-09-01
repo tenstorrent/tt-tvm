@@ -1011,6 +1011,10 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
                         continue
                     if isinstance(arg, tvm.relay.expr.Tuple):
                         continue
+                    # if isinstance(arg, tvm.relay.expr.TupleGetItem):
+                    #     # arg = arg.tuple_value().op
+                    #     continue
+                    
                     assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
                     assert arg.op in mod.global_var_map_.values(), mod["main"]
 
