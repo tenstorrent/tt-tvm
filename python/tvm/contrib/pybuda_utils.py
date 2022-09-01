@@ -56,3 +56,42 @@ def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg:
             x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)
         ]
 
+    return framework_outputs
+def extract_flatten_inputs(framework: str, model, inputs):
+    if framework == "pytorch":
+        input_structure = []
+        input_names = [i.debugName().split(".")[0] for i in list(model.graph.inputs())[1:]]
+
+        if isinstance(inputs, (list, tuple)):
+            for i in range(len(inputs)):
+                input = inputs[i]
+                if isinstance(input, (list, tuple)):
+                    structure = (input_names[i], tuple([tuple(t.shape) for t in input]))
+                elif isinstance(input, dict):
+                    structure = (input_names[i], {k: v.shape for k, v in input.items()})
+                else:
+                    structure = (input_names[i], tuple(input.shape))
+                input_structure.append(tuple(structure))
+        else:
+            input_structure = OrderedDict()
+            for k, v in inputs.items():
+                input_structure[k] = v.shape
+
+        flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(
+            inputs, input_names
+        )
+        flattened_inputs = [
+            inp.float() if torch.is_floating_point(inp) else inp for inp in flattened_inputs
+        ]
+
+    elif framework == "tensorflow":
+        # The tensorflow trace automatically flattens inputs
+        flattened_inputs, _, _ = flatten_inputs(inputs)
+        flattened_input_names = [tensor.name.split(":")[0] for tensor in model.inputs]
+        flattened_name_map = None
+        input_structure = None
+
+    else:
+        raise RuntimeError("Unsupported framework type: {}".format(framework))
+
+    return flattened_inputs, flattened_input_names, flattened_name_map, input_structure
