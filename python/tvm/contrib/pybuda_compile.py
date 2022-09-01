@@ -16,7 +16,7 @@ from ctypes import c_void_p
 import copy
 import json
 
-from collections import OrderedDict
+from collections import OrderedDict, MutableMapping
 import pybuda
 
 from json import JSONEncoder
@@ -26,6 +26,17 @@ import onnx
 import onnx.numpy_helper
 import mxnet as mx
 from tvm.relay.op.contrib.buda.buda import verify_tvm_compile
+
+from jax.experimental import jax2tf
+from jax.tools.jax_to_ir import tf_wrap_with_input_names
+import collections
+from transformers.utils.generic import ModelOutput
+from tvm.contrib.pybuda_utils import (
+    extract_framework_model_outputs, 
+    extract_flatten_inputs, 
+    construct_tvm_ir,
+)
+
 
 dev_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "tt"}
 cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
@@ -73,7 +84,7 @@ def retrieve_pybuda_cpudevice_json_graph(*args):
     retrieve_graph(cpu_json_graph, t)
 
 
-def load_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None, verify_cfg=None):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, output_names=None, path=None, verify_cfg=None):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -106,16 +117,16 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, 
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, output_names=output_names, path=path, verify_cfg=verify_cfg)
+    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, output_names=output_names, path=path, verify_cfg=verify_cfg, framework=framework)
     
-    flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg)
+    flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
 
     serialize_and_store_tvm_graph(json_graphs, compiler_cfg)
 
     return json_graphs, flattened_pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None, verify_cfg=None):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None, verify_cfg=None, framework=None):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -151,23 +162,23 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
 
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
-    elif isinstance(module, torch.nn.Module):
+    elif framework == "pytorch":
         json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
-    elif isinstance(module, (tf.keras.Model, tf.keras.layers.Layer)):
+    elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
         json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
-    elif isinstance(module, tf.compat.v1.GraphDef):
+    elif framework == "tf_graphdef":
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
         json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, output_names=output_names)
-    elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
+    elif framework == "onnx":
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
         json_graphs, _ = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
-    elif isinstance(module, mx.gluon.HybridBlock):
+    elif framework == "mxnet":
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
         json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
@@ -662,7 +673,7 @@ def load_serialized_tvm_graph(full_file_path):
     return json_graphs
 
 
-def format_tvm_graph_weights(inputs, module, compiler_cfg):
+def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
     """
     Formats model weights based on specific framework.
 
@@ -682,7 +693,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
     OrderedDict, Boolean, Tuple
         Weights, Constant evaluation, Input tensors
     """
-    if isinstance(module, torch.nn.Module):
+    if framework == "pytorch":
         if compiler_cfg.enable_training:
             for param in module.parameters():
                 param.requires_grad = True
@@ -692,13 +703,13 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
         torch_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
-    elif isinstance(module, (tf.keras.Model, tf.keras.layers.Layer)):
+    elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
-    elif isinstance(module, tf.compat.v1.GraphDef):
+    elif framework == "tf_graphdef":
         weights = {}
-    elif isinstance(module, onnx.onnx_ml_pb2.ModelProto):
+    elif framework == "onnx":
         numpy_weights = [onnx.numpy_helper.to_array(weight) for weight in module.graph.initializer]
         names = [weight.name for weight in module.graph.initializer]
         weights = {
@@ -708,8 +719,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg):
 
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(onnx.numpy_helper.to_array(x)) for x in inputs if x is not None]
-
-    elif isinstance(module, mx.gluon.HybridBlock):
+    elif framework == "mxnet":
         weights = {
             name : (torch.Tensor(mx_param.data().asnumpy()), issubclass(mx_param.data().asnumpy().dtype.type, np.floating))
             for name, mx_param in module.collect_params().items()
