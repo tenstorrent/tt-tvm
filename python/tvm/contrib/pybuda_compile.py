@@ -331,7 +331,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         compiler_cfg=compiler_cfg,
     )
 
-        # (Temporary): Remove when buda supports dropout
+    # (Temporary): Remove when buda supports dropout
     if training_mode and compiler_cfg.enable_tvm_dropout == False:
         torchmod.eval()
 
@@ -344,7 +344,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         model=traced_model,
         inputs=inputs,
     )
-        
+
     # Generate TVM module
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
     mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)

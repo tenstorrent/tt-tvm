@@ -1567,6 +1567,23 @@ def _pack():
     return _impl
 
 
+def _scatter_nd():
+    def _impl(inputs, attr, params, mod):
+        indices = inputs[0]
+        values = inputs[1]
+        shape = _infer_value(inputs[2], params, mod)
+        ndim = len(shape.shape)
+        dim_indices = _infer_shape(indices, mod)
+        
+        assert shape.shape == (1,), f"TODO: add nd inputs"
+        shape = _op.const(shape)
+        in_tensor = _op.zeros(shape, attr["T"].name)
+        ret = _op.scatter(in_tensor, indices, values, axis=0)
+        return ret
+
+    return _impl
+
+
 def _tensor_array():
     def _impl(inputs, attr, params, prelude):
         dtype_str = attr.get("dtype").name
@@ -3157,6 +3174,7 @@ _convert_map = {
     "Rint": AttrCvt("round"),
     "Round": AttrCvt("round"),
     "Rsqrt": _rsqrt(),
+    "ScatterNd": _scatter_nd(),
     "Select": _where(),
     "SelectV2": _where_v2(),
     "Selu": _selu(),
