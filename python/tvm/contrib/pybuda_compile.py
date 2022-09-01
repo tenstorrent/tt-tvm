@@ -452,18 +452,54 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     return json_graphs, inputs
 
 
-def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
-    framework_outputs = []
-    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        framework_outputs = tfmod(*inputs)
-        #TODO: Figure out how to sort dictionary outputs
-        # if isinstance(framework_outputs, dict):
-        #     framework_outputs = list(framework_outputs.values())
-        if not isinstance(framework_outputs, (list, tuple)):
-            framework_outputs = [framework_outputs]
+def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+    # Convert model from Jax to TensorFlow
+    tf_model = jax2tf.convert(jaxmodel, enable_xla=False)
+    tf_fun = tf.function(tf_model, autograph=False)
+    
+    # Extract framework model outputs
+    framework_outputs = extract_framework_model_outputs(
+        framework="jax",
+        model=tf_fun,
+        inputs=inputs,
+        compiler_cfg=compiler_cfg,
+    )
 
-        supported_outputs = (tf.Tensor, torch.Tensor)
-        framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)]
+    # Get graph definition
+    tf_fun = tf_fun.get_concrete_function(*inputs)
+    graph_def = tf_fun.graph.as_graph_def()   
+
+    # Extract flatten inputs
+    flattened_inputs, flattened_input_names, _, _= extract_flatten_inputs(
+        framework="jax",
+        model=tf_fun,
+        inputs=inputs,
+    )
+
+    # Generate TVM module
+    outputs = [output.name for output in tf_fun.outputs]
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
+    mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
+
+    # Construct TVM IR
+    mod, param_name_lookup = construct_tvm_ir(
+        framework="jax",
+        model=jaxmodel,
+        tvm_mod=mod,
+        params=params,
+        compiler_cfg=compiler_cfg,
+    )
+
+    # Construct NumPy inputs
+    np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
+
+    # Compile TVM for Buda
+    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+
+    # Extract Graphs (TT, CPU, ...)
+    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup)
+
+    return json_graphs, flattened_inputs
 
 
 def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
