@@ -342,7 +342,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         inputs=inputs,
     )
         
-    # enerate TVM module
+    # Generate TVM module
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
     mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)
     
@@ -465,53 +465,52 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
         supported_outputs = (tf.Tensor, torch.Tensor)
         framework_outputs = [x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)]
 
+
+def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+    # Extract framework model outputs
+    framework_outputs = extract_framework_model_outputs(
+        framework="tensorflow",
+        model=tfmod,
+        inputs=inputs,
+        compiler_cfg=compiler_cfg,
+    )
+
+    # Trace module & get graph definition
     @tf.function
     def trace(*inputs):
         return tfmod(*inputs, training=False)
-
     full_model = trace.get_concrete_function(*inputs)
-
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def()
+
+    # Extract flatten inputs
+    flattened_inputs, flattened_input_names, _, _= extract_flatten_inputs(
+        framework="tensorflow",
+        model=frozen_func,
+        inputs=inputs,
+    )
+
+    # Generate TVM module
     outputs = [output.name for output in frozen_func.outputs]
-
-    # The tensorflow trace automatically flattens inputs
-    flattened_input_names = [tensor.name.split(':')[0] for tensor in frozen_func.inputs]
-
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
-    flattened_inputs, _, _ = flatten_inputs(inputs)
 
+    # Construct TVM IR
+    mod, param_name_lookup = construct_tvm_ir(
+        framework="tensorflow",
+        model=tfmod,
+        tvm_mod=mod,
+        params=params,
+        compiler_cfg=compiler_cfg,
+    )
 
-    # TODO: Destupidify this! (Maybe we can sort by a substring of the weight names to make this more efficient)
-    found_weights = []
-    param_name_lookup = {}
-    non_weight_params = {} # Some parameters (like causal mask) are not weights
-
-    for (bad_name, value) in params.items():
-        weight_found = False
-        for tf_weight in tfmod.weights:
-            if np.array_equal(tf_weight.value().numpy(), value.numpy()) and tf_weight.name not in found_weights:
-                param_name_lookup[bad_name] = tf_weight.name
-                weight_found = True
-                found_weights.append(tf_weight.name)
-                break
-        if not weight_found:
-            param_name_lookup[bad_name] = bad_name
-            non_weight_params[bad_name] = (value, False)
-    if not compiler_cfg.enable_tvm_constant_prop:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], non_weight_params))
-    else:
-        if len(compiler_cfg.tvm_constnat_prop_mask):
-            propped_params = {k : (v, True) for k, v, in params.items() if any([mask in param_name_lookup[k] for mask in compiler_cfg.tvm_constnat_prop_mask])}
-            propped_params.update(non_weight_params)
-        else:
-            propped_params = {k: (v, True) for k, v in params.items()}
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
-
+    # Construct NumPy inputs
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
+
+    # Compile TVM for Buda
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     
+    # Extract Graphs (TT, CPU, ...)
     json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup)
 
     return json_graphs, flattened_inputs
