@@ -182,6 +182,9 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
         json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    elif framework == "jax":
+        tf_inputs = to_tf_tensors(inputs, force_float32=True)
+        json_graphs, inputs = compile_jax_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -735,6 +738,28 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         }
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.asnumpy()) for x in inputs if x is not None]
+    elif framework == "jax":
+        def flatten_params(params, parent_key="", sep="."):
+            items = []
+            for key, val in params.items():
+                new_key = parent_key + sep + key if parent_key else key
+
+                if isinstance(val, MutableMapping):
+                    items.extend(flatten_params(val, new_key, sep=sep).items())
+                else:
+                    items.append((new_key, val))
+
+            return dict(items)
+
+        module_params = flatten_params(module.variables['params']._dict)
+
+        weights = {}
+        for key, value in module_params.items():
+            torch_tensor = torch.Tensor(np.array(value))
+            weights[key] = (torch_tensor, True)
+
+        if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
+            inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
