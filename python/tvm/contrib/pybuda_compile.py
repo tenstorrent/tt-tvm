@@ -320,78 +320,52 @@ def extract_graphs(mod, buda_params, input_names, param_name_lookup=None):
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     training_mode = torchmod.training
 
-    framework_outputs = []
-    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        assert training_mode == False
-        framework_outputs = torchmod(*inputs)
+    # Extract framework model outputs
+    framework_outputs = extract_framework_model_outputs(
+        framework="pytorch",
+        model=torchmod,
+        inputs=inputs,
+        compiler_cfg=compiler_cfg,
+    )
 
-        if not isinstance(framework_outputs, (list, tuple)):
-            if isinstance(framework_outputs, torch.Tensor):
-                framework_outputs = [framework_outputs]
-            elif isinstance(framework_outputs, OrderedDict):
-                framework_outputs = tuple(framework_outputs.values())
-            else:
-                assert False, "Don't know what to do with this"
-        elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
-            output_list = []
-            for sublist in framework_outputs:
-                if isinstance(sublist, (list, tuple)):
-                    output_list.extend(sublist)
-                else:
-                    output_list.append(sublist)
-            framework_outputs = output_list
-
-        framework_outputs = (act.float() if torch.is_floating_point(act) else act for act in framework_outputs)
-        framework_outputs = [x.detach().numpy() for x in framework_outputs]
-
-    if training_mode and compiler_cfg.enable_tvm_dropout == False:
         # (Temporary): Remove when buda supports dropout
+    if training_mode and compiler_cfg.enable_tvm_dropout == False:
         torchmod.eval()
+
+    # Trace framework model
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
-    # ensures unique names for every input
-    input_structure = []
-    input_names = [i.debugName().split('.')[0] for i in list(traced_model.graph.inputs())[1:]]#list(torchmod.forward.__code__.co_varnames[1:][:len(inputs)])
-    input_count = 0
 
-    if isinstance(inputs, (list, tuple)):
+    # Extract flatten inputs
+    flattened_inputs, flattened_input_names, flattened_name_map, input_structure = extract_flatten_inputs(
+        framework="pytorch",
+        model=traced_model,
+        inputs=inputs,
+    )
         
-        for i in range(len(inputs)):
-            input = inputs[i]
-            if isinstance(input, (list, tuple)):
-                structure = (input_names[i], tuple([tuple(t.shape) for t in input]))
-            elif isinstance(input, dict):
-                structure = (input_names[i], {k: v.shape for k, v in input.items()})
-            else:
-                structure = (input_names[i], tuple(input.shape))
-            input_structure.append(tuple(structure))
-    else:
-        input_structure = OrderedDict()
-        for k, v in inputs.items():
-            input_structure[k] = v.shape
-
-
+    # enerate TVM module
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
-    flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(inputs, input_names)
-    flattened_inputs = [inp.float() if torch.is_floating_point(inp) else inp for inp in flattened_inputs]
     mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)
     
-    if not compiler_cfg.enable_tvm_constant_prop:
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
-    else:
-        if len(compiler_cfg.tvm_constnat_prop_mask):
-            propped_params = {k : (v, True) for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
-        else:
-            propped_params = {k : (v, True) for k, v, in params.items()}
-        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
+    # Construct TVM IR
+    mod, _ = construct_tvm_ir(
+        framework="pytorch",
+        model=torchmod,
+        tvm_mod=mod,
+        params=params,
+        compiler_cfg=compiler_cfg,
+    )
 
+    # Construct NumPy inputs
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
 
+    # Compile TVM for Buda
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     if training_mode:
         torchmod.train()
 
+    # Extract Graphs (TT, CPU, ...)
     json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names)
 
     return json_graphs, flattened_inputs
