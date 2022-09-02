@@ -59,7 +59,7 @@ def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg:
     elif framework == "jax":
         framework_outputs = model(*inputs)
         if isinstance(framework_outputs, HFModelOutput):
-            framework_outputs = framework_outputs.last_hidden_state
+            framework_outputs = list(framework_outputs.values())
 
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
