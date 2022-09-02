@@ -1,9 +1,11 @@
 from collections import OrderedDict, MutableMapping
 
+import flax
 import torch
 import numpy as np
 import tensorflow as tf
 from transformers.utils.generic import ModelOutput as HFModelOutput
+from transformers.modeling_flax_utils import FlaxPreTrainedModel
 
 import tvm
 from pybuda.config import CompilerConfig
@@ -203,10 +205,12 @@ def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: Compi
         param_name_lookup = {}
         non_weight_params = {}  # Some parameters (like causal mask) are not weights
 
-        try:
+        if isinstance(model, FlaxPreTrainedModel):
             model_params = model.params
-        except AttributeError as ex:
+        elif isinstance(model, flax.linen.Module):
             model_params = model.variables['params']._dict
+        else:
+            raise RuntimeError("Unknown Jax module instance.")
 
         model_params = flatten(model_params)
         for (bad_name, value) in params.items():
