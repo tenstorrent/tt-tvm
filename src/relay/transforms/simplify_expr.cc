@@ -382,6 +382,19 @@ class SimplifyTranspose : public DFPatternRewrite {
       it++;
     }
 
+    // Check if the transpose is still required
+    bool need_transpose = false;
+    for (int i = 0; i < ndim; ++i) {
+      if (axes[i] != i) {
+        need_transpose = true;
+        break;
+      }
+    }
+
+    if (need_transpose) {
+      // Buda can only support single axis transpose for now
+      return post;
+    }
     return MakeTranspose(x, axes);
   }
 
