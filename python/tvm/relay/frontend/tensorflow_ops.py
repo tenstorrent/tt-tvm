@@ -276,7 +276,9 @@ def _pooling(name):
         if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
             tmp_shape = _infer_shape(inputs[0], mod)
             input_shape = [tmp_shape[ii] for ii in (0, 3, 1, 2)]
-            inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 1, 2))
+            # Buda specific transpose order
+            inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
+            inputs[0] = _op.transpose(inputs[0], axes=(0, 1, 3, 2))
             attr["data_format"] = "NCHW"
             flip_layout = True
 
@@ -325,7 +327,8 @@ def _pooling(name):
         )(inputs, attr)
 
         if flip_layout:
-            out = _op.transpose(out, axes=(0, 2, 3, 1))
+            out = _op.transpose(out, axes=(0, 1, 3, 2))
+            out = _op.transpose(out, axes=(0, 3, 2, 1))
 
         return out
 
@@ -377,7 +380,9 @@ def _conv(opname):
         input_shape = _infer_shape(inputs_data, mod)
         if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
             input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-            inputs_data = _op.transpose(inputs_data, axes=(0, 3, 1, 2))
+            # Buda specific transpose order
+            inputs_data = _op.transpose(inputs_data, axes=(0, 3, 2, 1))
+            inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
             if opname in ["conv", "conv_transpose"]:
                 weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
                 inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
@@ -504,7 +509,8 @@ def _conv(opname):
         )([inputs_data, inputs[1]], attr)
 
         if flip_layout:
-            out = _op.transpose(out, axes=(0, 2, 3, 1))
+            out = _op.transpose(out, axes=(0, 1, 3, 2))
+            out = _op.transpose(out, axes=(0, 3, 2, 1))
 
         return out
 
@@ -522,7 +528,9 @@ def _dilation2d():
 
         if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
             input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-            inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 1, 2))
+            # Buda specific transpose order
+            inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
+            inputs[0] = _op.transpose(inputs[0], axes=(0, 1, 3, 2))
             weights_shape = [weights_shape[ii] for ii in (2, 0, 1)]
             inputs[1] = _op.transpose(inputs[1], axes=(2, 0, 1))
             attr["data_format"] = "NCHW"
@@ -590,7 +598,8 @@ def _dilation2d():
             transforms={"data_format": "data_layout"},
         )([inputs[0], inputs[1]], attr)
         if attr["_target_layout"] == "NCHW":
-            out = _op.transpose(out, axes=(0, 2, 3, 1))
+            out = _op.transpose(out, axes=(0, 1, 3, 2))
+            out = _op.transpose(out, axes=(0, 3, 2, 1))
         return out
 
     return _impl
