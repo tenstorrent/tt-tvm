@@ -20,6 +20,7 @@ from collections import OrderedDict, MutableMapping
 import pybuda
 
 from json import JSONEncoder
+import os
 from os.path import exists as file_exists
 import onnxruntime as ort
 import onnx
@@ -159,6 +160,13 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
     global cpu_json_graph
     dev_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "tt"}
     cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
+
+    if bool(os.environ.get("PYBUDA_ENABLE_TVM_CACHE", 0)) and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.tvm_graph_load_path == "":
+        auto_path = "generated_modules/tvm_cache/" + os.environ.get('PYTEST_CURRENT_TEST').split(" ")[0]
+        if not file_exists(auto_path):
+            compiler_cfg.tvm_graph_store_path = auto_path
+        else:
+            compiler_cfg.tvm_graph_load_path = auto_path
 
     if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
         json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
@@ -805,6 +813,7 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
 
     serilized_str = json.dumps(serilized_dict, cls=NumpyArrayEncoder, indent=2)
     
+    os.makedirs(os.path.dirname(compiler_cfg.tvm_graph_store_path), exist_ok=True)
     with open(compiler_cfg.tvm_graph_store_path, 'w') as file:
         file.write(serilized_str)
 
