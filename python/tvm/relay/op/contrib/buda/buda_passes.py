@@ -1226,6 +1226,19 @@ class DecomposeEinsum(DFPatternCallback):
 
             return result
 
+        elif match_einsum_pattern("b i d, b j d -> b i j", equation):
+            assert len(node_map[self.act][0]) == 2
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=True)
+            return result
+        elif match_einsum_pattern("b i j, b j d -> b i d", equation):
+            assert len(node_map[self.act][0]) == 2
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+            result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=False)
+            return result
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
