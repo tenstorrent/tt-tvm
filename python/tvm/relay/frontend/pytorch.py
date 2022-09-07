@@ -2451,6 +2451,11 @@ class PyTorchOpConverter:
             res_shape = list(torch.broadcast_tensors(*map(torch.empty, infer_shape_value))[0].shape)
         return [_op.broadcast_to(tensor, res_shape) for tensor in tensor_list]
 
+    def broadcast_to(self, inputs, input_types):
+        tensor_list = inputs[1]
+        res_shape = [x.data.numpy().item() for x in tensor_list]
+        return _op.broadcast_to(inputs[0], res_shape)
+
     def Bool(self, inputs, input_types):
         assert len(inputs) == 1
         return inputs[0]
@@ -4253,6 +4258,7 @@ class PyTorchOpConverter:
             "aten::upsample_nearest3d": self.make_upsample3d("nearest_neighbor"),
             "aten::expand_as": self.expand_as,
             "aten::broadcast_tensors": self.broadcast_tensors,
+            "aten::broadcast_to": self.broadcast_to,
             "aten::lt": self.make_elemwise("less"),
             "aten::gt": self.make_elemwise("greater"),
             "aten::le": self.make_elemwise("less_equal"),
