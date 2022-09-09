@@ -747,7 +747,8 @@ def get_relay_output(mod, params, inputs, target):
     # Build and Run Relay modules with inputs as (key : tensor) pair
     # Then, inputs dont need to be in the same order as 'mod' defines.
     ret_type = mod["main"].checked_type.ret_type
-    lib = relay.build(mod, target=target, params=params)
+    with tvm.transform.PassContext(opt_level=0):
+        lib = relay.build_module.build(mod, target=target, params=params)
     m = graph_executor.GraphModule(lib["default"](tvm.cpu(0)))
     m.run(**inputs)
     
@@ -772,7 +773,6 @@ def get_relay_output(mod, params, inputs, target):
     if not isinstance(relay_outputs, (list, tuple)):
         relay_outputs = [relay_outputs]
     relay_outputs = [x.numpy() for x in flattened]
-
     return relay_outputs
 
 
@@ -833,10 +833,6 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None, input
     tophub_context = tvm.autotvm.utils.EmptyContext()
 
     with tophub_context, tvm.transform.PassContext(opt_level=5):
-        bld_mod = BuildModule()
-        if params:
-            bld_mod._set_params(params)
-
         logger.trace("Before Compiling")
         logger.trace(relay_module.functions)
 

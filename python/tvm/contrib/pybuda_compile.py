@@ -37,7 +37,7 @@ from tvm.contrib.pybuda_utils import (
     extract_flatten_inputs, 
     construct_tvm_ir,
 )
-
+import hashlib
 
 dev_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "tt"}
 cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
@@ -161,16 +161,17 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
     dev_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "tt"}
     cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
 
-    if bool(os.environ.get("PYBUDA_ENABLE_TVM_CACHE", 0)) and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.tvm_graph_load_path == "":
+    auto_cache = int(os.environ.get("PYBUDA_ENABLE_TVM_CACHE", 0))
+    if bool(auto_cache) and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.tvm_graph_load_path == "":
         auto_path = "generated_modules/tvm_cache/" + os.environ.get('PYTEST_CURRENT_TEST').split(" ")[0]
-        if not file_exists(auto_path):
+        if not file_exists(auto_path) or auto_cache == -1:
             compiler_cfg.tvm_graph_store_path = auto_path
-        else:
+        elif auto_cache == 1:
             compiler_cfg.tvm_graph_load_path = auto_path
-
-    if compiler_cfg.tvm_graph_load_path != "" and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.enable_consteval:
-        json_graphs = load_serialized_tvm_graph(compiler_cfg.tvm_graph_load_path)
-    elif framework == "pytorch":
+        else:
+            assert False, f"PYBUDA_ENABLE_TVM_CACHE value of {auto_cache} not understood. Set to 1 to enable cache, 0 to disable and -1 to recache module"
+    
+    if framework == "pytorch":
         json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
@@ -252,8 +253,10 @@ def add_passthrough_if_needed(first, second, third, input_names):
 
     return first, second
 
-def extract_graphs(mod, buda_params, input_names, param_name_lookup={}):
+def extract_graphs(mod, buda_params, input_names, param_name_lookup={}, hex_hash=""):
     main_graph = str(mod.astext())
+    cpu_json_graph["hash"] = hex_hash
+    dev_json_graph["hash"] = hex_hash
     cpu_functions = list(cpu_json_graph["functions"].keys())
     dev_functions = list(dev_json_graph["functions"].keys())
     all_functions = cpu_functions + dev_functions
@@ -353,6 +356,13 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         inputs=inputs,
     )
 
+    graph_string = traced_model.graph.str().encode('utf-8')
+    m = hashlib.sha256()
+    m.update(graph_string)
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs, flattened_inputs
+
     # Generate TVM module
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
     mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)
@@ -369,7 +379,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
     # Construct NumPy inputs
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
-
+    
     # Compile TVM for Buda
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
@@ -377,7 +387,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         torchmod.train()
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names)
+    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, hex_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
@@ -441,7 +451,14 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     input_names = []
     for inp in onnx_mod.graph.input:
         input_names.append(inp.name)
-    
+
+    graph_string = str(onnx_mod).encode('utf-8')
+    m = hashlib.sha256()
+    m.update(graph_string)
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs, inputs
+
     assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
     output_names = []
     for out in onnx_mod.graph.output:
@@ -470,7 +487,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
 
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, input_names)
+    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, input_names, hex_hash=m.hexdigest())
 
     return json_graphs, inputs
 
@@ -549,6 +566,12 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
         inputs=inputs,
     )
 
+    m = hashlib.sha256()
+    m.update(str(graph_def).encode('utf-8'))
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs, flattened_inputs
+        
     # Generate TVM module
     outputs = [output.name for output in frozen_func.outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
@@ -570,7 +593,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup)
+    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup, hex_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
@@ -596,6 +619,12 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
     # frozen_func = convert_variables_to_constants_v2(full_model)
     # graph_def = frozen_func.graph.as_graph_def()
 
+    m = hashlib.sha256()
+    m.update(str(graph_def).encode('utf-8'))
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs
+        
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=output_list_)
 
     assert compiler_cfg.enable_tvm_constant_prop == True, "Pybuda Compile only support tf graphdef model with TVM parameter binding."
@@ -647,6 +676,23 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
         "input_" + str(i) : inp.shape
         for i, inp in enumerate(inputs)
     }
+
+    mod_inputs = []
+    if isinstance(module, mx.gluon.HybridBlock):
+        for name in input_dict:
+            mod_inputs.append(mx.sym.Variable(name))
+        sym = module(*mod_inputs)
+        if isinstance(sym, (list, tuple)):
+            sym = mx.sym.Group(sym)
+    else:
+        sym = module
+    graph_string = sym.tojson().encode('utf-8')
+    m = hashlib.sha256()
+    m.update(graph_string)
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs
+
     input_name_to_tensor = {name : tensor.asnumpy() for name, tensor in zip(input_dict.keys(), inputs)}
     mod, params = relay.frontend.from_mxnet(module, shape=input_dict)
 
@@ -658,6 +704,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
 
     _, buda_params = compile_tvm_for_buda(mod, params, input_name_to_tensor, framework_outputs, input_names=list(input_dict.keys()), graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
+    dev_json_graph["hash"] = m.hexdigest()
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
         dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
@@ -671,25 +718,30 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
     return json_graph
 
 
-def load_serialized_tvm_graph(full_file_path):
+def load_serialized_tvm_graph(compiler_cfg, hex_hash):
     """
     Loads serialized TVM graph representation ported to PyBuda in form of python dictionary.
 
     Parameters
     ----------
-    full_file_path: String
-        Full source path where serialized TVM graph is stored
+    compiler_cfg: CompilerConfig
+        Compiler configurations
         
     Returns
     -------
     Dictionary
         Deserialized TVM graph
     """
-    if not file_exists(full_file_path):
-        raise RuntimeError(f"Serialized TVM model doesn't exist: {full_file_path}")
+    if not file_exists(compiler_cfg.tvm_graph_load_path) or compiler_cfg.enable_tvm_constant_prop:
+        return None
 
-    with open(full_file_path, "r") as file:
+    with open(compiler_cfg.tvm_graph_load_path, "r") as file:
         serialized_graph_str = json.load(file)
+
+    if list(serialized_graph_str.values())[0]["hash"] != hex_hash:
+        compiler_cfg.tvm_graph_store_path = compiler_cfg.tvm_graph_load_path
+        compiler_cfg.tvm_graph_load_path = ""
+        return None
 
     json_graphs = []
     for id, json_graph in serialized_graph_str.items():
@@ -700,7 +752,7 @@ def load_serialized_tvm_graph(full_file_path):
         if "nid_to_input_idx" in json_graph.keys():
             serialized_dict["nid_to_input_idx"] = {int(k) : v for k, v in json_graph["nid_to_input_idx"].items()}
         json_graphs.append(serialized_dict)
-    logger.debug(f"Successfully load serialized TVM graph from {full_file_path} path")
+    logger.debug(f"Successfully load serialized TVM graph from {compiler_cfg.tvm_graph_load_path} path")
 
     return json_graphs
 
@@ -820,6 +872,7 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
         serilized_dict[str(id)]["graph"] = graph_dict
         serilized_dict[str(id)]["params"] = params_dict
         serilized_dict[str(id)]["device"] = json_graph["device"]
+        serilized_dict[str(id)]["hash"] = json_graph["hash"]
         if "nid_to_input_idx" in json_graph.keys():
             serilized_dict[str(id)]["nid_to_input_idx"] = json_graph["nid_to_input_idx"]
 
@@ -829,5 +882,5 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
     with open(compiler_cfg.tvm_graph_store_path, 'w') as file:
         file.write(serilized_str)
 
-    logger.debug(f"Successfully serilized TVM graph from {compiler_cfg.tvm_graph_store_path} path")
+    logger.info(f"Successfully serilized TVM graph from {compiler_cfg.tvm_graph_store_path} path")
 
