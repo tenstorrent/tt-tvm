@@ -797,8 +797,8 @@ def verify_outputs(framework_outputs, relay_outputs, compile_location, rtol=1e-0
             logger.trace(fr_out)
             logger.trace(f"TVM: (shape = {tvm_out.shape}")
             logger.trace(tvm_out)
-            logger.info("Max ATOL Delta: " + "{:.3e}".format(np.max(np.abs(np.tensor(fr_out - tvm_out))).item()) + ", atol=" +  "{}".format(atol))
-            logger.info("Max RTOL Delta: " + "{:.3e}".format(np.max(np.abs(np.tensor(fr_out - tvm_out))/np.tensor(tvm_out)).item()) + ", rtol=" + "{}".format(rtol))
+            logger.info("Max ATOL Delta: " + "{:.3e}".format(np.max(np.abs((fr_out - tvm_out))).item()) + ", atol=" +  "{}".format(atol))
+            logger.info("Max RTOL Delta: " + "{:.3e}".format(np.max(np.abs((fr_out - tvm_out))/np.tensor(tvm_out)).item()) + ", rtol=" + "{}".format(rtol))
             if pcc is not None:
                 logger.info(f"PCC got={pcc_value}, required={pcc}")
             if not allowed_to_fail:
