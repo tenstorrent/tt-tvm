@@ -6,10 +6,71 @@ import numpy as np
 import tensorflow as tf
 from transformers.utils.generic import ModelOutput as HFModelOutput
 from transformers.modeling_flax_utils import FlaxPreTrainedModel
+from transformers.modeling_outputs import ModelOutput
 
 import tvm
 from pybuda.config import CompilerConfig
 from pybuda.tvm_utils import flatten_inputs
+
+class NodeOriginFinder(tvm.relay.ExprVisitor):
+    def __init__(self, origins, include_constants=True):
+        super().__init__()
+        self.produced_by = {}
+        self.consumed_by = {}
+        self.origin = None
+        self.possible_origins = origins
+        self.include_constants_as_origin = include_constants
+    
+    def reset(self):
+        self.origin = None
+
+    def visit_call(self, call):
+        
+        if call.op in self.possible_origins:
+            self.origin = (call.op.name_hint, 0)
+            return
+        super().visit_call(call)
+
+    def visit_constant(self, const):
+        if self.include_constants_as_origin:
+            self.origin = ('constant', -1)
+
+    def visit_var(self, var):
+        if var in self.possible_origins:
+            self.origin = var
+
+    def visit_tuple_getitem(self, t):
+        if isinstance(t.tuple_value, tvm.relay.Call):
+            if t.tuple_value.op in self.possible_origins:
+                self.origin = (t.tuple_value.op.name_hint, t.index)
+                return
+
+        super().visit_tuple_getitem(t)
+
+def trace_to_origin(node, possible_origins, include_constants=True):
+    pd = NodeOriginFinder(possible_origins, include_constants)
+    pd.visit(node)
+    return pd.origin
+
+
+class FunctionFinder(tvm.relay.ExprVisitor):
+
+    def __init__(self, function_names):
+        super().__init__()
+        self.func_names = function_names
+        self.funcs = []
+
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.GlobalVar):
+            if call.op.name_hint in self.func_names:
+                self.funcs.append(call)
+        return super().visit_call(call)
+
+def extract_function_callnodes(main_module, funcs):
+    ff = FunctionFinder([func.name_hint for func in funcs])
+
+    ff.visit(main_module)
+    return ff.funcs
 
 
 def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg: CompilerConfig):
@@ -22,6 +83,10 @@ def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg:
         assert model.training == False
 
         framework_outputs = model(*inputs)
+        if isinstance(framework_outputs, ModelOutput):
+            framework_outputs = framework_outputs.to_tuple()
+
+        # import pdb; pdb.set_trace()
         if not isinstance(framework_outputs, (list, tuple)):
             if isinstance(framework_outputs, torch.Tensor):
                 framework_outputs = [framework_outputs]
@@ -30,13 +95,18 @@ def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg:
             else:
                 assert False, "Don't know what to do with this"
         elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
-            output_list = []
-            for sublist in framework_outputs:
-                if isinstance(sublist, (list, tuple)):
-                    output_list.extend(sublist)
+            # import pdb; pdb.set_trace()
+            def flatten_outputs(outputs):
+                # import pdb; pdb.set_trace()
+                new_outputs = []
+                if isinstance(outputs, (tuple, list)):
+                    for output in outputs:
+                        new_outputs.extend(flatten_outputs(output))
                 else:
-                    output_list.append(sublist)
-            framework_outputs = output_list
+                    new_outputs.append(outputs)
+                return new_outputs
+            
+            framework_outputs = flatten_outputs(framework_outputs)
 
         framework_outputs = (
             act.float() if torch.is_floating_point(act) else act for act in framework_outputs

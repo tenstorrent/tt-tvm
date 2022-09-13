@@ -550,7 +550,9 @@ def node_hash(node):
         node_descriptor = (node.name_hint, True)
     else:
         node_descriptor = (type(node), False)
-    return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
+    # if isinstance(node_descriptor[0], str) and  "FunctionVar" in node_descriptor[0]:
+    #     import pdb; pdb.set_trace()
+    return (tvm.ir.structural_hash(node, map_free_vars=False), node_descriptor)
 
 class NodeIndexer():
     def __init__(self):
@@ -614,7 +616,7 @@ class DetermineTarget(ExprMutator):
                 self.graph_changed = True
                 new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
                 new_fn = call.op.with_attr(new_attrs)
-                return tvm.relay.expr.Call(new_fn, call.args)
+                return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
             else:
                 try:
                     tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
@@ -676,9 +678,18 @@ class ConstructDiGraph(ExprVisitor):
         self.graph = nx.MultiDiGraph()
         self.fallback_nodes = set()
         self.node_indexer = NodeIndexer()
+        self.names_used = {}
 
     def register_args(self, parent, parent_node):
         for arg in parent.args:
+            if isinstance(arg, tvm.relay.expr.Var):
+                pass
+                # if arg.name_hint in self.names_used:
+                #     import pdb; pdb.set_trace()
+                #     self.names_used[arg.name_hint] += 1
+                # else:
+                #     self.names_used[arg.name_hint] = 0
+                # arg = tvm.relay.expr.Var(arg.name_hint + f"_{self.names_used[arg.name_hint]}", arg.type_annotation)
             self.graph.add_edge(node_hash(arg), parent_node)
 
     def visit_call(self, call):
@@ -1006,6 +1017,8 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
                     if isinstance(arg, tvm.relay.expr.Var):
                         continue
                     if isinstance(arg, tvm.relay.expr.Tuple):
+                        continue
+                    if isinstance(arg, tvm.relay.expr.TupleGetItem):
                         continue
                     # if isinstance(arg, tvm.relay.expr.TupleGetItem):
                     #     # arg = arg.tuple_value().op
