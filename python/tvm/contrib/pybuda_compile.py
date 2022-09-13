@@ -4,6 +4,7 @@ import torch
 
 import numpy as np
 import tvm
+from tvm.ir.transform import Pass
 import tvm.relay as relay
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import (
@@ -27,6 +28,7 @@ import onnxruntime as ort
 import onnx
 import onnx.numpy_helper
 import mxnet as mx
+from tvm.relay.expr import Tuple
 from tvm.relay.op.contrib.buda.buda import verify_tvm_compile
 
 from jax.experimental import jax2tf
@@ -37,6 +39,8 @@ from tvm.contrib.pybuda_utils import (
     extract_framework_model_outputs, 
     extract_flatten_inputs, 
     construct_tvm_ir,
+    extract_function_callnodes,
+    trace_to_origin,
 )
 import hashlib
 
@@ -205,12 +209,84 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
 
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
-def add_passthrough_if_needed(first, second, third, input_names):
+
+def get_func_output_origins(func_body, origins):
+
+    model_output_origins = []
+    if isinstance(func_body, relay.expr.Tuple):
+        for output in func_body.fields:
+            model_output_origins.append(trace_to_origin(output, origins))
+    else:
+        model_output_origins.append(trace_to_origin(func_body, origins))
+    
+    return model_output_origins
+
+def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_mod, input_names):
+    first, second, third = first_json["graph"], second_json["graph"], third_json["graph"]
+
+    second_name = list(second_json["functions"].keys())[0]
+
+    gvars = partitioned_mod.get_global_vars()
+    origins = list(partitioned_mod["main"].params)
+    funcs = []
+    for gvar in gvars:
+        if isinstance(gvar.checked_type, relay.FuncType):
+            funcs.append(gvar)
+
+    # The list of 'origins' we want to trace to is either the output of a function or an argument to 'main'.
+    # This is for the purpose of tracking which outputs of which functions to passthrough
+    origins = origins + funcs
+
+    # Determine which functions the outputs of the model originate from
+    main_output_origins = get_func_output_origins(partitioned_mod["main"].body, origins)
+
+    # get the second function using the name (the tt device module)
+    funcs = extract_function_callnodes(partitioned_mod["main"], origins)
+    second_func_idx = -1
+    for i, func in enumerate(funcs):
+        if func.op.name_hint == second_name:
+            second_func_idx = i
+    second_func = funcs[second_func_idx]
+
+    # Find where the inputs to the second module originate, (will either be model inputs or outputs from first module)
+    second_input_origins = [trace_to_origin(arg, origins) for arg in second_func.args]
+
+    # Determine which outputs from the second module become model outputs. Needed for passthrough
+    first_outputs_required = []
+    second_outputs_required = []
+    for output in main_output_origins:
+        if second_name == output[0]:
+            second_outputs_required.append(output)
+
+    # Make sure everything that ends up in output is passed through to second
     second = json.loads(second)
     add_to_first = False
     if first != "":
+
+        first_name = list(first_json["functions"].keys())[0]
+
+
+        for output in main_output_origins:
+            if first_name == output[0]:
+                first_outputs_required.append(output)
+
+        # Ensure that we are not adding a passthrough from first to second on a variable that is already being passed
+        # This covers the case where an output from the first module is both an output of the model and consumed in the second module
+        for inp in second_input_origins:
+            if inp in first_outputs_required:
+                first_outputs_required.remove(inp)
+
         add_to_first = True
         first = json.loads(first)
+        # Generate new input nodes for second module
+        first_output_jsons = []
+        first_to_second_count = 0
+        for output in first_outputs_required:
+            first_output_jsons.append(copy.deepcopy(first['nodes'][first['heads'][output[1]][0]]))
+            first_output_jsons[-1]['name'] = f'passthrough_first_to_second_{first_to_second_count}'
+            first_output_jsons[-1]['op'] = 'input'
+            first_to_second_count += 1
+
         needed_first = [[input_name == node["name"] for node in second["nodes"]].index(True) if any([input_name == node["name"] for node in second["nodes"]]) else -1 for input_name in input_names]
 
         if any([p >= 0 for p in needed_first]):
@@ -219,6 +295,13 @@ def add_passthrough_if_needed(first, second, third, input_names):
                     first["nodes"].append(second["nodes"][passthrough_node])
                     first["arg_nodes"].append(len(first["nodes"]) - 1)
                     first["heads"].append([len(first["nodes"]) - 1, 0, 0])
+
+
+        # add passthrough from first to second
+        for output in first_output_jsons:
+            second['nodes'].append(output)
+            second['arg_nodes'].append(len(second['nodes'])-1)
+            second["heads"].append([len(second["nodes"]) - 1, 0, 0])
 
 
     if third != "":
@@ -237,14 +320,33 @@ def add_passthrough_if_needed(first, second, third, input_names):
                     second["nodes"].append(third["nodes"][passthrough_node])
                     second["arg_nodes"].append(len(second["nodes"]) - 1)
                     second["heads"].append([len(second["nodes"]) - 1, 0, 0])
+
+        # Create json nodes for model outputs generated in second module
+        second_output_jsons = []
+        second_to_third_count = 0
+        for output in second_outputs_required:
+            second_output_jsons.append(copy.deepcopy(second['nodes'][second['heads'][output[1]][0]]))
+            second_output_jsons[-1]['name'] = f'passthrough_second_to_third_{second_to_third_count}'
+            second_output_jsons[-1]['op'] = 'input'
+            second_to_third_count += 1
+
+        # Passthrough all outputs from first and second modules
+        for output in first_output_jsons + second_output_jsons:
+            third['nodes'].append(output)
+            third['arg_nodes'].append(len(third['nodes'])-1)
+            third["heads"].append([len(third["nodes"]) - 1, 0, 0])
             
     if add_to_first:
         first = json.dumps(first)
     second = json.dumps(second)
+    if third != "":
+        third = json.dumps(third)
+    # import pdb; pdb.set_trace()
+    return first, second, third
 
-    return first, second
 
-def extract_graphs(mod, buda_params, input_names, param_name_lookup={}, graph_hash=""):
+def extract_graphs(partitioned_mod, buda_params, input_names, param_name_lookup={}, graph_hash=""):
+    mod = partitioned_mod["main"]
     main_graph = str(mod.astext())
     cpu_json_graph["hash"] = graph_hash
     dev_json_graph["hash"] = graph_hash
@@ -274,6 +376,15 @@ def extract_graphs(mod, buda_params, input_names, param_name_lookup={}, graph_ha
         cpu_pre_json_graph = copy.deepcopy(cpu_json_graph)
         cpu_pre_json_graph["graph"] = graph
 
+        # Only keep the pre function in the pre json
+        functions_to_remove = []
+        for function in cpu_pre_json_graph["functions"]:
+            if function not in cpu_pre_functions:
+                functions_to_remove.append(function)
+        
+        for func in functions_to_remove:
+            del cpu_pre_json_graph["functions"][func]
+
         cpu_pre_json_graph["params"] = {}
         for function_name in buda_params.keys():
             if function_name in cpu_pre_functions:
@@ -294,6 +405,15 @@ def extract_graphs(mod, buda_params, input_names, param_name_lookup={}, graph_ha
         cpu_post_json_graph = copy.deepcopy(cpu_json_graph)
         cpu_post_json_graph["graph"] = graph
 
+        # Only keep the post function in the post json
+        functions_to_remove = []
+        for function in cpu_post_json_graph["functions"]:
+            if function not in cpu_post_functions:
+                functions_to_remove.append(function)
+        
+        for func in functions_to_remove:
+            del cpu_post_json_graph["functions"][func]
+
         cpu_post_json_graph["params"] = {}
         for function_name in buda_params.keys():
             if function_name in cpu_pre_functions:
@@ -301,8 +421,8 @@ def extract_graphs(mod, buda_params, input_names, param_name_lookup={}, graph_ha
     else:
         cpu_post_json_graph = {"graph":""}
     
-    cpu_pre_json_graph["graph"], dev_json_graph["graph"] = add_passthrough_if_needed(
-        cpu_pre_json_graph["graph"], dev_json_graph["graph"], cpu_post_json_graph["graph"], input_names
+    cpu_pre_json_graph["graph"], dev_json_graph["graph"], cpu_post_json_graph["graph"] = add_passthrough_if_needed(
+        cpu_pre_json_graph, dev_json_graph, cpu_post_json_graph, partitioned_mod, input_names
     )
 
     json_graphs = []
@@ -378,7 +498,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         torchmod.train()
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
@@ -478,7 +598,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
 
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, input_names, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, graph_hash=m.hexdigest())
 
     return json_graphs, inputs
 
@@ -528,7 +648,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup)
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, param_name_lookup)
 
     return json_graphs, flattened_inputs
 
@@ -584,7 +704,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod["main"], buda_params, flattened_input_names, param_name_lookup, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
