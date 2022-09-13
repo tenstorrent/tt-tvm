@@ -563,29 +563,29 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     for inp in onnx_mod.graph.input:
         input_names.append(inp.name)
 
-    graph_string = str(onnx_mod).encode('utf-8')
-    m = hashlib.sha256()
-    m.update(graph_string)
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
-    if cached_graphs is not None:
-        return cached_graphs, inputs
-
-    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
-    output_names = []
-    for out in onnx_mod.graph.output:
-        output_names.append(out.name)
-
     input_dict = {}
     input_shape_dict = {}
     for name, tensor in zip(input_names, inputs):
         input_dict[name] = tensor
         input_shape_dict[name] = tensor.shape
 
-    framework_outputs = []
-    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        assert path != None, "Onnx compile needs path to onnx file on disk."
-        ort_sess = ort.InferenceSession(path)
-        framework_outputs = ort_sess.run(output_names, input_dict)
+    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
+
+    framework_outputs = extract_framework_model_outputs(
+        framework="onnx",
+        model=onnx_mod,
+        inputs=inputs,
+        compiler_cfg=compiler_cfg,
+        path=path,
+        input_dict=input_dict,
+    )
+
+    graph_string = str(onnx_mod).encode('utf-8')
+    m = hashlib.sha256()
+    m.update(graph_string)
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs, inputs
 
     mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict, freeze_params=False)
     mod = relay.transform.DynamicToStatic()(mod)
