@@ -4,6 +4,7 @@ import flax
 import torch
 import numpy as np
 import tensorflow as tf
+import onnxruntime as ort
 from transformers.utils.generic import ModelOutput as HFModelOutput
 from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from transformers.modeling_outputs import ModelOutput
@@ -73,7 +74,14 @@ def extract_function_callnodes(main_module, funcs):
     return ff.funcs
 
 
-def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg: CompilerConfig):
+def extract_framework_model_outputs(
+    framework: str, 
+    model, 
+    inputs, 
+    compiler_cfg: CompilerConfig, 
+    path=None,
+    input_dict={},
+):
     framework_outputs = []
 
     if compiler_cfg is None or not compiler_cfg.varify_tvm_compile:
@@ -140,6 +148,15 @@ def extract_framework_model_outputs(framework: str, model, inputs, compiler_cfg:
         framework_outputs = [
             x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)
         ]
+    elif framework == "onnx":
+        output_names = []
+        for out in model.graph.output:
+            output_names.append(out.name)
+
+        assert path != None, "Onnx compile needs path to onnx file on disk."
+        ort_sess = ort.InferenceSession(path)
+        framework_outputs = ort_sess.run(output_names, input_dict)
+
     else:
         raise RuntimeError("Unsupported framework type: {}".format(framework))
 
