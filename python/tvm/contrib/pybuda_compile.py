@@ -1,5 +1,5 @@
 from pybuda.tensor import to_tf_tensors
-from pybuda.tvm_utils import flatten_inputs
+from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 import torch
 
 import numpy as np
@@ -665,7 +665,16 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     # Trace module & get graph definition
     @tf.function
     def trace(*inputs):
-        return tfmod(*inputs, training=False)
+        kwargs = {}
+        import inspect 
+        arg_names = inspect.getfullargspec(tfmod.call).args
+        if "return_dict" in arg_names:
+            kwargs["return_dict"] = False
+
+        if "training" in arg_names:
+            kwargs["training"] = False
+        return tfmod(*inputs, **kwargs)
+
     full_model = trace.get_concrete_function(*inputs)
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def()
@@ -682,9 +691,10 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
-        
+
+    flattened_outputs = flatten_structured_output([full_model.structured_outputs])
     # Generate TVM module
-    outputs = [output.name for output in frozen_func.outputs]
+    outputs = [x.name for x in flattened_outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
