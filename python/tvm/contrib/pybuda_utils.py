@@ -11,7 +11,7 @@ from transformers.modeling_outputs import ModelOutput
 
 import tvm
 from pybuda.config import CompilerConfig
-from pybuda.tvm_utils import flatten_inputs
+from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 
 class NodeOriginFinder(tvm.relay.ExprVisitor):
     def __init__(self, origins, include_constants=True):
@@ -122,15 +122,28 @@ def extract_framework_model_outputs(
         framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
     elif framework == "tensorflow":
-        framework_outputs = model(*inputs)
+        kwargs = {}
+        import inspect 
+        arg_names = inspect.getfullargspec(model.call).args
+        if "return_dict" in arg_names:
+            kwargs["return_dict"] = False
+
+        if "training" in arg_names:
+            kwargs["training"] = False
+    
+        framework_outputs = model(*inputs, **kwargs)
+
         # TODO (aknezevic); ref sha: 1fe78625c809e6ca887a8da5fdde44836830f990
         # Figure out how to sort dictionary outputs:
         #
         # if isinstance(framework_outputs, dict):
         #     framework_outputs = list(framework_outputs.values())
+        if isinstance(framework_outputs, dict):
+            framework_outputs = list(framework_outputs.values())
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
 
+        framework_outputs = flatten_structured_output(framework_outputs)
         supported_outputs = (tf.Tensor, torch.Tensor)
         framework_outputs = [
             x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)
