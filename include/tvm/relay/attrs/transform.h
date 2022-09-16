@@ -629,6 +629,10 @@ struct TriluAttrs : public tvm::AttrsNode<TriluAttrs> {
   }
 };  // struct TriluAttrs
 
+struct IdentityAttrs : public tvm::AttrsNode<IdentityAttrs> {
+  TVM_DECLARE_ATTRS(IdentityAttrs, "relay.attrs.IdentityAttrs") {}
+}; // struct IdentityAttrs
+
 }  // namespace relay
 }  // namespace tvm
 #endif  // TVM_RELAY_ATTRS_TRANSFORM_H_

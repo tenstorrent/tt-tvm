@@ -447,6 +447,8 @@ RELAY_REGISTER_OP("nn.relu").set_attr<FForwardRewrite>("FQRealizeRewrite", Ident
 
 RELAY_REGISTER_OP("reshape").set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
 
+RELAY_REGISTER_OP("identity").set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
+
 RELAY_REGISTER_OP("strided_slice").set_attr<FForwardRewrite>("FQRealizeRewrite", IdentityRealize);
 
 RELAY_REGISTER_OP("nn.batch_flatten")

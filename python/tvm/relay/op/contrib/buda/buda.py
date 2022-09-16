@@ -106,7 +106,7 @@ _register_external_op_helper_pybuda("tanh")
 _register_external_op_helper_pybuda("transpose")
 _register_external_op_helper_pybuda("where")
 _register_external_op_helper_pybuda("zeros")
-
+_register_external_op_helper_pybuda("identity")
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -477,8 +477,7 @@ class AddNopsToPassthrough(ExprMutator):
 
     def visit_var(self, var):
         if var in self.output_vars:
-            target_shape = list(var.checked_type.shape)
-            return tvm.relay.reshape(var, newshape=target_shape)
+            return tvm.relay.identity(var)
         else:
             return var
 
@@ -505,6 +504,18 @@ class AddNopsToPassthrough(ExprMutator):
 
 def _always_true(expr):
     return True
+
+class IdentityFunctionUnraveller(ExprMutator):
+    def __init__(self, mod):
+        super().__init__()
+        self.mod = mod
+
+    def visit_call(self, call):
+        if isinstance(call.op.checked_type, tvm.relay.FuncType):
+            function = self.mod[call.op.name_hint]
+            if len(function.params) == 1 and function.body == function.params[0]:
+                return super().visit(call.args[0])
+        return super().visit_call(call)
 
 class AllowUnsupportedOps(ExprMutator):
     def __init__(self, check_only=False):
@@ -922,7 +933,7 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
     
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod)
-    
+
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
@@ -953,6 +964,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         logger.trace(mod.functions)
 
         if compiler_cfg.enable_tvm_cpu_fallback:
+
             import time
             logger.debug(f"Running cpu fallback compilation")
             logger.debug(f"Constructing digraph...")
@@ -1003,6 +1015,13 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         logger.trace("After FixCPULinear")
         logger.trace(mod.functions)
 
+        # Unravel f(x) = x functions
+        # Note that this applies only to tvm function calls where the input is returned as the output.
+        # This will not change any identity op calls
+        mod["main"] = IdentityFunctionUnraveller(mod).visit(mod["main"])
+        logger.trace("After IdentityFunctionUnraveller")
+        logger.trace(mod.functions)
+
         mod["main"] = AllowUnsupportedOps(check_only=True).visit(mod["main"])
         logger.trace("After AllowUnsupportedOps")
         logger.trace(mod.functions)
@@ -1027,7 +1046,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
                     
                     assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
                     assert arg.op in mod.global_var_map_.values(), mod["main"]
-
+        
         assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
 
         constant_updator = UpdateConstants()

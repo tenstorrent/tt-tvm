@@ -4555,5 +4555,30 @@ RELAY_REGISTER_OP("fixed_point_multiply_per_axis")
     .set_attrs_type<FixedPointMultiplyPerAxisAttrs>()
     .set_support_level(10);
 
+Expr MakeIdentity(Expr data) {
+  auto attrs = make_object<IdentityAttrs>();
+  static const Op& op = Op::Get("identity");
+  return Call(op, {data}, Attrs(attrs), {});
+}
+
+Array<te::Tensor> IdentityCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                                       const Type& out_type) {
+  return {topi::identity(inputs[0])};
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.identity").set_body_typed(MakeIdentity);
+
+TVM_REGISTER_NODE_TYPE(IdentityAttrs);
+
+RELAY_REGISTER_OP("identity")
+    .describe(
+        R"doc(Return the the input as it was passed in.)doc" TVM_ADD_FILELINE)
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .set_support_level(3)
+    .add_type_rel("Identity", IdentityRel)
+    .set_attr<FTVMCompute>("FTVMCompute", IdentityCompute)
+    .set_attr<TOpPattern>("TOpPattern", kOpaque);
+
 }  // namespace relay
 }  // namespace tvm

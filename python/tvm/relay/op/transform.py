@@ -2035,3 +2035,5 @@ def trilu(data, k, upper=True):
     if not isinstance(k, Expr):
         k = const(k, dtype="int32")
     return _make.trilu(data, k, upper)
+def identity(data):
+    return _make.identity(data)
