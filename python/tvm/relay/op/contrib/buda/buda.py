@@ -550,9 +550,8 @@ def node_hash(node):
         node_descriptor = (node.name_hint, True)
     else:
         node_descriptor = (type(node), False)
-    # if isinstance(node_descriptor[0], str) and  "FunctionVar" in node_descriptor[0]:
-    #     import pdb; pdb.set_trace()
-    return (tvm.ir.structural_hash(node, map_free_vars=False), node_descriptor)
+
+    return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
 
 class NodeIndexer():
     def __init__(self):
@@ -684,12 +683,7 @@ class ConstructDiGraph(ExprVisitor):
         for arg in parent.args:
             if isinstance(arg, tvm.relay.expr.Var):
                 pass
-                # if arg.name_hint in self.names_used:
-                #     import pdb; pdb.set_trace()
-                #     self.names_used[arg.name_hint] += 1
-                # else:
-                #     self.names_used[arg.name_hint] = 0
-                # arg = tvm.relay.expr.Var(arg.name_hint + f"_{self.names_used[arg.name_hint]}", arg.type_annotation)
+
             self.graph.add_edge(node_hash(arg), parent_node)
 
     def visit_call(self, call):
