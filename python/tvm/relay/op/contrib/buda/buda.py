@@ -391,8 +391,8 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         self.beta = wildcard()
         self.eps = is_constant()
 
-        mean_act = is_op("mean")(self.act)
-        sub_0 = is_op("subtract")(self.act, mean_act)
+        self.mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, self.mean_act)
         mul_0 = is_op("multiply")(sub_0, sub_0)
         var = is_op("mean")(mul_0)
 
@@ -401,7 +401,7 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         recp = is_op("reciprocal")(denom)
 
         weight = is_op("multiply")(self.gamma, recp)
-        mean_part = is_op("multiply")(mean_act, weight)
+        mean_part = is_op("multiply")(self.mean_act, weight)
         act_part = is_op("multiply")(weight, self.act)
         sub_1 = is_op("subtract")(self.beta, mean_part)
         layernorm = is_op("add")(sub_1, act_part)
@@ -427,25 +427,22 @@ class ReconstructTFLayerNorm(DFPatternCallback):
             gamma_shape = (np.prod([int(x) for x in gamma_shape]),)
             gamma = tvm.relay.reshape(gamma, newshape=gamma_shape)
         else:
-            assert len(gamma_shape) == 1, "TVM Layernorm only supports single dim layernorm"
+            assert len(gamma_shape) == 1, "TVM Layernorm only supports single dim"
 
         if len(beta_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta_shape)]) == 1:
             # Count the number of dims thats not 1
             beta_shape = (np.prod([int(x) for x in beta_shape]),)
             beta = tvm.relay.reshape(beta, newshape=gamma_shape)
         else:
-            assert len(beta_shape) == 1, "TVM Layernorm only supports single dim layernorm"
+            assert len(beta_shape) == 1, "TVM Layernorm only supports single dim"
 
-        axis = None
-        # Find the last dimension of the specific size
-        for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma_shape[0]:
-                axis = (i * -1) - 1 # i == 0 means axis = -1
-                break
-
-        assert axis is not None, "Cannot find an axis in input activation that matches weight shape"
-
-        return tvm.relay.layernorm(act, gamma, beta, eps, axis)
+        axis = pre_node_map[self.mean_act][0].attrs.axis
+        assert len(axis) == 1, "TVM Layernorm only supports single dim"
+        if axis[0] >= 0:
+            layernorm_axis = axis[0] - len(act_shape)
+        else:
+            layernorm_axis = axis[0]
+        return tvm.relay.layernorm(act, gamma, beta, eps, int(layernorm_axis))
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
