@@ -267,6 +267,30 @@ class DecomposeMultiAxisMean(DFPatternCallback):
             acts = tvm.relay.reshape(acts, newshape=output_shape)
         return acts    
 
+class DecomposeMultiAxisSum(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.sum = is_op("sum")(self.act)
+        self.pattern = self.sum
+
+    def callback(self, pre, post, node_map):
+        reduce_axes = list(post.attrs.axis)
+        if len(reduce_axes) == 1:
+            return post
+
+        acts = node_map[self.act][0]
+
+        keepdims = bool(post.attrs.keepdims)
+        output_shape = list(pre.checked_type.shape)
+
+        for axis in reduce_axes:
+            acts = tvm.relay.sum(acts, axis=int(axis), keepdims=True)
+
+        if keepdims == False:
+            acts = tvm.relay.reshape(acts, newshape=output_shape)
+        return acts
+
 class DecomposeMultiAxisBroadcast(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -1730,6 +1754,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             PopulateStridedSliceAxes(),
             ConvertExpandDimsToReshape(),
             DecomposeMultiAxisMean(),
+            DecomposeMultiAxisSum(),
             DecomposeMultiAxisBroadcast(),
             RemoveRedundantTake(),
             RemoveRedundantReshape(),
