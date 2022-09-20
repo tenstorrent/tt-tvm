@@ -221,10 +221,13 @@ def get_func_output_origins(func_body, origins):
     
     return model_output_origins
 
-def add_node_as_passthrough(graph, node):
+def add_node_as_passthrough(graph, node, index=None):
     graph["nodes"].append(node)
     graph["arg_nodes"].append(len(graph["nodes"])-1)
-    graph["heads"].append([len(graph["nodes"])-1, 0, 0])
+    if index is None:
+        graph["heads"].append([len(graph["nodes"])-1, 0, 0])
+    else:
+        graph["heads"][index] = [len(graph["nodes"])-1, 0, 0]
 
 def classify_passthrough_inputs_as_heads(graph, num_inputs, weight_names):
     for i in range(num_inputs):
@@ -362,11 +365,13 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
 
         # Ensure input variables required in multiple modules are passed through
         needed_first = [[input_name == node["name"] for node in second["nodes"]].index(True) if any([input_name == node["name"] for node in second["nodes"]]) else -1 for input_name in input_names]
-
+        second_input_names = [inp.name_hint if isinstance(inp, tvm.relay.expr.Var) else None for inp in second_input_origins]
         if any([p >= 0 for p in needed_first]):
+            [first["heads"].insert(i, []) for i, name in enumerate(second_input_names) if name is not None]
             for passthrough_node, name in zip(needed_first, input_names):
                 if passthrough_node >= 0:
-                    add_node_as_passthrough(first, second["nodes"][passthrough_node])
+                    index = second_input_names.index(name)
+                    add_node_as_passthrough(first, second["nodes"][passthrough_node], index)
 
         first = json.dumps(first)
     
@@ -374,14 +379,16 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
 
         # Ensure input variables required in multiple modules are passed through
         needed_first_and_second = [[input_name == node["name"] for node in third["nodes"]].index(True) if any([input_name == node["name"] for node in third["nodes"]]) else -1 for input_name in input_names]
-
+        third_input_names = [inp.name_hint if isinstance(inp, tvm.relay.expr.Var) else None for inp in third_input_origins]
         if any([p >= 0 for p in needed_first_and_second]):
+            [second["heads"].insert(i, []) for i, name in enumerate(third_input_names) if name is not None]
             for passthrough_node, name in zip(needed_first_and_second, input_names):
                 if passthrough_node >= 0:
                     if add_to_first:
                         add_node_as_passthrough(first, third["nodes"][passthrough_node])
 
-                    add_node_as_passthrough(second, third["nodes"][passthrough_node])
+                    index = third_input_names.index(name)
+                    add_node_as_passthrough(second, third["nodes"][passthrough_node], index)
 
         third = json.dumps(third)
 
@@ -396,24 +403,26 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     dev_json_graph["hash"] = graph_hash
     cpu_functions = list(cpu_json_graph["functions"].keys())
     dev_functions = list(dev_json_graph["functions"].keys())
-    all_functions = cpu_functions + dev_functions
-    function_locations = {str(mod.astext()).find(function):function for function in all_functions}
+
     cpu_pre_functions = []
     device_functions = []
     cpu_post_functions = []
-    sort_indices = sorted(function_locations)
-    idx = 0
-    while idx < len(function_locations) and "cpu" in function_locations[sort_indices[idx]]:
-        cpu_pre_functions.append(function_locations[sort_indices[idx]])
-        idx += 1
-    while idx < len(function_locations) and "cpu" not in function_locations[sort_indices[idx]]:
-        device_functions.append(function_locations[sort_indices[idx]])
-        idx += 1
-    while idx < len(function_locations) and "cpu" in function_locations[sort_indices[idx]]:
-        cpu_post_functions.append(function_locations[sort_indices[idx]])
-        idx += 1
+    func_callnodes = extract_function_callnodes(partitioned_mod["main"], partitioned_mod.get_global_vars())
+    for node in func_callnodes:
+        if node.op.name_hint in dev_functions:
+            if node.op.name_hint not in device_functions:
+                device_functions.append(node.op.name_hint)
+            for arg in node.args:
+                op = None
+                if isinstance(arg, tvm.relay.expr.TupleGetItem):
+                    op = arg.tuple_value.op
+                elif isinstance(arg, tvm.relay.expr.Call):
+                    op = arg.op
+                if op is not None:
+                    if op.name_hint not in cpu_pre_functions:
+                        cpu_pre_functions.append(op.name_hint)
 
-    assert idx == len(function_locations)
+    cpu_post_functions = [func for func in cpu_functions if func not in cpu_pre_functions]
 
     if len(cpu_pre_functions):
         graph = join_graphs([cpu_json_graph["functions"][function] for function in cpu_pre_functions])

@@ -975,6 +975,20 @@ class PyTorchOpConverter:
             dtype = self.infer_type(inputs[0]).dtype
         return self.full_impl(data, 0, dtype)
 
+    def fill(self, inputs, input_type):
+        data = inputs[0]
+        fill_value = inputs[1]
+
+        import torch
+
+        if not isinstance(data, (_expr.Expr, list, torch.Tensor, np.ndarray)):
+            msg = "Data type %s could not be parsed in full op" % (type(data))
+            raise AssertionError(msg)
+
+        dtype = self.default_dtype
+
+        return self.full_impl(self.infer_shape(data), fill_value, dtype)
+
     def full(self, inputs, input_types):
         data = inputs[0]
         fill_value = inputs[1]
@@ -2019,7 +2033,7 @@ class PyTorchOpConverter:
             return _op.reduce.min(_op.abs(data), axis=axis, keepdims=keepdims)
         else:
             reci_order = _expr.const(1.0 / order, dtype=dtype)
-            order = _expr.const(order)
+            order = _op.cast(_expr.const(order), dtype)
             return _op.power(
                 _op.reduce.sum(_op.power(_op.abs(data), order), axis=axis, keepdims=keepdims),
                 reci_order,
@@ -4048,11 +4062,26 @@ class PyTorchOpConverter:
         x = inputs[0]
         x_shape = _infer_shape(x)
 
-        y = np.tril(np.ones(x_shape)).astype(np.float32)
+        y = np.tril(np.ones(x_shape)).astype(_convert_tvm_to_np_dtype(input_types[0]))
         y = tvm.nd.array(y)
         y = tvm.relay.Constant(y)
         
         return _op.multiply(x, y)
+
+
+    def triu(self, inputs, input_types):
+        x = inputs[0]
+        x_shape = _infer_shape(x)
+
+        mask = np.triu(np.ones(x_shape)).astype(np.bool)
+        mask = tvm.nd.array(mask)
+        mask = tvm.relay.Constant(mask)
+
+        zeros = np.zeros(x_shape).astype(_convert_tvm_to_np_dtype(input_types[0]))
+        zeros = tvm.nd.array(zeros)
+        zeros = tvm.relay.Constant(zeros)
+        
+        return _op.where(mask, x, zeros)
 
 
     def as_strided(self, inputs, input_types):
@@ -4382,9 +4411,9 @@ class PyTorchOpConverter:
             "aten::zeros": self.zeros,
             "aten::zero_": self.zero_,
             "aten::zeros_like": self.zeros_like,
-            "aten::new_zeros": self.new_zeros,
             "aten::new_ones": self.new_ones,
             "aten::full": self.full,
+            "aten::fill": self.fill,
             "aten::full_like": self.full_like,
             "aten::new_full": self.new_full,
             "aten::fill_": self.fill_,
@@ -4451,7 +4480,7 @@ class PyTorchOpConverter:
             "aten::group_norm": self.group_norm,
             "aten::transpose": self.transpose,
             "aten::t": self.transpose,
-            "aten::numpy_T": self.numpy_T,
+            "aten::numpy_T": self.transpose,
             "aten::flatten": self.flatten,
             "aten::unflatten": self.unflatten,
             "aten::addmm": self.addmm,
@@ -4639,6 +4668,7 @@ class PyTorchOpConverter:
             "aten::new_zeros": self.new_zeros,
             "aten::new_ones": self.new_ones,
             "aten::tril": self.tril,
+            "aten::triu": self.triu,
             "aten::as_strided": self.as_strided,
             "aten::_weight_norm": self.weight_norm,
             "aten::new_full": self.new_full,
@@ -5001,6 +5031,27 @@ def _pytorch_result_type(dtypes, non_tensor_inputs):
             str(torch.result_type(torch.zeros((), dtype=dtype_map[result_type]), inp))
         )
     return result_type
+
+def _convert_tvm_to_np_dtype(dtype):
+    if dtype == "float64":
+        np_type = np.float64
+    elif dtype == "float32":
+        np_type = np.float32
+    elif dtype == "float16":
+        np_type = np.float16
+    elif dtype == "int64":
+        np_type = np.int64
+    elif dtype == "int32":
+        np_type = np.int32
+    elif dtype == "int16":
+        np_type = np.int16
+    elif dtype == "int8":
+        np_type = np.int8
+    elif dtype == "uint8":
+        np_type = np.uint8
+    else:
+        raise NotImplementedError("input_type {} is not handled yet".format(dtype))
+    return np_type
 
 
 # Helper functions for operator implementation
