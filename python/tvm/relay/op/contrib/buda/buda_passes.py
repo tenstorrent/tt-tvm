@@ -1693,6 +1693,24 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
             cubic_alpha=-0.75,
         )
 
+class DecomposeMultiIndexAdvIndex(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("adv_index")(wildcard())
+    
+    def callback(self, pre, post, node_map):
+        if len(pre.args[0].fields) == 2:
+            return pre
+
+        data = pre.args[0].fields[0]
+        dims_to_drop = len(pre.args[0].fields) - 2
+        assert all([int(dim) == 1 for dim in data.checked_type.shape[:dims_to_drop]]), "Dim to drop needs to be singleton"
+        squeeze = tvm.relay.op.reshape(data, data.checked_type.shape[dims_to_drop:])
+        index = tvm.relay.op.adv_index((squeeze, pre.args[0].fields[-1]))
+        unsqueeze = tvm.relay.op.reshape(index, pre.checked_type.shape)
+
+        return unsqueeze
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -1780,7 +1798,8 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeRepeat(),
             DecomposeTile(),
             ConvertGlobalAvgPool2dtoAvgPool2d(),
-            ConvertUpsampleToResize2d(), 
+            ConvertUpsampleToResize2d(),
+            DecomposeMultiIndexAdvIndex(),
         ],
         params=params,
         inputs=inputs,

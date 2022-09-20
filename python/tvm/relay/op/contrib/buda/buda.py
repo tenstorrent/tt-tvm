@@ -568,7 +568,6 @@ def node_hash(node):
         node_descriptor = (node.name_hint, True)
     else:
         node_descriptor = (type(node), False)
-
     return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
 
 class NodeIndexer():
@@ -612,6 +611,7 @@ class DetermineTarget(ExprMutator):
         self.nodes_to_cpu_eval = set()
         self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | fallback_nodes
         self.graph_changed = True
+        self.modify_graph = False
         for node in fallback_nodes:
             ancestors = nx.ancestors(graph, node)
             descendants = nx.descendants(graph, node)
@@ -628,29 +628,37 @@ class DetermineTarget(ExprMutator):
                 logger.info(f"{expr.op.name} will be executed on CPU")
             return cpu_eval
 
-        if node_hash(call) in self.nodes_to_cpu_eval:
-            if isinstance(call.op, tvm.relay.function.Function):
-                self.graph_changed = True
-                new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
-                new_fn = call.op.with_attr(new_attrs)
-                return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
-            else:
-                try:
-                    tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
-                except:
-                    pass
+        if self.modify_graph:
+            if node_hash(call) in self.nodes_to_cpu_eval:
+                if isinstance(call.op, tvm.relay.function.Function):
+                    self.graph_changed = True
+                    new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
+                    new_fn = call.op.with_attr(new_attrs)
+                    logger.info(f"Changing graph")
+                    return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
+                else:
+                    try:
+                        tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                    except:
+                        pass
 
-        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
+        elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
             # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, to reduce data movement
             non_weight_args = [arg for arg in call.args if not isinstance(arg, tvm.relay.expr.Var)]
             if len(non_weight_args) > 1:
-                for arg in call.args:
+                call_node_ancestors = nx.ancestors(self.graph, node_hash(call))
+                for arg_index, arg in enumerate(call.args):
                     output_nodes = self.graph.out_degree(node_hash(arg))
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
-                        nx_node_hash = node_hash(call)
-                        self.nodes_to_cpu_eval.add(nx_node_hash)
-                        ancestors = nx.ancestors(self.graph, nx_node_hash)
-                        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
+                        arg_ancestors = nx.ancestors(self.graph, node_hash(arg))
+                        arg_ancestors.add(node_hash(arg))
+                        non_arg_ancestors = call_node_ancestors - arg_ancestors
+                        contains_unsupported = any([ancestor in self.nodes_to_cpu_eval for ancestor in non_arg_ancestors])
+                        if not contains_unsupported:
+                            break
+
+                        self.nodes_to_cpu_eval.add(node_hash(call))
+                        self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | call_node_ancestors
                         try:
                             tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
                         except:
@@ -701,7 +709,7 @@ class ConstructDiGraph(ExprVisitor):
         for arg in parent.args:
             if isinstance(arg, tvm.relay.expr.Var):
                 pass
-
+    
             self.graph.add_edge(node_hash(arg), parent_node)
 
     def visit_call(self, call):
@@ -709,6 +717,7 @@ class ConstructDiGraph(ExprVisitor):
         self.node_indexer.count_visit("call", node)
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
+            logger.info(f"Adding: {call.op} to fallback")
 
         self.register_args(call, node)
         # Make sure CPU output shape starts with 1
@@ -722,6 +731,7 @@ class ConstructDiGraph(ExprVisitor):
             and call.args[0].op.get_attr("target.pybuda_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)
+            logger.info(f"Adding: {call.op} to fallback")
 
         return super().visit_call(call)
     
@@ -729,6 +739,9 @@ class ConstructDiGraph(ExprVisitor):
         node = node_hash(t)
         self.register_args(t.tuple_value, node)
         return super().visit_tuple_getitem(t)
+
+    # def visit_tuple(self, tup):
+    #     return super().visit_tuple(tup)
 
 def reconstruct_ops_for_buda(mod):
     print_all = False
@@ -983,10 +996,10 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
             terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
             new_mod = None
             start = time.time()
-            while terget_determiner.graph_changed:
-                logger.debug(".")
-                terget_determiner.graph_changed = False
-                mod["main"] = terget_determiner.visit(mod["main"])
+            terget_determiner.modify_graph = False
+            mod["main"] = terget_determiner.visit(mod["main"])
+            terget_determiner.modify_graph = True
+            mod["main"] = terget_determiner.visit(mod["main"])
             logger.debug(f"Done, took: {(time.time() - start):.2f} s")
             logger.debug(f"Remapping nodes...")
             start = time.time()
