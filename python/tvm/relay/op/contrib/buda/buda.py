@@ -335,13 +335,13 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
         self.beta = wildcard()
         self.eps = is_constant()
 
-        mean_act = is_op("mean")(self.act)
-        sub_0 = is_op("subtract")(self.act, mean_act)
+        self.mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, self.mean_act)
         mul_0 = is_op("multiply")(sub_0, sub_0)
         var = is_op("mean")(mul_0)
 
         sum_denom = var.optional(lambda x: is_op("add")(x, self.eps))
-        sub = is_op("subtract")(self.act, mean_act)
+        sub = is_op("subtract")(self.act, self.mean_act)
         denom = is_op("sqrt")(sum_denom)
         recp = is_op("reciprocal")(denom)
         coef = is_op("multiply")(sub, recp)
@@ -365,23 +365,23 @@ class ReconstructPyTorchLayerNorm(DFPatternCallback):
         act_shape = pre_node_map[self.act][0].checked_type.shape
         gamma_shape = list(pre_node_map[self.gamma][0].checked_type.shape)
 
-        axis = None
-        # Find the last dimension of the specific size
-        for i, dim in enumerate(reversed(act_shape)):
-            if dim == gamma_shape[0]:
-                axis = (i * -1) - 1 # i == 0 means axis = -1
-                break
+        axis = pre_node_map[self.mean_act][0].attrs.axis
+        assert len(axis) == 1, "TVM Layernorm only supports single dim"
+        if axis[0] >= 0:
+            layernorm_axis = int(axis[0] - len(act_shape))
+        else:
+            layernorm_axis = int(axis[0])
 
-        assert axis is not None, "Cannot find an axis in input activation that matches weight shape"
+        if layernorm_axis != -1:
+            return post
 
-        # Also supports padded shapes (e.g. (32, 1, 1))
-        gamma_shape.pop(axis)
-        is_padded = all(dim == 1 for dim in gamma_shape)
+        if np.prod(gamma_shape) != act_shape[layernorm_axis]:
+            return post
 
-        gamma_shape = pre_node_map[self.gamma][0].checked_type.shape        
-        assert len(gamma_shape) == 1 or is_padded, "TVM Layernorm only supports single dim layernorm"
+        if np.prod(pre_node_map[self.beta][0].checked_type.shape) != act_shape[layernorm_axis]:
+            return post
 
-        return tvm.relay.layernorm(act, gamma, beta, eps, axis)
+        return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
 
 class ReconstructTFLayerNorm(DFPatternCallback):
     def __init__(self):
@@ -439,10 +439,20 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         axis = pre_node_map[self.mean_act][0].attrs.axis
         assert len(axis) == 1, "TVM Layernorm only supports single dim"
         if axis[0] >= 0:
-            layernorm_axis = axis[0] - len(act_shape)
+            layernorm_axis = int(axis[0] - len(act_shape))
         else:
-            layernorm_axis = axis[0]
-        return tvm.relay.layernorm(act, gamma, beta, eps, int(layernorm_axis))
+            layernorm_axis = int(axis[0])
+
+        if layernorm_axis != -1:
+            return post
+
+        if np.prod(gamma_shape) != act_shape[layernorm_axis]:
+            return post
+
+        if np.prod(pre_node_map[self.beta][0].checked_type.shape) != act_shape[layernorm_axis]:
+            return post
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
