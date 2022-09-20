@@ -627,6 +627,12 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
         inputs=inputs,
     )
 
+    m = hashlib.sha256()
+    m.update(str(graph_def).encode('utf-8'))
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    if cached_graphs is not None:
+        return cached_graphs, flattened_inputs
+
     # Generate TVM module
     outputs = [output.name for output in tf_fun.outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
@@ -648,7 +654,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, param_name_lookup)
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
