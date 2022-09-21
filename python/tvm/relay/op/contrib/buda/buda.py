@@ -44,10 +44,10 @@ def _register_external_op_helper_pytorch(op_name, supported=True):
         return compiler_cfg.enable_tvm_cpu_fallback
     return _func_wrapper
 
-
-def initialize_pybuda_cpudevice_ops(mod):
+def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     ResetOpAttributes().visit(mod["main"])
-    _register_external_op_helper_pytorch("embedding")
+    for op in compiler_cfg.cpu_fallback_ops:
+        _register_external_op_helper_pytorch(op)
     _register_external_op_helper_pytorch("equal")
     _register_external_op_helper_pytorch("nn.log_softmax")
 
@@ -932,7 +932,7 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
     return mod
     
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
-    initialize_pybuda_cpudevice_ops(mod)
+    initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
 
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
