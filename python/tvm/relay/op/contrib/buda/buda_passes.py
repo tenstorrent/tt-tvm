@@ -807,6 +807,18 @@ class EstimateWhereInCausalMask(DFPatternCallback):
         act = post.args[1]
         return tvm.relay.add(act, mask)
 
+class CastWhereConditionToBool(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+
+        self.pattern = is_op("where")(wildcard(), wildcard(), wildcard()) 
+
+        
+    def callback(self, pre, post, node_map):
+        cond = tvm.relay.cast(pre.args[0], "bool")
+        return tvm.relay.where(cond, pre.args[1], pre.args[2])
+
+
 class DecomposeNegative(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1746,6 +1758,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeMultiAxisMax(),
             DecomposeMultiAxisTranspose(),
             EstimateWhereInCausalMask(),
+            CastWhereConditionToBool(),
             LowerAdaptiveAvgPool(),
             LowerAdaptiveMaxPool(),
             EnsureKeepdims(),
