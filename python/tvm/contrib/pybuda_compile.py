@@ -300,7 +300,6 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
 
         # If the model output is an input variable
         if isinstance(output, tvm.relay.Var):
-            import pdb; pdb.set_trace()
             new_arg_node = {'op': 'input', 'name': output.name_hint, 'attrs': {'dtype': [[output.checked_type.dtype]], 'shape': [[[int(j) for j in output.checked_type.shape]]]}}
 
             # If the model output is not passed through the first module already
