@@ -2808,7 +2808,7 @@ class Gather(OnnxOpConverter):
         data = inputs[0]
         indices = inputs[1]
 
-        if isinstance(indices, tvm.relay.expr.Constant):
+        if not isinstance(data, tvm.relay.expr.Var) or (isinstance(indices, tvm.relay.expr.Constant) and len(indices.data.shape) <= 1):
             indices = normalize_gather_indices(data, indices, axis)
             return _op.take(data, indices, axis)
         else:
