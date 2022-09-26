@@ -718,6 +718,50 @@ inline Tensor nll_loss(const Tensor& predictions, const Tensor& targets, const T
   }
 }
 
+/*!
+ * \brief Creates an operation that returns the layernorm of a given tensor
+ *
+ * \param x The input tensor
+ * \param name The name of the operation
+ * \param tag The tag to mark the operation
+ *
+ * \return A Tensor whose op member is the gelu operation
+ */
+inline Tensor layernorm(const Array<Tensor>& inp, double eps, int axis, std::string name = "T_layernorm",
+                       std::string tag = kElementWise) {
+  auto x = inp[0];
+  auto gamma = inp[1];
+  auto beta = inp[2];
+
+  Array<Integer> tvm_axis;
+
+  tvm_axis.push_back(axis);
+  auto dim_ = x->shape[x->shape.size() - 1];
+
+
+  PrimExpr eps_ = make_const(x->dtype, eps);
+  PrimExpr one_ = make_const(x->dtype, 1.0);
+
+  auto sum = tvm::topi::sum(x, tvm_axis, true);
+  auto mean = tvm::te::compute(sum->shape, [&](const Array<Var>& i) { return sum(i) / dim_; }, name, tag);
+
+  auto x_minus_mean = x - mean;
+  auto squared = x_minus_mean * x_minus_mean;
+
+  auto squared_sum = tvm::topi::sum(squared, tvm_axis, true);
+  auto var = tvm::te::compute(squared_sum->shape, [&](const Array<Var>& i) { return squared_sum(i) / dim_ ; }, name, tag);
+  auto var_plus_eps = tvm::te::compute(var->shape, [&](const Array<Var>& i) { return var(i) + eps_; }, name, tag);
+
+  auto sqrt = tvm::te::compute(var_plus_eps->shape, [&](const Array<Var>& i) { return tvm::sqrt(var_plus_eps(i)); }, name, tag);
+  auto recip = tvm::te::compute(sqrt->shape, [&](const Array<Var>& i) { return one_ / sqrt(i); }, name, tag);
+  auto mul_ = x_minus_mean * recip;
+
+  auto mul_gamma = mul_ * gamma;
+
+  return mul_gamma + beta;
+
+}
+
 }  // namespace topi
 }  // namespace tvm
 #endif  // TVM_TOPI_NN_H_

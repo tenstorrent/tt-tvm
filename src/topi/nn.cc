@@ -182,5 +182,9 @@ TVM_REGISTER_GLOBAL("topi.nn.rms_norm").set_body([](TVMArgs args, TVMRetValue* r
   *rv = nn::rms_norm(args[0], args[1], args[2], args[3], static_cast<double>(args[4]));
 });
 
+TVM_REGISTER_GLOBAL("topi.layernorm").set_body([](TVMArgs args, TVMRetValue* rv) {
+  *rv = layernorm(args[0], args[1], args[2], args[3], args[4]);
+});
+
 }  // namespace topi
 }  // namespace tvm

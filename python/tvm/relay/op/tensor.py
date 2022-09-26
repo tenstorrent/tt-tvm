@@ -377,7 +377,7 @@ def gelu(data, approximate="none"):
     return _make.gelu(data, approximate)
 
 
-def layernorm(data, gamma, beta, eps=0, axis=-1):
+def layernorm(data, gamma, beta, eps, axis):
     """Compute layernorm of data.
 
     .. math::
