@@ -549,7 +549,7 @@ bool GeluRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
     const auto* data = types[0].as<TensorTypeNode>();
     if (data == nullptr) {
         ICHECK(types[0].as<IncompleteTypeNode>())
-        << "Layernorm: expect input type to be TensorType but get " << types[0];
+        << "Gelu: expect input type to be TensorType but get " << types[0];
         return false;
     }
 

@@ -608,7 +608,7 @@ def layernorm(*operand):
     y : tvm.te.Tensor
         The result.
     """
-    return te.compute(operand[0].shape, operand)
+    return te.compute(operand[0].shape, *operand)
 
 
 

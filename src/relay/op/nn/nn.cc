@@ -1676,5 +1676,53 @@ Example::
     .set_attr<FTVMCompute>("FTVMCompute", BatchToSpaceNDCompute)
     .set_attr<TOpPattern>("TOpPattern", kInjective);
 
+
+
+
+
+Array<te::Tensor> LayernormCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                                const Type& out_type) {
+  const LayerNormAttrs* param = attrs.as<LayerNormAttrs>();
+  ICHECK(param != nullptr);
+  return Array<te::Tensor>{topi::layernorm(inputs, param->epsilon, param->axis)};
+}
+
+bool LayernormRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+                 const TypeReporter& reporter) {
+    ICHECK_EQ(types.size(), 4) << "Expects 4 types, [input, gamma, beta, output]";
+    const auto* data = types[0].as<TensorTypeNode>();
+    if (data == nullptr) {
+        ICHECK(types[0].as<IncompleteTypeNode>())
+        << "Layernorm: expect input type to be TensorType but get " << types[0];
+        return false;
+    }
+
+    reporter->Assign(types[3], TensorType(data->shape, data->dtype));
+
+  return true;
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.layernorm").set_body_typed([](Expr act, Expr weight, Expr bias, double eps, int axis) {
+    static const Op& op = Op::Get("layernorm");
+    auto attrs = make_object<LayerNormAttrs>();
+    attrs->epsilon = eps;
+    attrs->axis = axis;
+    return Call(op, {act, weight, bias}, Attrs(attrs), {});
+});
+
+RELAY_REGISTER_OP("layernorm")
+    .set_num_inputs(3)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_argument("weight", "Tensor", "The weight tensor.")
+    .add_argument("bias", "Tensor", "The bias tensor.")
+    // .add_argument("eps", "double", "The Epsilon value.")
+    // .add_argument("axis", "int", "The reduce axis.")
+    .add_type_rel("Layernorm", LayernormRel)
+    .set_attr<TOpPattern>("TOpPattern", kElemWise)
+    .set_attr<TOpIsStateful>("TOpIsStateful", false)
+    .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
+    .set_support_level(3)
+    .set_attr<FTVMCompute>("FTVMCompute", LayernormCompute);
+
 }  // namespace relay
 }  // namespace tvm

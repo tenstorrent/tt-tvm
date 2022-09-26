@@ -749,9 +749,9 @@ def reconstruct_ops_for_buda(mod):
     logger.trace("reconstruct_ops_for_buda:: At Entry")
     logger.trace(mod.functions)
 
-    mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
-    logger.trace("After ReconstructPyTorchGelu")
-    logger.trace(mod.functions)
+    # mod["main"] = rewrite(ReconstructPyTorchGelu(), mod["main"])
+    # logger.trace("After ReconstructPyTorchGelu")
+    # logger.trace(mod.functions)
 
     mod["main"] = rewrite(ReconstructPyTorchGeluNew(), mod["main"])
     logger.trace("After ReconstructPyTorchGeluNew")
@@ -773,9 +773,9 @@ def reconstruct_ops_for_buda(mod):
     logger.trace("After ReconstructTFLayerNorm")
     logger.trace(mod.functions)
 
-    mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
-    logger.trace("After ReconstructPyTorchLayerNorm")
-    logger.trace(mod.functions)
+    # mod["main"] = rewrite(ReconstructPyTorchLayerNorm(), mod["main"])
+    # logger.trace("After ReconstructPyTorchLayerNorm")
+    # logger.trace(mod.functions)
 
     return mod
 

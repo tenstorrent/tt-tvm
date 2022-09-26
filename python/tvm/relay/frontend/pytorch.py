@@ -1136,10 +1136,11 @@ class PyTorchOpConverter:
                 )
 
         else:
-            return data * (
-                _expr.const(0.5, dtype=dtype)
-                + _op.erf(data * _expr.const(0.5**0.5, dtype=dtype)) * _expr.const(0.5, dtype=dtype)
-            )
+            return _op.gelu(data)
+            # return data * (
+            #     _expr.const(0.5, dtype=dtype)
+            #     + _op.erf(data * _expr.const(0.5**0.5, dtype=dtype)) * _expr.const(0.5, dtype=dtype)
+            # )
 
     def selu(self, inputs, input_types):
         data = inputs[0]
@@ -1610,16 +1611,16 @@ class PyTorchOpConverter:
     def layer_norm(self, inputs, input_types):
         data = inputs[0]
         ndims = len(self.get_dims(inputs[1]))
+        input_shape = self.infer_type(data).shape
+        axis = len(input_shape) - 1
         assert ndims == 1, "Support only normalization over last one dimension."
 
-        return _op.nn.layer_norm(
+        return _op.layernorm(
             data,
             gamma=inputs[2],
             beta=inputs[3],
-            axis=-1,
-            epsilon=float(inputs[4]),
-            center=True,
-            scale=True,
+            axis=axis,
+            eps=float(inputs[4]),
         )
 
     def group_norm(self, inputs, input_types):
