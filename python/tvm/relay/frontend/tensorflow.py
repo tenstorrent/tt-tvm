@@ -1201,10 +1201,11 @@ class GraphProto(object):
 
         out = self._nodes[input_op_name]
 
-        if isinstance(out, _expr.TupleWrapper):
+        if isinstance(out, _expr.TupleWrapper) or len(out) > 1:
             tn = node_name.split(":")
             tensor_slot = int(tn[1]) if len(tn) > 1 else 0
             return out[tensor_slot]
+
         return out[0]
 
 
