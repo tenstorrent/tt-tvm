@@ -1,10 +1,8 @@
-from curses import A_BLINK
-from pkg_resources import require
-
 import tvm
 
 from tvm.relay import transform
 from ....dataflow_pattern import wildcard, is_op
+from tvm._ffi.base import TVMError
 
 import numpy as np
 import math
@@ -1711,6 +1709,325 @@ class DecomposeMultiIndexAdvIndex(DFPatternCallback):
 
         return unsqueeze
 
+class DecomposeErf(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.pattern = is_op("erf")(self.act)
+    
+    def callback(self, pre, post, node_map):
+        act = post.args[0]
+        act_sign = tvm.relay.op.sign(act)
+        act_abs = tvm.relay.op.abs(act)
+
+        # constants
+        a1 = tvm.relay.expr.const(0.254829592)
+        a2 = tvm.relay.expr.const(-0.284496736)
+        a3 = tvm.relay.expr.const(1.421413741)
+        a4 = tvm.relay.expr.const(-1.453152027)
+        a5 = tvm.relay.expr.const(1.061405429)
+        p = tvm.relay.expr.const(0.3275911)
+        one = tvm.relay.expr.const(1.0)
+        minus_one = tvm.relay.expr.const(-1.0)
+
+        t = one / (one + p * act_abs)
+        y = one - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * tvm.relay.op.exp((minus_one * act_abs) * act_abs)
+        res = act_sign * y # erf(-x) = -erf(x)
+
+        return res
+
+
+class ReconstructTFGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.sqrt_half = wildcard()
+        self.half = is_constant()
+        self.one = is_constant()
+        times_root_two = is_op("multiply")(self.act, self.sqrt_half)
+        erf = is_op("erf")(times_root_two)
+        times_half = is_op("multiply")(self.act, self.half)
+        add = is_op("add")(self.one, erf)
+        gelu = is_op("multiply")(times_half, add)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        one = node_map[self.one][0].data.numpy()
+        half = node_map[self.half][0].data.numpy()
+        sqrt_half = node_map[self.sqrt_half][0]
+
+        # Relay graph may use sqrt(1/2) outright, or take the recipricoral of sqrt(2)
+        if isinstance(sqrt_half, tvm.relay.expr.Constant):
+            sqrt_half = sqrt_half.data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            sqrt_half = sqrt_half.args[0].data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+
+        one_added = math.isclose(one, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(half, 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        
+        
+        if not (one_added and half_multiplied and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
+
+class ReconstructOnnxGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.one_over_root_two = wildcard()
+        self.one = is_constant()
+        self.half_added = is_constant()
+
+        times_root_two = is_op("multiply")(self.act, self.one_over_root_two)
+        erf = is_op("erf")(times_root_two)
+        add = is_op("add")(erf, self.one)
+        mult2 = is_op("multiply")(self.act, add)
+        gelu = is_op("multiply")(mult2, self.half_added)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        half_added = math.isclose(node_map[self.half_added][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
+
+        sqrt_half = node_map[self.one_over_root_two][0]
+        # Relay graph may use sqrt(1/2) outright, or take the recipricoral of sqrt(2)
+        if isinstance(sqrt_half, tvm.relay.expr.Constant):
+            sqrt_half = sqrt_half.data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            sqrt_half = sqrt_half.args[0].data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not (half_added and one_added and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
+
+class ReconstructPyTorchGeluNew(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        square = is_op("multiply")(self.act, self.act)
+        pow_3 = is_op("multiply")(square, self.act)
+        self.c_0044715 = is_constant()
+        times_const = is_op("multiply")(pow_3, self.c_0044715)
+        addition = is_op("add")(self.act, times_const)
+        self.root_two_over_pie = is_constant()
+        times_root_2_over_pie = is_op("multiply")(addition, self.root_two_over_pie)
+        tanh = is_op("tanh")(times_root_2_over_pie)
+        self.one = is_constant()
+        tanh_plus_one = is_op("add")(tanh, self.one)
+        self.one_half = is_constant()
+        divide_by_two = is_op("multiply")(self.act, self.one_half)
+        new_gelu = is_op("multiply")(divide_by_two, tanh_plus_one)
+
+        self.pattern = new_gelu
+
+    def callback(self, pre, post, node_map):
+        constnats_correct = True
+        constnats_correct = constnats_correct and math.isclose(node_map[self.c_0044715][0].data.numpy(), 0.044715, rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.root_two_over_pie][0].data.numpy(), math.sqrt(2.0 / math.pi), rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.one][0].data.numpy(), 1, rel_tol=1e-6, abs_tol=1e-6)
+        constnats_correct = constnats_correct and math.isclose(node_map[self.one_half][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not constnats_correct:
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0], approximate="tanh")
+
+
+class ReconstructPyTorchGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.one_over_root_two = is_constant()
+        self.half_multiplied = is_constant()
+        self.half_added = is_constant()
+
+        times_root_two = is_op("multiply")(self.act, self.one_over_root_two)
+        erf = is_op("erf")(times_root_two)
+        times_half = is_op("multiply")(erf, self.half_multiplied)
+        add = is_op("add")(self.half_added, times_half)
+        gelu = is_op("multiply")(self.act, add)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        half_added = math.isclose(node_map[self.half_added][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        half_multiplied = math.isclose(node_map[self.half_multiplied][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        root_two_multiplied = math.isclose(node_map[self.one_over_root_two][0].data.numpy(), 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not (half_added and half_multiplied and root_two_multiplied):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
+
+class ReconstructJaxGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.sqrt_root = wildcard()
+        self.one = is_constant()
+        self.two = is_constant()
+
+        reciprocal_root = is_op("reciprocal")(self.sqrt_root)
+        times_root_two = is_op("multiply")(self.act, reciprocal_root)
+        erf = is_op("erf")(times_root_two)
+        add_one = is_op("add")(erf, self.one)
+        times_act = is_op("multiply")(self.act, add_one)
+        reciprocal_two = is_op("reciprocal")(self.two)
+        times_half = is_op("multiply")(times_act, reciprocal_two)
+
+        self.pattern = times_half
+
+    def callback(self, pre, post, node_map):
+        reciprocal_sqrt_root = math.isclose(node_map[self.sqrt_root][0].data.numpy(), 1.41421356, rel_tol=1e-6, abs_tol=1e-6)
+        one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        reciprocal_two = math.isclose(node_map[self.two][0].data.numpy(), 2.0, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not (reciprocal_sqrt_root and one_added and reciprocal_two):
+            return post
+
+        return tvm.relay.gelu(node_map[self.act][0])
+
+
+class ReconstructPyTorchLayerNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.gamma = wildcard()
+        self.beta = wildcard()
+        self.eps = is_constant()
+
+        self.mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, self.mean_act)
+        mul_0 = is_op("multiply")(sub_0, sub_0)
+        var = is_op("mean")(mul_0)
+
+        sum_denom = var.optional(lambda x: is_op("add")(x, self.eps))
+        sub = is_op("subtract")(self.act, self.mean_act)
+        denom = is_op("sqrt")(sum_denom)
+        recp = is_op("reciprocal")(denom)
+        coef = is_op("multiply")(sub, recp)
+        mul = is_op("multiply")(coef, self.gamma)
+        layernorm = is_op("add")(mul, self.beta)
+
+        self.pattern = layernorm
+
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+
+        try:
+            eps = node_map[self.eps][0].data.asnumpy().item()
+        except TVMError: # Does not have epsilon addition
+            eps = 0
+
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        gamma_shape = list(pre_node_map[self.gamma][0].checked_type.shape)
+
+        axis = pre_node_map[self.mean_act][0].attrs.axis
+        assert len(axis) == 1, "TVM Layernorm only supports single dim"
+        if axis[0] >= 0:
+            layernorm_axis = int(axis[0] - len(act_shape))
+        else:
+            layernorm_axis = int(axis[0])
+
+        if layernorm_axis != -1:
+            return post
+
+        if np.prod(gamma_shape) != act_shape[layernorm_axis]:
+            return post
+
+        if np.prod(pre_node_map[self.beta][0].checked_type.shape) != act_shape[layernorm_axis]:
+            return post
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
+
+
+class ReconstructTFLayerNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.gamma = wildcard()
+        self.beta = wildcard()
+        self.eps = is_constant()
+
+        self.mean_act = is_op("mean")(self.act)
+        sub_0 = is_op("subtract")(self.act, self.mean_act)
+        mul_0 = is_op("multiply")(sub_0, sub_0)
+        var = is_op("mean")(mul_0)
+
+        sum_denom = var.optional(lambda x: is_op("add")(x, self.eps))
+        denom = is_op("sqrt")(sum_denom)
+        recp = is_op("reciprocal")(denom)
+
+        weight = is_op("multiply")(self.gamma, recp)
+        mean_part = is_op("multiply")(self.mean_act, weight)
+        act_part = is_op("multiply")(weight, self.act)
+        sub_1 = is_op("subtract")(self.beta, mean_part)
+        layernorm = is_op("add")(sub_1, act_part)
+        self.pattern = layernorm
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+
+        try:
+            eps = node_map[self.eps][0].data.numpy().item()
+        except TVMError: # Does not have epsilon addition
+            eps = 0
+
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        gamma_shape = pre_node_map[self.gamma][0].checked_type.shape
+        beta_shape = pre_node_map[self.beta][0].checked_type.shape
+
+        if len(gamma_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma_shape)]) == 1:
+            # Count the number of dims thats not 1
+            gamma_shape = (np.prod([int(x) for x in gamma_shape]),)
+            gamma = tvm.relay.reshape(gamma, newshape=gamma_shape)
+        else:
+            assert len(gamma_shape) == 1, "TVM Layernorm only supports single dim"
+
+        if len(beta_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta_shape)]) == 1:
+            # Count the number of dims thats not 1
+            beta_shape = (np.prod([int(x) for x in beta_shape]),)
+            beta = tvm.relay.reshape(beta, newshape=gamma_shape)
+        else:
+            assert len(beta_shape) == 1, "TVM Layernorm only supports single dim"
+
+        axis = pre_node_map[self.mean_act][0].attrs.axis
+        assert len(axis) == 1, "TVM Layernorm only supports single dim"
+        if axis[0] >= 0:
+            layernorm_axis = int(axis[0] - len(act_shape))
+        else:
+            layernorm_axis = int(axis[0])
+
+        if layernorm_axis != -1:
+            return post
+
+        if np.prod(gamma_shape) != act_shape[layernorm_axis]:
+            return post
+
+        if np.prod(pre_node_map[self.beta][0].checked_type.shape) != act_shape[layernorm_axis]:
+            return post
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -1800,6 +2117,14 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
+            # DecomposeErf(),
+            ReconstructTFGelu(),
+            ReconstructOnnxGelu(),
+            ReconstructPyTorchGeluNew(),
+            # ReconstructPyTorchGelu(),
+            ReconstructJaxGelu(),
+            # ReconstructPyTorchLayerNorm(),
+            ReconstructTFLayerNorm(),
         ],
         params=params,
         inputs=inputs,
