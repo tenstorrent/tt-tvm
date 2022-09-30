@@ -35,6 +35,7 @@ from jax.experimental import jax2tf
 from jax.tools.jax_to_ir import tf_wrap_with_input_names
 import collections
 from transformers.utils.generic import ModelOutput
+from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from tvm.contrib.pybuda_utils import (
     extract_framework_model_outputs, 
     extract_flatten_inputs, 
@@ -565,7 +566,6 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
         verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)
 
     # Reconstruct Ops + export buda graph
-    mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
     tvm.relay.build_module.build(mod, target=target, params=params)
 
@@ -1140,4 +1140,3 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
         file.write(serilized_str)
 
     logger.info(f"Successfully stored serilized TVM graph to {store_path} path")
-
