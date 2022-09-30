@@ -1273,6 +1273,33 @@ class DecomposeEinsum(DFPatternCallback):
             srcB = node_map[self.act][0][1]
             result = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=False)
             return result
+        elif match_einsum_pattern("abcg,gf->abcf", equation):
+            srcA = node_map[self.act][0][0]  # abcg
+            srcB = node_map[self.act][0][1]  # gf
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == 4 and len(srcB_shape) == 2
+            assert srcA_shape[-1] == srcB_shape[-2]
+
+            srcA = tvm.relay.reshape(srcA, newshape=(srcA_shape[-4] * srcA_shape[-3], srcA_shape[-2], srcA_shape[-1]))  # a*b cg
+            srcB = tvm.relay.reshape(srcB, newshape=(1, srcB_shape[-2], srcB_shape[-1]))  # 1gf
+            res = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=False)  # a*b cf
+            res = tvm.relay.reshape(res, newshape=(srcA_shape[-4], srcA_shape[-3], srcA_shape[-2], srcB_shape[-1]))  # abcf
+
+            # import torch
+            # a = torch.rand((1, 1, 32, 32))
+            # b = torch.rand((32, 64))
+            # torch_res = torch.einsum("abcg,gf->abcf", a, b)
+
+            # from tvm.relay.frontend.common import infer_shape
+            # from tvm.relay.frontend.common import infer_value
+            # from tvm.relay.frontend.common import analysis
+            # tvm_res = infer_value(res, {'args_0': tvm.nd.array(a), 'Const': tvm.nd.array(b)})
+
+            # assert np.allclose(torch_res.numpy(), tvm_res.numpy())
+
+            return res
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 

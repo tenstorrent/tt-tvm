@@ -261,10 +261,14 @@ class IdentityFunctionUnraveller(ExprMutator):
         self.mod = mod
 
     def visit_call(self, call):
+        if not hasattr(call.op, 'checked_type'):
+            return super().visit_call(call)
+
         if isinstance(call.op.checked_type, tvm.relay.FuncType):
             function = self.mod[call.op.name_hint]
             if len(function.params) == 1 and function.body == function.params[0]:
                 return super().visit(call.args[0])
+                
         return super().visit_call(call)
 
 class AllowUnsupportedOps(ExprMutator):
