@@ -720,8 +720,12 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
 
         return dict(items)
 
-    weight_names = list(flatten_params(jaxmodel.variables['params']._dict).keys())
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, weight_names, param_name_lookup)
+    if isinstance(jaxmodel, FlaxPreTrainedModel):
+        model_params = jaxmodel.params
+    else:
+        model_params = jaxmodel.variables['params']._dict
+    
+    weight_names = list(flatten_params(model_params).keys())
 
     return json_graphs, flattened_inputs
 
