@@ -660,7 +660,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
 def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     # Convert model from Jax to TensorFlow
     tf_model = jax2tf.convert(jaxmodel, enable_xla=False)
-    tf_fun = tf.function(tf_model, autograph=False)
+    tf_fun = tf.function(tf_model, autograph=False, jit_compile=True)
     
     # Extract framework model outputs
     framework_outputs = extract_framework_model_outputs(
@@ -687,7 +687,6 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
 
-    # Generate TVM module
     outputs = [output.name for output in tf_fun.outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
@@ -846,7 +845,6 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
     # Reconstruct Ops + export buda graph
-    mod = tvm.relay.op.contrib.buda.reconstruct_ops_for_buda(mod)
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
 
     executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
@@ -990,7 +988,11 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
 
             return dict(items)
 
-        module_params = flatten_params(module.variables['params']._dict)
+        if isinstance(module, FlaxPreTrainedModel):
+            module_params = module.params
+        else:
+            module_params = module.variables['params']._dict
+        module_params = flatten_params(module_params)
 
         weights = {}
         for key, value in module_params.items():
