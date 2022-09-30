@@ -692,6 +692,11 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
+    # Write Graph to the TensorBoard
+    # writer = tf.summary.create_file_writer("generated_modules/tensorboard/jax")
+    # with writer.as_default():
+    #     tf.summary.graph(tf_fun.graph)
+
     # Construct TVM IR
     mod, param_name_lookup = construct_tvm_ir(
         framework="jax",
@@ -726,6 +731,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
         model_params = jaxmodel.variables['params']._dict
     
     weight_names = list(flatten_params(model_params).keys())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, weight_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
