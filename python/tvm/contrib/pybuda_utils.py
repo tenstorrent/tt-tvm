@@ -308,7 +308,9 @@ def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: Compi
         if isinstance(model, FlaxPreTrainedModel):
             model_params = model.params
         elif isinstance(model, flax.linen.Module):
-            model_params = model.variables['params']._dict
+            model_params = {}
+            if hasattr(model, 'params'):
+                model_params = model.variables['params']._dict
         else:
             raise RuntimeError("Unknown Jax module instance.")
 
