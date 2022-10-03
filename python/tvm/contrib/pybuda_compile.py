@@ -727,7 +727,9 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     if isinstance(jaxmodel, FlaxPreTrainedModel):
         model_params = jaxmodel.params
     else:
-        model_params = jaxmodel.variables['params']._dict
+        model_params = {}
+        if hasattr(jaxmodel, 'params'):
+            model_params = jaxmodel.variables['params']._dict
     
     weight_names = list(flatten_params(model_params).keys())
     json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, weight_names, param_name_lookup, graph_hash=m.hexdigest())
@@ -991,7 +993,9 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         if isinstance(module, FlaxPreTrainedModel):
             module_params = module.params
         else:
-            module_params = module.variables['params']._dict
+            module_params = {}
+            if hasattr(module, 'params'):
+                module_params = module.variables['params']._dict
         module_params = flatten_params(module_params)
 
         weights = {}
