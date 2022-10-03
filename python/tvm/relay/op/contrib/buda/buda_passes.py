@@ -1300,6 +1300,35 @@ class DecomposeEinsum(DFPatternCallback):
             # assert np.allclose(torch_res.numpy(), tvm_res.numpy())
 
             return res
+        elif match_einsum_pattern("af,cfe->ace", equation):
+            srcA = node_map[self.act][0][0]  # af
+            srcB = node_map[self.act][0][1]  # cfe
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == 2 and len(srcB_shape) == 3
+            assert srcA_shape[-1] == srcB_shape[-2]
+
+            srcA = tvm.relay.reshape(srcA, newshape=(1, srcA_shape[-2], srcA_shape[-1])) # 1af
+            bmm = tvm.relay.nn.batch_matmul(srcA, srcB, transpose_a=False, transpose_b=False)  # cae
+            res = tvm.relay.transpose(bmm, axes=[1, 0, 2]) # ace
+
+            # import torch
+            # a = torch.rand((32, 64))
+            # b = torch.rand((1, 64, 32))
+            # torch_res = torch.einsum("af,cfe->ace", a, b)
+
+            # from tvm.relay.frontend.common import infer_shape
+            # from tvm.relay.frontend.common import infer_value
+            # from tvm.relay.frontend.common import analysis
+
+            # a = a.unsqueeze(0)
+            # b = b.transpose(1, 2)
+            # tvm_res = infer_value(res, {'args_0': tvm.nd.array(a), 'args_1': tvm.nd.array(b)})
+
+            # assert np.allclose(torch_res.numpy(), tvm_res.numpy())
+
+            return res
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
