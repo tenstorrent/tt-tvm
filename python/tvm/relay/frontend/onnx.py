@@ -7008,7 +7008,7 @@ class GraphProto:
                     "weight" not in init_tensor.name
                     and "bias" not in init_tensor.name
                     and ("int" in array.dtype or "bool" in array.dtype)
-                ):
+                ) or len(array.shape) == 0:
                     self._nodes[init_tensor.name] = _expr.const(array)
                 else:
                     self._params[init_tensor.name] = array
