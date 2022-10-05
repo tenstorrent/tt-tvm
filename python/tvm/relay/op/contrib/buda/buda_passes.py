@@ -2093,7 +2093,6 @@ class CombineReshapes(DFPatternCallback):
         self.pattern = is_op("reshape")(self.rs1)
 
     def callback(self, pre, post, node_map):
-        import pdb; pdb.set_trace()
 
         act = node_map[self.act][0]
         final_shape = pre.checked_type.shape
