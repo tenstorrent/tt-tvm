@@ -2084,6 +2084,23 @@ class ReconstructTFLayerNorm(DFPatternCallback):
         return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
 
 
+class CombineReshapes(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+
+        self.act = wildcard()
+        self.rs1 = is_op("reshape")(self.act)
+        self.pattern = is_op("reshape")(self.rs1)
+
+    def callback(self, pre, post, node_map):
+        import pdb; pdb.set_trace()
+
+        act = node_map[self.act][0]
+        final_shape = pre.checked_type.shape
+
+        return tvm.relay.reshape(act, final_shape)
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2181,6 +2198,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructJaxGelu(),
             # ReconstructPyTorchLayerNorm(),
             ReconstructTFLayerNorm(),
+            CombineReshapes()
         ],
         params=params,
         inputs=inputs,
