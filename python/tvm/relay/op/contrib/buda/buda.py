@@ -792,6 +792,14 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
             constant_updator.function_name = function_name
             rewrite(constant_updator, mod[mod.get_global_vars()[i]])
         params = constant_updator.params
+        
+    # Convert NaN attributes to Zeros
+    for partition_key, partition_val in params.items():
+        for param_key, param_val in params[partition_key].items():
+            param_val_np = param_val.asnumpy()
+            if np.isnan(param_val_np).all():
+                zero_mtx = tvm.nd.array(np.zeros(param_val_np.shape).astype(param_val.dtype))
+                params[partition_key][param_key] = zero_mtx
 
     dump_graph(mod, graph_name, "after_buda_partition")
         
