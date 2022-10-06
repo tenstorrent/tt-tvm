@@ -154,8 +154,7 @@ def reshape_to_vslice():
 def stack_reshape_reshape_to_binary_stack():
     act = is_tuple(None)
     stack = is_op("stack")(act)
-    rshp = is_op("reshape")(stack)
-    return is_op("reshape")(rshp)
+    return is_op("reshape")(stack)
 
 def decompose_concat_input_tuple():
     act = is_tuple(None)
