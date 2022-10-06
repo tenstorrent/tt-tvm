@@ -811,7 +811,6 @@ class CastWhereConditionToBool(DFPatternCallback):
 
         self.pattern = is_op("where")(wildcard(), wildcard(), wildcard()) 
 
-        
     def callback(self, pre, post, node_map):
         cond = tvm.relay.cast(pre.args[0], "bool")
         return tvm.relay.where(cond, pre.args[1], pre.args[2])
@@ -1240,7 +1239,9 @@ class DecomposeEinsum(DFPatternCallback):
 
             reshape_srcA = tvm.relay.reshape(A, newshape=[1, int(srcA_shape[0]), 1, 1]) # 1 f 1 1
             result = tvm.relay.multiply(reshape_srcA, B) # b f d e
+            
             return tvm.relay.transpose(result, axes=[1, 0, 2, 3]) # fbde
+
         elif match_einsum_pattern("jikd,jkgi->jkdg", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
@@ -2130,6 +2131,53 @@ class RepositionQNormScalarMultiplier(DFPatternCallback):
         
         return batch_matmul_with_reposition
     
+    
+class ReconstructQKVMatmulToEnableFurtherHstackOverTransposeZ(DFPatternCallback):
+    """
+    Reconstruction of the batch matmul used to multiply QK states and V states. In sum,
+    this pass transposes and reorders inputs of the batch matmul in order to create 
+    more appropriate shape where hstack can be used, instead of previously existing
+    transpose on Z dim (currently not supported). 
+    """
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.v_bias = is_constant()
+        self.v_bias_add = is_op("add")(wildcard(), self.v_bias)
+        self.split_head_reshape = is_op("reshape")(self.v_bias_add)
+        self.split_head_transpose_z = is_op("transpose")(self.split_head_reshape)
+        self.split_head_transpose_rc = is_op("transpose")(self.split_head_transpose_z)
+        self.reshape_squeeze = is_op("reshape")(self.split_head_transpose_rc)
+        
+        self.qk_hidden_states = wildcard()
+        self.batch_matmul = is_op("nn.batch_matmul")(self.reshape_squeeze, self.qk_hidden_states)
+        self.bmm_reshape = is_op("reshape")(self.batch_matmul)
+        self.bmm_transpose_z = is_op("transpose")(self.bmm_reshape)
+        self.bmm_transpose_rc = is_op("transpose")(self.bmm_transpose_z)
+        self.final_reshape = is_op("reshape")(self.bmm_transpose_rc)
+        
+        self.pattern = self.final_reshape
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        reshape_squeeze = node_map[self.reshape_squeeze][0]
+        qk_hidden_states = node_map[self.qk_hidden_states][0]
+        
+        orig_srcA_shape = pre_node_map[self.reshape_squeeze][0].checked_type.shape
+        orig_srcB_shape = pre_node_map[self.qk_hidden_states][0].checked_type.shape
+        
+        if len(orig_srcA_shape) != 3 or len(orig_srcB_shape) != 3:
+            logger.warning(f"Invalid shape lengths for ReconstructQKVMatmulToEnableFurtherHstackOverTransposeZ pass")
+            return post
+        
+        transpose_v_states = tvm.relay.transpose(reshape_squeeze, axes=[0, 2, 1])
+        transpose_qk_states = tvm.relay.transpose(qk_hidden_states, axes=[0, 2, 1])
+        reordered_batch_matmul = tvm.relay.nn.batch_matmul(transpose_qk_states, transpose_v_states, transpose_a=False, transpose_b=False)
+        new_bmm_reshape = tvm.relay.reshape(reordered_batch_matmul, newshape=[1, orig_srcA_shape[-3], orig_srcB_shape[-1], orig_srcA_shape[-2]])
+        new_bmm_transpose_zr = tvm.relay.transpose(new_bmm_reshape, axes=[0, 2, 1, 3])
+        new_final_reshape = tvm.relay.reshape(new_bmm_transpose_zr, newshape=[1, orig_srcB_shape[-2], orig_srcA_shape[-3] * orig_srcA_shape[-2]])
+        
+        return new_final_reshape
 
 
 class CombineReshapes(DFPatternCallback):
@@ -2247,6 +2295,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructTFLayerNorm(),
             CombineReshapes(),
             RepositionQNormScalarMultiplier(),
+            ReconstructQKVMatmulToEnableFurtherHstackOverTransposeZ(),
         ],
         params=params,
         inputs=inputs,
@@ -2254,4 +2303,3 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
         framework_outputs=framework_outputs,
         verify_cfg=verify_cfg
     )
-
