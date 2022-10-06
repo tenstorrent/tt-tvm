@@ -2197,7 +2197,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructJaxGelu(),
             # ReconstructPyTorchLayerNorm(),
             ReconstructTFLayerNorm(),
-            CombineReshapes()
+            CombineReshapes(),
         ],
         params=params,
         inputs=inputs,

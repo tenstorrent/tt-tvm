@@ -166,11 +166,11 @@ def is_transpose_reshape_reshape_hstack(call):
 
 def is_stack_reshape_reshape_to_binary_stack(call):
     dim = len(call.checked_type.shape)
-    stack_axis = call.args[0].args[0].attrs.axis.value
+    stack_axis = call.args[0].attrs.axis.value
     if stack_axis < 0:
         stack_axis = stack_axis + dim
 
-    input_shape = [int(dim) for dim in call.args[0].args[0].args[0][0].checked_type.shape]
+    input_shape = [int(dim) for dim in call.args[0].args[0][0].checked_type.shape]
     output_shape = [int(dim) for dim in call.checked_type.shape]
 
     works = all([i == o or (dim == stack_axis and o == 2 * i) for dim, (i, o) in enumerate(zip(input_shape, output_shape))])
