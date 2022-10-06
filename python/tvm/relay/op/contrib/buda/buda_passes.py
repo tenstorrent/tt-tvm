@@ -2082,6 +2082,54 @@ class ReconstructTFLayerNorm(DFPatternCallback):
             return post
 
         return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
+    
+    
+class RepositionQNormScalarMultiplier(DFPatternCallback):
+    """
+    Reposition Q norm which follows QK matmul for self-attention in order to 
+    avoid unsupported reshape and transpose ops (initially spot in Bert implemented 
+    in Jax).
+    """
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.q_bias = is_constant()
+        self.q_bias_add = is_op("add")(wildcard(), self.q_bias)
+        self.split_head_reshape = is_op("reshape")(self.q_bias_add)
+
+        self.q_norm_last_dim_shape = is_constant()
+        self.q_norm_reciprocal = is_op("reciprocal")(self.q_norm_last_dim_shape)
+        
+        self.scalar_multiplier = is_op("multiply")(self.split_head_reshape, self.q_norm_reciprocal)
+        self.multiplier_transpose = is_op("transpose")(self.scalar_multiplier)
+        self.multiplier_reshape = is_op("reshape")(self.multiplier_transpose)
+        self.k_hidden_states = wildcard()
+        self.batch_matmul = is_op("nn.batch_matmul")(self.multiplier_reshape, self.k_hidden_states)
+        
+        self.pattern = self.batch_matmul
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        q_bias_add = node_map[self.q_bias_add][0]
+        q_norm_reciprocal = node_map[self.q_norm_reciprocal][0]
+        k_hidden_states = node_map[self.k_hidden_states][0]
+        
+        split_head_reshape_attribute = pre_node_map[self.split_head_reshape][0].attrs.newshape
+        transpose_reshape_multiplier_attribute = pre_node_map[self.multiplier_transpose][0].attrs.axes
+        reshape_transposed_multiplier_attribute = pre_node_map[self.multiplier_reshape][0].attrs.newshape
+        repositioned_batch_matmul_transpose_a = pre_node_map[self.batch_matmul][0].attrs.transpose_a
+        repositioned_batch_matmul_transpose_b = pre_node_map[self.batch_matmul][0].attrs.transpose_b
+        
+        bias_add_norm_const_multiply = tvm.relay.multiply(q_bias_add, q_norm_reciprocal)
+        reshape_multiplier = tvm.relay.reshape(bias_add_norm_const_multiply, newshape=split_head_reshape_attribute)
+        transpose_multiplier = tvm.relay.transpose(reshape_multiplier, axes=transpose_reshape_multiplier_attribute)
+        reshape_transposed_multiplier = tvm.relay.reshape(transpose_multiplier, newshape=reshape_transposed_multiplier_attribute)
+        batch_matmul_with_reposition = tvm.relay.nn.batch_matmul(reshape_transposed_multiplier, k_hidden_states, 
+                                                                 transpose_a=repositioned_batch_matmul_transpose_a, 
+                                                                 transpose_b=repositioned_batch_matmul_transpose_b)
+        
+        return batch_matmul_with_reposition
+    
 
 
 class CombineReshapes(DFPatternCallback):
@@ -2198,6 +2246,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             # ReconstructPyTorchLayerNorm(),
             ReconstructTFLayerNorm(),
             CombineReshapes(),
+            RepositionQNormScalarMultiplier(),
         ],
         params=params,
         inputs=inputs,
