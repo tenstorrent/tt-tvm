@@ -1330,6 +1330,29 @@ class DecomposeEinsum(DFPatternCallback):
             # assert np.allclose(torch_res.numpy(), tvm_res.numpy())
 
             return res
+        elif match_einsum_pattern("abcd,->abcd", equation):
+            srcA = node_map[self.act][0][0]  # abcd
+            srcB = node_map[self.act][0][1]  #
+            
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+                        
+            res = tvm.relay.multiply(srcA, srcB)
+            
+            # import torch
+            # from tvm.relay.frontend.common import infer_value
+            # a = torch.rand((1, 1, 768))
+            # b = torch.rand((1, 1))
+            # infer_value(res, {'args_0': tvm.nd.array(a), 'args_1': tvm.nd.array(b)})
+            
+            # a_val = infer_value(pre.args[0][0], {'args_0': tvm.nd.array(a), 'args_1': tvm.nd.array(b)})
+            # b_val = infer_value(pre.args[0][1], {'args_2': tvm.nd.array(b)})
+            
+            # a_valt = torch.ones((1, 12, 1, 1))
+            # b_valt = b.squeeze()
+            # torch.einsum("abcd,->abcd", a_valt, b_valt)
+                        
+            return res
         else:
             assert False, f"TVM einsum decomposition does not support {equation} yet."
 
