@@ -91,7 +91,7 @@ def retrieve_pybuda_cpudevice_json_graph(*args):
     retrieve_graph(cpu_json_graph, t)
 
 
-def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, output_names=None, path=None, verify_cfg=None):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=None, verify_cfg=None):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -109,10 +109,6 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, output_n
     compiler_cfg: CompilerConfig
         Compiler configurations
 
-    output_names: List[str]
-        Model output names to extract from Tensorflow -> TVM conversion. If None, the last node will be treated
-        as model output node.
-
     path: str
         Path to onnx file on disk. This is used to verify TVM results vs. framework results.
 
@@ -124,7 +120,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, output_n
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, output_names=output_names, path=path, verify_cfg=verify_cfg, framework=framework)
+    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, path=path, verify_cfg=verify_cfg, framework=framework)
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
 
@@ -133,7 +129,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, output_n
     return json_graphs, flattened_pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=None, path=None, verify_cfg=None, framework=None):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, path=None, verify_cfg=None, framework=None):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -148,10 +144,6 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
 
     compiler_cfg: CompilerConfig
         Compiler configurations
-
-    output_names: List[str]
-        Model output names to extract from Tensorflow -> TVM conversion. If None, the last node will be treated
-        as model output node.
 
     path: str
         Path to onnx file on disk. This is used to verify TVM results vs. framework results.
@@ -178,7 +170,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, output_names=Non
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, output_names=output_names)
+        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg,)
     elif framework == "onnx":
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
@@ -470,7 +462,7 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
 
         cpu_post_json_graph["params"] = {}
         for function_name in buda_params.keys():
-            if function_name in cpu_pre_functions:
+            if function_name in cpu_post_functions:
                 cpu_post_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_post_json_graph["param_names"][function_name])})
     else:
         cpu_post_json_graph = {"graph":""}
@@ -804,11 +796,8 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     return json_graphs, flattened_inputs
 
 # TODO (arui) : Verify graphdef output vs. TVM output
-def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, output_names=None):
-    if output_names == None:
-        output_list_ = []
-    else:
-        output_list_ = output_names
+def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
+    output_list_ = compiler_cfg.framework_model_output_names
     # framework_outputs = tfmod(*inputs)
     # if not isinstance(framework_outputs, (list, tuple)):
     #     framework_outputs = [framework_outputs]
@@ -824,6 +813,10 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
 
     # frozen_func = convert_variables_to_constants_v2(full_model)
     # graph_def = frozen_func.graph.as_graph_def()
+    input_names = []
+    for node in graph_def.node:
+        if "input" in node.name and node.op == "Placeholder":
+            input_names.append(node.name)
 
     m = hashlib.sha256()
     m.update(str(graph_def).encode('utf-8'))
@@ -832,6 +825,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
         return cached_graphs
         
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=output_list_)
+    mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
     assert compiler_cfg.enable_tvm_constant_prop == True, "Pybuda Compile only support tf graphdef model with TVM parameter binding."
     if not compiler_cfg.enable_tvm_constant_prop:
@@ -847,25 +841,12 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg, o
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
     # Reconstruct Ops + export buda graph
-    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
+    partitioned_mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
 
-    executor_factory = tvm.relay.build_module.build(mod, target=target, params=params)
+    tvm.relay.build_module.build(partitioned_mod, target=target, params=params)
 
-    # with tvm.transform.PassContext(opt_level=5):
-    #     func = relay.create_executor("graph", mod=mod, device=tvm.cpu(0), target="llvm").evaluate()
+    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, [], graph_hash=m.hexdigest())
 
-
-    dev_json_graph["params"] = {}
-    dev_json_graph["hash"] = m.hexdigest()
-    for function_name in buda_params.keys():
-        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
-
-    dev_functions = list(dev_json_graph["functions"].keys())
-    dev_graph = join_graphs([dev_json_graph["functions"][function] for function in dev_functions])
-    dev_json_graph["graph"] = dev_graph
-
-    json_graphs = []
-    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
     return json_graphs
 
 

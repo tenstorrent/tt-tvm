@@ -31,24 +31,22 @@ from loguru import logger
 
 import networkx as nx
 
-def _register_external_op_helper_pytorch(op_name, supported=True):
+def _register_external_op_helper_pytorch(op_name, compiler_cfg, supported=True):
     op = tvm.ir.op.Op.get(op_name)
     if op.has_attr("target.pybuda_cpudevice"):
         op.reset_attr("target.pybuda_cpudevice")
 
     @tvm.ir.register_op_attr(op_name, "target.pybuda_cpudevice")
     def _func_wrapper(expr):
-        from pybuda.config import _get_global_compiler_config
-        compiler_cfg = _get_global_compiler_config()
         return compiler_cfg.enable_tvm_cpu_fallback
     return _func_wrapper
 
 def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     ResetOpAttributes().visit(mod["main"])
     for op in compiler_cfg.cpu_fallback_ops:
-        _register_external_op_helper_pytorch(op)
-    _register_external_op_helper_pytorch("equal")
-    _register_external_op_helper_pytorch("nn.log_softmax")
+        _register_external_op_helper_pytorch(op, compiler_cfg)
+    _register_external_op_helper_pytorch("equal", compiler_cfg)
+    _register_external_op_helper_pytorch("nn.log_softmax", compiler_cfg)
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda")
@@ -199,7 +197,7 @@ def pattern_table():
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
     dropout = ("pybuda.dropout", dropout_tuple_get_item())
 
-    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, binary_stack, concatenate, buda_conv2d_with_bias, adv_index, dropout]
+    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, concatenate, binary_stack, buda_conv2d_with_bias, adv_index, dropout]
 
     return buda_patterns
 
@@ -389,11 +387,11 @@ class DetermineTarget(ExprMutator):
                     new_fn = call.op.with_attr(new_attrs)
                     logger.info(f"Changing graph")
                     return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
-                else:
-                    try:
-                        tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
-                    except:
-                        pass
+        elif node_hash(call) in self.nodes_to_cpu_eval and not isinstance(call.op, tvm.relay.function.Function) :
+            try:
+                tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+            except:
+                pass
 
         elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
             # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, to reduce data movement
@@ -468,9 +466,26 @@ class ConstructDiGraph(ExprVisitor):
     def visit_call(self, call):
         node = node_hash(call)
         self.node_indexer.count_visit("call", node)
+
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
+
+        elif (
+            isinstance(call.op, tvm.relay.function.Function) 
+            and isinstance(call.op.body, tvm.relay.expr.TupleGetItem)
+            and call.op.body.tuple_value.op.get_attr("target.pybuda_cpudevice") is not None
+        ):
+            self.fallback_nodes.add(node)
+            logger.info(f"Adding: {call.op.body.op} to fallback")
+
+        elif (
+            isinstance(call.op, tvm.relay.function.Function) 
+            and not isinstance(call.op.body, tvm.relay.expr.TupleGetItem)
+            and call.op.body.op.get_attr("target.pybuda_cpudevice") is not None
+        ):
+            self.fallback_nodes.add(node)
+            logger.info(f"Adding: {call.op.body.op} to fallback")
 
         self.register_args(call, node)
         # Make sure CPU output shape starts with 1
@@ -695,7 +710,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         logger.trace("After FoldConstant")
         logger.trace(mod.functions)
-
+        # import pdb; pdb.set_trace()
         if compiler_cfg.enable_tvm_cpu_fallback:
 
             import time
@@ -722,6 +737,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
             mod["main"] = terget_determiner.visit(mod["main"])
             logger.debug(f"Done, took: {(time.time() - start):.2f} s")
             logger.debug(f"Remapping nodes...")
+
             start = time.time()
             node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
             node_remapper.visit(mod["main"])
