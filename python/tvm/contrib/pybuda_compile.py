@@ -824,7 +824,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
     if cached_graphs is not None:
         return cached_graphs
         
-    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=output_list_)
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=output_list_)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
     assert compiler_cfg.enable_tvm_constant_prop == True, "Pybuda Compile only support tf graphdef model with TVM parameter binding."
