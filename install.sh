@@ -31,10 +31,12 @@ cd $TVM_HOME/build
 LLVM_LINK=$PYBUDA_ROOT/third_party/llvm/bin/llvm-config
 sed -i "s#/usr/bin/llvm-config#$LLVM_LINK#g" $TVM_HOME/build/config.cmake
 
-if [[ "$CONFIG" == "debug" ]]; then
-  export TVM_BUILD_CONFIG="Debug"
-else
-  export TVM_BUILD_CONFIG="Release"
+if [[ -z "$TVM_BUILD_CONFIG" ]]; then
+  if [[ "$CONFIG" == "debug" ]]; then
+    export TVM_BUILD_CONFIG="Debug"
+  else
+    export TVM_BUILD_CONFIG="Release"
+  fi
 fi
 
 echo $TVM_BUILD_CONFIG
