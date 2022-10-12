@@ -1056,7 +1056,7 @@ def load_serialized_tvm_graph(compiler_cfg, graph_hash):
 
     load_path = get_auto_path(graph_hash, compiler_cfg, True)
 
-    if load_path == "" or not file_exists(load_path) or compiler_cfg.enable_tvm_constant_prop:
+    if load_path == "" or not file_exists(load_path):
         return None
 
     with open(load_path, "r") as file:
@@ -1102,7 +1102,7 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
 
     graph_hash = json_graphs[0]["hash"]
     store_path = get_auto_path(graph_hash, compiler_cfg, False)
-    if store_path == "" or compiler_cfg.enable_tvm_constant_prop or not len(dev_json_graph["graph"]):
+    if store_path == "" or not len(dev_json_graph["graph"]):
         return
 
     serilized_dict = {}
