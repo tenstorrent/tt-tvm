@@ -2106,7 +2106,111 @@ class ReconstructTFLayerNorm(DFPatternCallback):
             return post
 
         return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
-    
+
+
+class ReconstructJaxLayerNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        
+        # Calculate mean and var
+        ## Mean2
+        mean2_act_mult = is_op("multiply")(self.act, self.act)
+        mean2_act_sum = is_op("sum")(mean2_act_mult)
+        mean2_act_reshape = is_op("reshape")(mean2_act_sum)
+        mean2_dim_shape_const = is_constant() # self.axis_val
+        mean2_div = is_op("reciprocal")(mean2_dim_shape_const)
+        mean2 = is_op("multiply")(mean2_act_reshape, mean2_div)
+        
+        ## Mean
+        mean_act_sum = is_op("sum")(self.act)
+        mean_act_reshape = is_op("reshape")(mean_act_sum)
+        self.axis_val = is_constant()
+        mean_div = is_op("reciprocal")(self.axis_val)
+        self.mean = is_op("multiply")(mean_act_reshape, mean_div)
+        abs_mean = is_op("multiply")(self.mean, self.mean)
+        
+        ## Var
+        mean2_sub_abs_mean = is_op("subtract")(mean2, abs_mean)
+        zero_const = is_constant()
+        self.var = is_op("maximum")(zero_const, mean2_sub_abs_mean)
+        
+        # Normalize
+        ## Activation subtract mean
+        mean_prep_transpose = is_op("transpose")(self.mean)
+        mean_prep_reshape = is_op("reshape")(mean_prep_transpose)
+        y_act_sub_mean = is_op("subtract")(self.act, mean_prep_reshape)
+        
+        ## Activation scale
+        var_prep_transpose = is_op("transpose")(self.var)
+        var_prep_reshape = is_op("reshape")(var_prep_transpose)
+        self.eps = is_constant()
+        var_add_epsilon = is_op("add")(var_prep_reshape, self.eps)
+        mul_sqrt = is_op("sqrt")(var_add_epsilon)
+        mul_reciprocal = is_op("reciprocal")(mul_sqrt)
+        self.gamma = is_constant()
+        scale_mul_mul = is_op("multiply")(self.gamma, mul_reciprocal)
+        y_scale_mul = is_op("multiply")(scale_mul_mul, y_act_sub_mean)
+        
+        ## Bias add
+        self.beta = is_constant()
+        y_bias_add = is_op("add")(y_scale_mul, self.beta)
+        
+        # Set pattern
+        self.pattern = y_bias_add
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        gamma = node_map[self.gamma][0]
+        beta = node_map[self.beta][0]
+
+        try:
+            eps = node_map[self.eps][0].data.numpy().item()
+        except TVMError: # Does not have epsilon addition
+            eps = 0
+
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        gamma_shape = pre_node_map[self.gamma][0].checked_type.shape
+        beta_shape = pre_node_map[self.beta][0].checked_type.shape
+
+        if len(gamma_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(gamma_shape)]) == 1:
+            # Count the number of dims thats not 1
+            gamma_shape = (np.prod([int(x) for x in gamma_shape]),)
+            gamma = tvm.relay.reshape(gamma, newshape=gamma_shape)
+        else:
+            assert len(gamma_shape) == 1, "TVM Layernorm only supports single dim"
+
+        if len(beta_shape) > 1 and sum([1 if int(x) != 1 else 0 for x in list(beta_shape)]) == 1:
+            # Count the number of dims thats not 1
+            beta_shape = (np.prod([int(x) for x in beta_shape]),)
+            beta = tvm.relay.reshape(beta, newshape=gamma_shape)
+        else:
+            assert len(beta_shape) == 1, "TVM Layernorm only supports single dim"
+
+        axis = -1
+        axis_val = int(pre_node_map[self.axis_val][0].data.numpy())
+        for i, v in reversed(list(enumerate(act_shape))):
+            if v == axis_val:
+                axis = i - len(act_shape)
+                break
+        
+        if axis >= 0:
+            layernorm_axis = int(axis - len(act_shape))
+        else:
+            layernorm_axis = int(axis)
+
+        if layernorm_axis != -1:
+            return post
+
+        if np.prod(gamma_shape) != act_shape[layernorm_axis]:
+            return post
+
+        if np.prod(pre_node_map[self.beta][0].checked_type.shape) != act_shape[layernorm_axis]:
+            return post
+
+        return tvm.relay.layernorm(act, gamma, beta, eps, layernorm_axis)
+
     
 class RepositionQNormScalarMultiplier(DFPatternCallback):
     """
@@ -2319,6 +2423,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             RepositionQNormScalarMultiplier(),
             ReconstructQKVMatmulToEnableFurtherHstackOverTransposeZ(),
             CombineReshapes(),
+            ReconstructJaxLayerNorm(),
         ],
         params=params,
         inputs=inputs,
