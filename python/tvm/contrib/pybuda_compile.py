@@ -124,7 +124,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
 
-    serialize_and_store_tvm_graph(json_graphs, compiler_cfg)
+    serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework=framework)
 
     return json_graphs, flattened_pytorch_inputs, weights
 
@@ -516,7 +516,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
     graph_string = traced_model.graph.str().encode('utf-8')
     m = hashlib.sha256()
     m.update(graph_string)
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="pytorch")
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
 
@@ -628,7 +628,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     graph_string = str(onnx_mod).encode('utf-8')
     m = hashlib.sha256()
     m.update(graph_string)
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="onnx")
     if cached_graphs is not None:
         return cached_graphs, inputs
 
@@ -675,7 +675,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
 
     m = hashlib.sha256()
     m.update(str(graph_def).encode('utf-8'))
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="jax")
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
 
@@ -764,7 +764,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
 
     m = hashlib.sha256()
     m.update(str(graph_def).encode('utf-8'))
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="tensorflow")
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
 
@@ -820,7 +820,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
 
     m = hashlib.sha256()
     m.update(str(graph_def).encode('utf-8'))
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="tf_graphdef")
     if cached_graphs is not None:
         return cached_graphs
         
@@ -876,7 +876,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
     graph_string = sym.tojson().encode('utf-8')
     m = hashlib.sha256()
     m.update(graph_string)
-    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest())
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="mxnet")
     if cached_graphs is not None:
         return cached_graphs
 
@@ -1036,7 +1036,7 @@ def get_auto_path(graph_hash, compiler_cfg, is_load):
 
     return auto_path
 
-def load_serialized_tvm_graph(compiler_cfg, graph_hash):
+def load_serialized_tvm_graph(compiler_cfg, graph_hash, framework):
     """
     Loads serialized TVM graph representation ported to PyBuda in form of python dictionary.
 
@@ -1056,7 +1056,7 @@ def load_serialized_tvm_graph(compiler_cfg, graph_hash):
 
     load_path = get_auto_path(graph_hash, compiler_cfg, True)
 
-    if load_path == "" or not file_exists(load_path) or compiler_cfg.enable_tvm_constant_prop:
+    if load_path == "" or not file_exists(load_path) or (compiler_cfg.enable_tvm_constant_prop and framework == "pytorch"):
         return None
 
     with open(load_path, "r") as file:
@@ -1078,7 +1078,7 @@ def load_serialized_tvm_graph(compiler_cfg, graph_hash):
     return json_graphs
 
 
-def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
+def serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework):
     """
     Serializes TVM graph representation ported to PyBuda in form of JSON and stores it 
     on the desired destination.
@@ -1102,7 +1102,7 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg):
 
     graph_hash = json_graphs[0]["hash"]
     store_path = get_auto_path(graph_hash, compiler_cfg, False)
-    if store_path == "" or compiler_cfg.enable_tvm_constant_prop or not len(dev_json_graph["graph"]):
+    if store_path == "" or (compiler_cfg.enable_tvm_constant_prop and framework == "pytorch") or not len(dev_json_graph["graph"]):
         return
 
     serilized_dict = {}
