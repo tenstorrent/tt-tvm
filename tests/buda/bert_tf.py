@@ -28,8 +28,6 @@ def main():
     segments_tensors = torch.tensor([segments_ids])
     dummy_input = [tokens_tensor, segments_tensors]
 
-    import pdb; pdb.set_trace()
-    
     model = hub.load('https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-2_H-128_A-2/1')     
 
 
@@ -51,7 +49,6 @@ def main():
     viz = visualize(tvm_model["main"])
     viz.save()
 
-    import pdb; pdb.set_trace()
     tvm.relay.backend.te_compiler.get().clear()
     with tvm.transform.PassContext(opt_level=3):
         graph, lib, params = tvm.relay.build(tvm_model,

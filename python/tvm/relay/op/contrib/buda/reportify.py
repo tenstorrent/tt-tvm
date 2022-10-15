@@ -68,8 +68,6 @@ class CreateJson(ExprVisitor):
             op["type"] = name_partial
             op["opcode"] = "RelayOp"
             self.node_map[call] = name
-            if "nn.dropout_5" in name:
-                import pdb; pdb.set_trace()
         return super().visit_call(call)
 
     def visit_var(self, call):

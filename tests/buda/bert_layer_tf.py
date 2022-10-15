@@ -37,7 +37,6 @@ def main():
         "vocab_size": 30522
     }
     config = BertConfig(**model_config)
-    # import pdb; pdb.set_trace()
     tf_layer = TFBertLayer(config)
     # model = TFBertModel.from_pretrained("https://huggingface.co/google/bert_uncased_L-2_H-128_A-2/config.json")
 

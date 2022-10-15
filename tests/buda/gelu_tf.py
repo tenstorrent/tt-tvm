@@ -31,7 +31,6 @@ def run_test():
     mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], params))
 
     func = compile_tvm_for_buda(mod, params)
-    # import pdb; pdb.set_trace()
     res = func(x)
 
     if isinstance(res, (list, tuple)):
