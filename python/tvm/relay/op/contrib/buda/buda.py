@@ -420,7 +420,6 @@ class DetermineTarget(ExprMutator):
 
 
     # def visit_function(self, fn):
-    #     import pdb; pdb.set_trace()
     #     return super().visit_function(fn)
     
 
@@ -710,7 +709,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         logger.trace("After FoldConstant")
         logger.trace(mod.functions)
-        # import pdb; pdb.set_trace()
+
         if compiler_cfg.enable_tvm_cpu_fallback:
 
             import time

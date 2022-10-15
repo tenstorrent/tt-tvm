@@ -94,7 +94,6 @@ def extract_framework_model_outputs(
         if isinstance(framework_outputs, ModelOutput):
             framework_outputs = framework_outputs.to_tuple()
 
-        # import pdb; pdb.set_trace()
         if not isinstance(framework_outputs, (list, tuple)):
             if isinstance(framework_outputs, torch.Tensor):
                 framework_outputs = [framework_outputs]
@@ -103,9 +102,7 @@ def extract_framework_model_outputs(
             else:
                 assert False, "Don't know what to do with this"
         elif any([isinstance(x, (tuple, list)) for x in framework_outputs]):
-            # import pdb; pdb.set_trace()
             def flatten_outputs(outputs):
-                # import pdb; pdb.set_trace()
                 new_outputs = []
                 if isinstance(outputs, (tuple, list)):
                     for output in outputs:
