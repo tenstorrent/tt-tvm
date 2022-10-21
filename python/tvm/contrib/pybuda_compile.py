@@ -651,7 +651,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
 
 def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     # Convert model from Jax to TensorFlow
-    tf_model = jax2tf.convert(jaxmodel, enable_xla=False)
+    tf_model = jax2tf.convert(jaxmodel, enable_xla=compiler_cfg.enable_xla_jax_convert)
     tf_fun = tf.function(tf_model, autograph=False, jit_compile=True)
     
     # Extract framework model outputs

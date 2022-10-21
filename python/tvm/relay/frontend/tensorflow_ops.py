@@ -3056,6 +3056,141 @@ def _cumsum():
     return _impl
 
 
+def XLA_ConvV2():
+    def _impl(inputs, attr, params, mod):
+
+        weights_shape = _infer_shape(inputs[1], mod)
+        input_shape = _infer_shape(inputs[0], mod)
+        strides = inputs[2].data.numpy()
+        padding = inputs[3].data.numpy()
+        input_dilation = inputs[4].data.numpy()
+        output_dilation = inputs[5].data.numpy()
+        groups = inputs[6].data.numpy().item()
+
+        conv_attrs = {}
+        if attr['_target_layout'] ==  'NCHW':
+            input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
+            # Buda specific transpose order
+            inputs_data = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
+            inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
+ 
+            weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
+            inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
+
+            conv_attrs["channels"] = weights_shape[0]
+            conv_attrs["data_format"] = "NCHW"
+            conv_attrs["kernel_layout"] = "OIHW"
+            conv_attrs["strides"] = list(strides)
+            conv_attrs["padding"] = list(padding.flatten())
+            conv_attrs["dilations"] = list(input_dilation)
+            conv_attrs["groups"] = groups
+            conv_attrs["kernel_shape"] = weights_shape[2:]
+
+            out = AttrCvt(
+                op_name=_dimension_picker(
+                    "conv",
+                ),
+
+                transforms={
+                    "kernel_shape": "kernel_size",
+                    "data_format": "data_layout",
+                    "dilations": ("dilation", (0, 0)),
+                    "group": ("groups", 1),
+                },
+                custom_check=_dimension_constraint(),
+            )([inputs_data, inputs[1]], conv_attrs)
+
+            out = _op.transpose(out, axes=(0, 1, 3, 2))
+            out = _op.transpose(out, axes=(0, 3, 2, 1))
+        else:
+            assert False
+
+        return out
+
+    return _impl
+
+def XLA_DotV2():
+    def _impl(inputs, attr, params, mod):
+        input_x = inputs[0]
+        input_y = inputs[1]
+        orig_shape_x = _infer_shape(input_x, mod)
+        orig_shape_y = _infer_shape(input_y, mod)
+        ndim = len(orig_shape_x)
+        ndim_y = len(orig_shape_y)
+
+        is_static = not check_symbolic_shape(orig_shape_x)
+
+        # reshape n-dimensional batch matmul into 3d
+        if ndim > 3:
+            outer_dims = [orig_shape_x[i] for i in range(0, len(orig_shape_x) - 2)]
+            if is_static:
+                num_outer_elts = np.prod(outer_dims)
+                new_shape_x = (num_outer_elts, orig_shape_x[-2], orig_shape_x[-1])
+                if ndim_y > 2:
+                    new_shape_y = (num_outer_elts, orig_shape_y[-2], orig_shape_y[-1])
+                elif ndim_y == 2:
+                    new_shape_y = (1, orig_shape_y[-2], orig_shape_y[-1])
+            else:  # handle dynamic shape (dyn.reshape op)
+                shape_of_x = list_shape_of(inputs[0], ndim)
+                shape_of_y = list_shape_of(inputs[1], ndim)
+                new_shape_x = [_op.const(1), shape_of_x[-2], shape_of_x[-1]]
+                new_shape_y = [_op.const(1), shape_of_y[-2], shape_of_y[-1]]
+                for i in range(ndim - 2):
+                    new_shape_x[0] *= shape_of_x[i]
+                    new_shape_y[0] *= shape_of_y[i]
+                new_shape_x = _op.concatenate(_op.Tuple(new_shape_x), axis=0)
+                new_shape_y = _op.concatenate(_op.Tuple(new_shape_y), axis=0)
+
+            input_x = _op.reshape(input_x, newshape=new_shape_x)
+            input_y = _op.reshape(input_y, newshape=new_shape_y)
+        if ndim_y == 2:
+            input_y = _op.reshape(input_y, (1, orig_shape_y[-2], orig_shape_y[-1]))
+
+        if ndim == 2:
+            input_x = _op.reshape(input_x, (1, orig_shape_x[-2], orig_shape_x[-1]))
+
+        ret = get_relay_op("batch_matmul")(
+            input_x, input_y, transpose_a=False, transpose_b=False
+        )
+
+        # reshape result back to n-dimensional
+        if ndim > 3:
+            if is_static:
+                final_shape = list(orig_shape_x)
+                final_shape[-2] = orig_shape_x[-2]
+                final_shape[-1] =  orig_shape_y[-1]
+            else:
+                # calculate the resulting shape = [shape[:-2], 0, 0]
+                final_shape = list(shape_of_x)
+                final_shape[-2] = shape_of_x[-2]
+                final_shape[-1] = shape_of_y[-1]
+                final_shape = _op.concatenate(_op.Tuple(final_shape), axis=0)
+
+            ret = _op.reshape(ret, newshape=final_shape)
+
+        # Handle 2d inputs
+        if ndim == 2:
+            final_shape = list(orig_shape_x)
+            final_shape[-2] = orig_shape_x[-2]
+            final_shape[-1] =  orig_shape_y[-1]
+            ret = _op.reshape(ret, newshape=final_shape[-2:])
+
+        return ret
+    return _impl
+
+
+# def XLA_Gather():
+#     def _impl(inputs, attr, params, mod):
+#         import pdb; pdb.set_trace()
+
+#     return _impl
+
+# def StatelessWhile():
+#     def _impl(inputs, attr, params, mod):
+#         import pdb; pdb.set_trace()
+
+#     return _impl
+
 # _convert_map defines maps of name to converter functor(callable)
 # for 1 to 1 mapping, use Renamer if nothing but name is different
 # use AttrCvt if attributes need to be converted
@@ -3242,4 +3377,8 @@ _convert_map = {
     "Where": _where_v2(),
     "ZerosLike": AttrCvt("zeros_like"),
     "Cumsum": _cumsum(),
+    "XlaConvV2": XLA_ConvV2(),
+    "XlaDotV2": XLA_DotV2(),
+    # "XlaGather": XLA_Gather(),
+    # "StatelessWhile": StatelessWhile(),
 }
