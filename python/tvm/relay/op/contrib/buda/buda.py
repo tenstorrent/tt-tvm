@@ -779,6 +779,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         else:
             main_body_call_node = mod["main"].body
 
+        unsupported_op_names = []
         for item in main_body_call_node:
             if isinstance(item, tvm.relay.expr.Call):
                 for arg in item.args:
@@ -792,9 +793,15 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
                     #     # arg = arg.tuple_value().op
                     #     continue
                     
-                    assert isinstance(arg.op, tvm.ir.expr.GlobalVar), f"Operator {arg.op.name} is unsupported"
+                    if not isinstance(arg.op, tvm.ir.expr.GlobalVar):
+                        unsupported_op_names.append(arg.op.name)
+
                     assert arg.op in mod.global_var_map_.values(), mod["main"]
         
+        if len(unsupported_op_names) > 0:
+            print("Operators: " + str(unsupported_op_names) + " are unsupported.")
+            assert False
+
         assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
 
         constant_updator = UpdateConstants()
