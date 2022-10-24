@@ -2323,6 +2323,32 @@ class CombineReshapes(DFPatternCallback):
         return tvm.relay.reshape(act, final_shape)
 
 
+class DecompEinsumWithWTranspose(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act1 = wildcard()
+        self.act2 = wildcard()
+        self.tup = is_tuple([self.act1, self.act2])
+        self.einsum = is_op("einsum")(self.tup).has_attr({"equation": "abfd,f->fabd"})
+        self.transpose = is_op("transpose")(self.einsum).has_attr({"axes": [1, 0, 3, 2]})
+
+        self.pattern = self.transpose
+
+    def callback(self, pre, post, node_map):
+        act1 = node_map[self.act1][0]
+        act2 = node_map[self.act2][0]
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act2_shape = list(pre_node_map[self.act2][0].checked_type.shape)
+        new_shape = [1, 1,] + act2_shape + [1,]
+        act2_reshape = tvm.relay.reshape(act2, newshape=new_shape)
+        mul = tvm.relay.multiply(act1, act2_reshape)
+        transpose_yz = tvm.relay.transpose(mul, axes=[0,2,1,3])
+        transpose_xy = tvm.relay.transpose(transpose_yz, axes=[0,1,3,2])
+
+        return transpose_xy
+
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2373,6 +2399,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             transform.DecomposeVariance(),
             ConvertArgmaxTakeToReduceMax(),
             AddSqueezeForArgmax(),
+            DecompEinsumWithWTranspose(),
             DecomposeEinsum(),
             DecomposeLayoutTransform(),
             LiftLinearSplit(),
