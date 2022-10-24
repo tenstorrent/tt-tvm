@@ -1081,7 +1081,11 @@ def _crop_and_resize():
 
 def _cast():
     def _impl(inputs, attr, params, mod):
-        return inputs[0].astype(attr["DstT"].name)
+        if attr["DstT"].name == 'bfloat16':
+            # DO NOT ALLOW CASTING TO BFLOAT16
+            return inputs[0]
+        else:
+            return inputs[0].astype(attr["DstT"].name)
 
     return _impl
 
