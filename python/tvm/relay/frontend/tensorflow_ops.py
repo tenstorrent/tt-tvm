@@ -3183,11 +3183,56 @@ def XLA_DotV2():
     return _impl
 
 
-# def XLA_Gather():
-#     def _impl(inputs, attr, params, mod):
-#         import pdb; pdb.set_trace()
+def XLA_Gather():
+    """
+    Works similary as regular TF strided slice op. More precisely, numpy style 
+    indexing. E.g. x[:, :, 0:3, 0].
+    
+    Strided slice references:
+      - TF docs: https://www.tensorflow.org/api_docs/python/tf/strided_slice
+    
+    Gather references:
+      - Jax wrapper: https://jax.readthedocs.io/en/latest/_autosummary/jax.lax.gather.html
+      - TF XLA Gather op details: https://www.tensorflow.org/xla/operation_semantics#gather
+    """
+    def _impl(inputs, attr, params, mod):
+        act = inputs[0]  # an array from which slices should be taken
+        act_shape = _infer_shape(act)
 
-#     return _impl
+        start_indices = inputs[1]  # the indices at which slices should be taken
+        dim_nums = inputs[2]  # describes how dimensions of operand, start_indices and the output relate
+        stride = inputs[3] if len(inputs) > 3 else [1] * len(act_shape) # defined strides
+
+        # Vals
+        start_indices_val = _infer_value(start_indices, {}).numpy().tolist()
+        dim_nums_val = _infer_value(dim_nums, {}).numpy().tolist()
+
+        # Convert to strided slice operands
+        input = act
+        begin = start_indices_val if len(start_indices_val) == len(act_shape) else start_indices_val * (len(act_shape) // len(start_indices_val))
+        end = dim_nums_val
+        strides = stride
+
+        # Utilize TF strided slice
+        ret = _op.strided_slice(input, begin=begin, end=end, strides=strides)
+        
+        # Squeeze if last dim is redundant (e.g. [1, 28, 3, 1])
+        sliced_shape = _infer_shape(ret)
+        if sliced_shape[-1] == 1:
+            ret = _op.squeeze(ret, axis=[-1])
+
+        # Val comparison
+        # 
+        # import torch
+        # args_0 = tvm.nd.array(torch.rand(act_shape))
+        # framework_val = args_0.numpy()[:, :, 0:3, 0]
+        # tvm_val = _infer_value(ret, {'args_0': args_0}).numpy()
+
+        # assert np.allclose(tvm_val, framework_val)
+
+        return ret
+
+    return _impl
 
 # def StatelessWhile():
 #     def _impl(inputs, attr, params, mod):
@@ -3383,6 +3428,6 @@ _convert_map = {
     "Cumsum": _cumsum(),
     "XlaConvV2": XLA_ConvV2(),
     "XlaDotV2": XLA_DotV2(),
-    # "XlaGather": XLA_Gather(),
+    "XlaGather": XLA_Gather(),
     # "StatelessWhile": StatelessWhile(),
 }
