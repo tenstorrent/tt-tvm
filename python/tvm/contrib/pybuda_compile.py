@@ -664,7 +664,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
 
     # Get graph definition
     tf_fun = tf_fun.get_concrete_function(*inputs)
-    graph_def = tf_fun.graph.as_graph_def()   
+    graph_def = tf_fun.graph.as_graph_def(add_shapes=True)
 
     # Extract flatten inputs
     flattened_inputs, flattened_input_names, _, _= extract_flatten_inputs(

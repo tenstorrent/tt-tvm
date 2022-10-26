@@ -2347,6 +2347,35 @@ class DecompEinsumWithWTranspose(DFPatternCallback):
 
         return transpose_xy
 
+class DecompWTranspose(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act1 = wildcard()
+        self.act2 = wildcard()
+        self.transpose_before = is_op("transpose")(self.act1).has_attr({"axes": [2, 0, 1, 3]})
+        self.mul = is_op("multiply")(self.transpose_before, self.act2)
+        self.final_transpose = is_op("transpose")(self.mul)
+        self.pattern = self.final_transpose
+
+    def callback(self, pre, post, node_map):
+        act1 = node_map[self.act1][0]
+        act2 = node_map[self.act2][0]
+
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act2_shape = list(pre_node_map[self.act2][0].checked_type.shape)
+        new_shape = [1, 1,] + [act2_shape[0]] + [1,]
+        act2_reshape = tvm.relay.reshape(act2, newshape=new_shape)
+        mul = tvm.relay.multiply(act1, act2_reshape)
+        transpose_yz = tvm.relay.transpose(mul, axes=[0,2,1,3])
+        final_transpose_axes = list(node_map[self.final_transpose][0].attrs.axes)
+        if final_transpose_axes[2:] == [2, 3]:
+            return transpose_yz
+        elif final_transpose_axes[2:] == [3, 2]:
+            transpose_xy = tvm.relay.transpose(transpose_yz, axes=[0,1,3,2])
+        else:
+            return post
+
+        return transpose_xy
 
 
 def _get_callback_name(callback):
@@ -2400,6 +2429,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertArgmaxTakeToReduceMax(),
             AddSqueezeForArgmax(),
             DecompEinsumWithWTranspose(),
+            DecompWTranspose(),
             DecomposeEinsum(),
             DecomposeLayoutTransform(),
             LiftLinearSplit(),
