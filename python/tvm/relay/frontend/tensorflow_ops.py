@@ -3206,11 +3206,22 @@ def XLA_Gather():
         # Vals
         start_indices_val = _infer_value(start_indices, {}).numpy().tolist()
         dim_nums_val = _infer_value(dim_nums, {}).numpy().tolist()
+        
+        assert len(start_indices_val) <= 4, "Unsupported"
+        
+        # Determine dims that will be updated
+        changing_dims = []
+        for i, (x, y) in enumerate(zip(act_shape, dim_nums_val)):
+            if x != y:
+                changing_dims.append(i)
 
         # Convert to strided slice operands
         input = act
-        begin = start_indices_val if len(start_indices_val) == len(act_shape) else start_indices_val * (len(act_shape) // len(start_indices_val))
+        begin = [0] * len(act_shape)
+        for i in changing_dims:
+            begin[i] = start_indices_val.pop(0)
         end = dim_nums_val
+        end = [sum(x) for x in zip(begin, end)]
         strides = stride
 
         # Utilize TF strided slice
@@ -3221,13 +3232,11 @@ def XLA_Gather():
         if sliced_shape[-1] == 1:
             ret = _op.squeeze(ret, axis=[-1])
 
-        # Val comparison
-        # 
+        # # Val comparison        
         # import torch
         # args_0 = tvm.nd.array(torch.rand(act_shape))
-        # framework_val = args_0.numpy()[:, :, 0:3, 0]
+        # framework_val = args_0.numpy()[:, 3:9, 1:6, 2:4]
         # tvm_val = _infer_value(ret, {'args_0': args_0}).numpy()
-
         # assert np.allclose(tvm_val, framework_val)
 
         return ret
