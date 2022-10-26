@@ -3062,7 +3062,6 @@ def _cumsum():
 
 def XLA_ConvV2():
     def _impl(inputs, attr, params, mod):
-
         weights_shape = _infer_shape(inputs[1], mod)
         input_shape = _infer_shape(inputs[0], mod)
         strides = inputs[2].data.numpy()
@@ -3113,73 +3112,162 @@ def XLA_ConvV2():
 
     return _impl
 
+
+def transposeReshape(input, leftDims, rightDims, argShape, batchDims):
+
+    leftSize = 1
+    for dim in leftDims:
+        assert leftSize >= 0
+        leftSize = leftSize * argShape[dim]
+    
+
+    rightSize = 1
+    for dim in rightDims:
+        assert rightSize >= 0
+        rightSize = rightSize * argShape[dim]
+
+    # Generate the transpose permutation attribute.
+    transposePermutation = leftDims + rightDims
+    transposedShape = []
+
+    #Compute the resulting shape.
+    for val in transposePermutation:
+        transposedShape.append(argShape[val])
+    
+
+    if len(batchDims) == 0:
+        # If there are only a single pair of contracting dimensions and the output
+        # rank is two we can skip a needless reshape.
+        noReshape = len(transposedShape) == 2 and len(leftDims) == 1 and len(rightDims) == 1
+        newshape = [leftSize, rightSize]
+    else:
+        noReshape = len(transposedShape) == 3 and len(batchDims) == 1 and len(rightDims) == 1
+        batchSize = 1
+        for dim in batchDims:
+            assert batchSize >= 0
+            batchSize = batchSize * argShape[dim]
+        newshape = [batchSize, leftSize // batchSize, rightSize]
+
+
+    # Construct transpose. If no reshape is needed, we are done.
+    if transposePermutation != [x for x in range(len(argShape))]:
+        transposeResult = _op.transpose(input, axes=transposePermutation)
+    else:
+        transposeResult = input
+
+    if (noReshape) or newshape == list(_infer_shape(transposeResult)):
+        return transposeResult
+
+    return _op.reshape(transposeResult, newshape=newshape)
+
+
+
+def process_xla_dot_arg(input, contractDimsAttr, batchDimsAttr, outerDimsFirst, mod):
+
+    input_shape = _infer_shape(input, mod)
+
+    isOuterDim = [True] * len(input_shape)
+    contractDims = []
+    for dim in contractDimsAttr:
+        contractDims.append(dim)
+        isOuterDim[dim] = False
+    outerDims = []
+
+    for i, val in enumerate(isOuterDim):
+        if val:
+            outerDims.append(i)
+
+    if len(batchDimsAttr) > 0:
+        if outerDimsFirst:
+            new_outer_dims = list(batchDimsAttr)
+            for dim in outerDims:
+                if dim not in new_outer_dims:
+                    new_outer_dims.append(dim)
+            outerDims = new_outer_dims
+        else:
+            new_outer_dims = []
+            for dim in outerDims:
+                if dim not in list(batchDimsAttr):
+                    new_outer_dims.append(dim)
+
+            outerDims = new_outer_dims
+            contractDims = list(batchDimsAttr) + contractDims
+
+    if (outerDimsFirst):
+        return transposeReshape(input, outerDims, contractDims, input_shape, batchDims=batchDimsAttr)
+    
+
+    return transposeReshape(input, contractDims, outerDims, input_shape, batchDims=batchDimsAttr)
+
 def XLA_DotV2():
     def _impl(inputs, attr, params, mod):
-        input_x = inputs[0]
-        input_y = inputs[1]
-        orig_shape_x = _infer_shape(input_x, mod)
-        orig_shape_y = _infer_shape(input_y, mod)
-        ndim = len(orig_shape_x)
-        ndim_y = len(orig_shape_y)
+        from tensorflow.compiler.xla import xla_data_pb2
+        dnums_proto = xla_data_pb2.DotDimensionNumbers()
+        dnums_proto.ParseFromString(attr['dimension_numbers'])
 
-        is_static = not check_symbolic_shape(orig_shape_x)
+        if len(dnums_proto.lhs_contracting_dimensions) == 0 and len(dnums_proto.rhs_contracting_dimensions) == 0:
+            # A dot with no contracting dims will be rewritten into a multiply
+            # Currently it only supports einsum example
+            # It will take a bit of work to generalize this
+            lhsBatchDims = dnums_proto.lhs_batch_dimensions
+            rhsBatchDims = dnums_proto.rhs_batch_dimensions
+            assert len(lhsBatchDims) == len(rhsBatchDims) == 1
+            lhs = inputs[0]
+            input_y = inputs[1]
+            orig_shape_x = _infer_shape(lhs, mod)
+            orig_shape_y = _infer_shape(input_y, mod)
 
-        # reshape n-dimensional batch matmul into 3d
-        if ndim > 3:
-            outer_dims = [orig_shape_x[i] for i in range(0, len(orig_shape_x) - 2)]
-            if is_static:
-                num_outer_elts = np.prod(outer_dims)
-                new_shape_x = (num_outer_elts, orig_shape_x[-2], orig_shape_x[-1])
-                if ndim_y > 2:
-                    new_shape_y = (num_outer_elts, orig_shape_y[-2], orig_shape_y[-1])
-                elif ndim_y == 2:
-                    new_shape_y = (1, orig_shape_y[-2], orig_shape_y[-1])
-            else:  # handle dynamic shape (dyn.reshape op)
-                shape_of_x = list_shape_of(inputs[0], ndim)
-                shape_of_y = list_shape_of(inputs[1], ndim)
-                new_shape_x = [_op.const(1), shape_of_x[-2], shape_of_x[-1]]
-                new_shape_y = [_op.const(1), shape_of_y[-2], shape_of_y[-1]]
-                for i in range(ndim - 2):
-                    new_shape_x[0] *= shape_of_x[i]
-                    new_shape_y[0] *= shape_of_y[i]
-                new_shape_x = _op.concatenate(_op.Tuple(new_shape_x), axis=0)
-                new_shape_y = _op.concatenate(_op.Tuple(new_shape_y), axis=0)
+            if lhsBatchDims[0] != 0:
+                permute_order = list(lhsBatchDims)
+                for i in range(len(orig_shape_x)):
+                    if i not in permute_order:
+                        permute_order.append(i)
 
-            input_x = _op.reshape(input_x, newshape=new_shape_x)
-            input_y = _op.reshape(input_y, newshape=new_shape_y)
-        if ndim_y == 2:
-            input_y = _op.reshape(input_y, (1, orig_shape_y[-2], orig_shape_y[-1]))
+            lhs = _op.transpose(lhs, axes=permute_order)
+            x_shape = _infer_shape(lhs, mod)
 
-        if ndim == 2:
-            input_x = _op.reshape(input_x, (1, orig_shape_x[-2], orig_shape_x[-1]))
+            ndim_y = len(orig_shape_y)
 
-        ret = get_relay_op("batch_matmul")(
-            input_x, input_y, transpose_a=False, transpose_b=False
-        )
+            assert ndim_y == 1
 
-        # reshape result back to n-dimensional
-        if ndim > 3:
-            if is_static:
-                final_shape = list(orig_shape_x)
-                final_shape[-2] = orig_shape_x[-2]
-                final_shape[-1] =  orig_shape_y[-1]
+            new_shape_y = list(x_shape)
+            for i, dim in enumerate(new_shape_y):
+                if dim != orig_shape_y[0]:
+                    new_shape_y[i] = 1
+            rhs = _op.reshape(input_y, newshape=new_shape_y)
+
+            mul = _op.multiply(lhs, rhs)
+
+            if list(_infer_shape(mul, mod)) != attr['_output_shapes'][0]:
+                return _op.reshape(mul, newshape=attr['_output_shapes'][0])
+            return mul
+        else:
+            lhsContractingDims = dnums_proto.lhs_contracting_dimensions
+            rhsContractingDims = dnums_proto.rhs_contracting_dimensions
+            lhsBatchDims = dnums_proto.lhs_batch_dimensions
+            rhsBatchDims = dnums_proto.rhs_batch_dimensions
+
+            lhs = process_xla_dot_arg(inputs[0], lhsContractingDims, lhsBatchDims, outerDimsFirst=True, mod=mod)
+            rhs = process_xla_dot_arg(inputs[1], rhsContractingDims, rhsBatchDims, outerDimsFirst=False, mod=mod)
+
+            left_shape = _infer_shape(lhs, mod)
+            right_shape = _infer_shape(rhs, mod)
+            if len(left_shape) == 2 and len(right_shape) == 2:
+                result = get_relay_op("matmul")(
+                    lhs, rhs, transpose_a=False, transpose_b=False
+                )
+            elif len(left_shape) == 3 and len(right_shape) == 3:
+                assert left_shape[0] == right_shape[0]
+                result = get_relay_op("batch_matmul")(
+                    lhs, rhs, transpose_a=False, transpose_b=False
+                )
             else:
-                # calculate the resulting shape = [shape[:-2], 0, 0]
-                final_shape = list(shape_of_x)
-                final_shape[-2] = shape_of_x[-2]
-                final_shape[-1] = shape_of_y[-1]
-                final_shape = _op.concatenate(_op.Tuple(final_shape), axis=0)
+                assert False
 
-            ret = _op.reshape(ret, newshape=final_shape)
-
-        # Handle 2d inputs
-        if ndim == 2:
-            final_shape = list(orig_shape_x)
-            final_shape[-2] = orig_shape_x[-2]
-            final_shape[-1] =  orig_shape_y[-1]
-            ret = _op.reshape(ret, newshape=final_shape[-2:])
-
-        return ret
+        if list(_infer_shape(result, mod)) != attr['_output_shapes'][0]:
+            return _op.reshape(result, newshape=attr['_output_shapes'][0])
+        return result
+        
     return _impl
 
 
@@ -3222,6 +3310,15 @@ def XLA_Gather():
             begin[i] = start_indices_val.pop(0)
         end = dim_nums_val
         end = [sum(x) for x in zip(begin, end)]
+
+        # if len(start_indices_val) == len(act_shape):
+        #     begin = start_indices_val
+        #     end = dim_nums_val
+        # else:
+        #     start_indices_len = len(start_indices_val)
+        #     begin = [0] * (len(act_shape) - start_indices_len) + start_indices_val
+        #     end = [x + y for (x, y) in zip(begin, dim_nums_val)]
+
         strides = stride
 
         # Utilize TF strided slice
