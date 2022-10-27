@@ -147,7 +147,9 @@ def extract_framework_model_outputs(
         ]
 
     elif framework == "jax":
-        framework_outputs = model(*inputs)
+        import jax.numpy as jnp
+        args = [jnp.asarray(x.detach().numpy(),) for x in inputs]
+        framework_outputs = model(*args)
         if isinstance(framework_outputs, HFModelOutput):
             framework_outputs = list(framework_outputs.values())
 
