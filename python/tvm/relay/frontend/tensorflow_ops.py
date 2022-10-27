@@ -3238,7 +3238,7 @@ def XLA_DotV2():
 
             mul = _op.multiply(lhs, rhs)
 
-            if list(_infer_shape(mul, mod)) != attr['_output_shapes'][0]:
+            if attr['_output_shapes'][0] != None and list(_infer_shape(mul, mod)) != attr['_output_shapes'][0]:
                 return _op.reshape(mul, newshape=attr['_output_shapes'][0])
             return mul
         else:
@@ -3264,7 +3264,7 @@ def XLA_DotV2():
             else:
                 assert False
 
-        if list(_infer_shape(result, mod)) != attr['_output_shapes'][0]:
+        if attr['_output_shapes'][0] != None and list(_infer_shape(result, mod)) != attr['_output_shapes'][0]:
             return _op.reshape(result, newshape=attr['_output_shapes'][0])
         return result
         

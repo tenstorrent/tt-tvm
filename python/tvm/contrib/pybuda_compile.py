@@ -9,6 +9,7 @@ import tvm.relay as relay
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import (
     convert_variables_to_constants_v2,
+    _construct_concrete_function,
 )
 from tvm.contrib import graph_executor
 from loguru import logger
@@ -649,27 +650,64 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     return json_graphs, inputs
 
 
+from tf2onnx.tf_loader import convert_variables_to_constants_large_model
+def get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,):
+        # This conversion path will perform the following steps:
+        #     - Feed jax parameters as input to jax model
+        #     - convert jax model to TF function without parameters
+        #     - convert jax parameters to TF Variables
+        #     - trace TF function with Variables as input
+        #     - use helper function to handle variable freezing (This will avoid using Protobuf)
+        #     - attach output shape for each node in frozen graph. 
+
+        if 'params' in jaxmodel.variables.keys():
+            params = jaxmodel.variables['params']
+        else:
+            params = {}
+
+        predict_fn = lambda params, input: jaxmodel.apply({"params": params}, *input)
+        tf_fn = jax2tf.convert(predict_fn, enable_xla=compiler_cfg.enable_xla_jax_convert)
+
+        params_vars = tf.nest.map_structure(lambda param: tf.Variable(param, trainable=True), params)
+        tf_func = tf.function(lambda inputs: tf_fn(params_vars, inputs),autograph=False,jit_compile=True)
+
+        # Get graph definition
+        tf_func = tf_func.get_concrete_function(inputs)
+        graph_def = convert_variables_to_constants_large_model(tf_func)
+
+        # Add Shapes to frozen graph
+        for node in graph_def.node:
+            op = tf_func.graph._nodes_by_name[node.name]
+            if op.outputs:
+                node.attr["_output_shapes"].list.shape.extend(
+                    [output.get_shape().as_proto() for output in op.outputs])
+
+        return graph_def, tf_func
+
+
 def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
-    # Convert model from Jax to TensorFlow
-    tf_model = jax2tf.convert(jaxmodel, enable_xla=compiler_cfg.enable_xla_jax_convert)
-    tf_fun = tf.function(tf_model, autograph=False, jit_compile=True)
-    
     # Extract framework model outputs
     framework_outputs = extract_framework_model_outputs(
         framework="jax",
-        model=tf_fun,
+        model=jaxmodel,
         inputs=inputs,
         compiler_cfg=compiler_cfg,
     )
 
-    # Get graph definition
-    tf_fun = tf_fun.get_concrete_function(*inputs)
-    graph_def = tf_fun.graph.as_graph_def(add_shapes=True)
+    if compiler_cfg.enable_tvm_jax_freeze_large_model:
+        graph_def, tf_func = get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,)
+    else:
+        # Convert model from Jax to TensorFlow
+        tf_model = jax2tf.convert(jaxmodel, enable_xla=compiler_cfg.enable_xla_jax_convert)
+        tf_func = tf.function(tf_model, autograph=False, jit_compile=True)
+        # Get graph definition
+        tf_func = tf_func.get_concrete_function(*inputs)
+        graph_def = tf_func.graph.as_graph_def(add_shapes=True)
 
     # Extract flatten inputs
     flattened_inputs, flattened_input_names, _, _= extract_flatten_inputs(
         framework="jax",
-        model=tf_fun,
+        model=tf_func,
         inputs=inputs,
     )
 
@@ -679,7 +717,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     if cached_graphs is not None:
         return cached_graphs, flattened_inputs
 
-    outputs = [output.name for output in tf_fun.outputs]
+    outputs = [output.name for output in tf_func.outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
