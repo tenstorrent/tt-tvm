@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#!/usr/bin/bash -e
 #set -e # exit if a command fails
 
 if [ -n "$CI_PROJECT_DIR" ]; then
