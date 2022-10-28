@@ -665,14 +665,19 @@ def get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,):
         else:
             params = {}
 
-        predict_fn = lambda params, input: jaxmodel.apply({"params": params}, *input)
-        tf_fn = jax2tf.convert(predict_fn, enable_xla=compiler_cfg.enable_xla_jax_convert)
+        if len(params) == 0:
+            tf_fn = jax2tf.convert(jaxmodel, enable_xla=compiler_cfg.enable_xla_jax_convert)
+            tf_func = tf.function(tf_fn,autograph=False,jit_compile=True)
+            tf_func = tf_func.get_concrete_function(*inputs)
+        else:    
+            predict_fn = lambda params, input: jaxmodel.apply({"params": params}, *input)
+            tf_fn = jax2tf.convert(predict_fn, enable_xla=compiler_cfg.enable_xla_jax_convert)
 
-        params_vars = tf.nest.map_structure(lambda param: tf.Variable(param, trainable=True), params)
-        tf_func = tf.function(lambda inputs: tf_fn(params_vars, inputs),autograph=False,jit_compile=True)
-
-        # Get graph definition
-        tf_func = tf_func.get_concrete_function(inputs)
+            params_vars = tf.nest.map_structure(lambda param: tf.Variable(param, trainable=True), params)
+            tf_func = tf.function(lambda inputs: tf_fn(params_vars, inputs),autograph=False,jit_compile=True)
+            # Get graph definition
+            tf_func = tf_func.get_concrete_function(inputs)
+            
         graph_def = convert_variables_to_constants_large_model(tf_func)
 
         # Add Shapes to frozen graph
