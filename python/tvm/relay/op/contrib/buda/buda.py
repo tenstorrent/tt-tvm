@@ -155,6 +155,13 @@ def stack_reshape_reshape_to_binary_stack():
     stack = is_op("stack")(act)
     return is_op("reshape")(stack)
 
+def concat_reshape_reshape_to_binary_stack():
+    x1 = is_op("reshape")(wildcard())
+    x2 = is_op("reshape")(wildcard())
+    act = is_tuple([x1, x2])
+    concat = is_op("concatenate")(act)
+    return is_op("reshape")(concat)
+
 def decompose_concat_input_tuple():
     act = is_tuple(None)
     return is_op("concatenate")(act)
@@ -192,13 +199,16 @@ def pattern_table():
     vstack = ("pybuda.vstack", reshape_to_vstack(), is_reshape_vstack)
     vslice = ("pybuda.vslice", reshape_to_vslice(), is_reshape_vslice)
     layernorm = ("pybuda.layernorm", nn_layernorm_to_buda_layernorm())
-    binary_stack = ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack)
+    binary_stack = [
+        ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
+        ("pybuda.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
+    ]
     concatenate = ("pybuda.concatenate", decompose_concat_input_tuple())
     adv_index = ("pybuda.adv_index", decompose_adv_index_input_tuple())
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
     dropout = ("pybuda.dropout", dropout_tuple_get_item())
 
-    buda_patterns = [*hstack, hslice, vstack, vslice, matmul, concatenate, binary_stack, buda_conv2d_with_bias, adv_index, dropout]
+    buda_patterns = [*hstack, *binary_stack, hslice, vstack, vslice, matmul, concatenate, buda_conv2d_with_bias, adv_index, dropout]
 
     return buda_patterns
 
