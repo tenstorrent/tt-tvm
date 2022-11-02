@@ -12,6 +12,7 @@ from transformers.modeling_outputs import ModelOutput
 import tvm
 from pybuda.config import CompilerConfig
 from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
+from pybuda.tensor import to_pt_tensors
 
 class NodeOriginFinder(tvm.relay.ExprVisitor):
     def __init__(self, origins, include_constants=True):
@@ -148,7 +149,7 @@ def extract_framework_model_outputs(
 
     elif framework == "jax":
         import jax.numpy as jnp
-        args = [jnp.asarray(x.detach().numpy(),) for x in inputs]
+        args = [jnp.asarray(x.numpy(),) for x in inputs]
         framework_outputs = model(*args)
         if isinstance(framework_outputs, HFModelOutput):
             framework_outputs = list(framework_outputs.values())
@@ -156,10 +157,9 @@ def extract_framework_model_outputs(
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
 
-        supported_outputs = (tf.Tensor, torch.Tensor)
-        framework_outputs = [
-            x.numpy() for x in framework_outputs if isinstance(x, supported_outputs)
-        ]
+        outputs = to_pt_tensors(framework_outputs)
+        outputs = flatten_structured_output([outputs])
+        framework_outputs = [x.detach().numpy() for x in outputs]
     elif framework == "onnx":
         output_names = []
         for out in model.graph.output:

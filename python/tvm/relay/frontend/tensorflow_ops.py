@@ -3062,6 +3062,10 @@ def _cumsum():
 
 def XLA_ConvV2():
     def _impl(inputs, attr, params, mod):
+        from tensorflow.compiler.xla import xla_data_pb2
+        proto = xla_data_pb2.ConvolutionDimensionNumbers()
+        proto.ParseFromString(attr['dimension_numbers'])
+
         weights_shape = _infer_shape(inputs[1], mod)
         input_shape = _infer_shape(inputs[0], mod)
         strides = inputs[2].data.numpy()
@@ -3077,34 +3081,68 @@ def XLA_ConvV2():
             inputs_data = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
             inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
  
-            weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
-            inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
+            # Kernel transpose order
+            kernel_order = [
+                proto.kernel_output_feature_dimension,
+                proto.kernel_input_feature_dimension,
+                *proto.kernel_spatial_dimensions,
+            ]
+            weights_shape = [weights_shape[ii] for ii in kernel_order]
+            inputs[1] = _op.transpose(inputs[1], axes=kernel_order)
 
-            conv_attrs["channels"] = weights_shape[0]
-            conv_attrs["data_format"] = "NCHW"
-            conv_attrs["kernel_layout"] = "OIHW"
-            conv_attrs["strides"] = list(strides)
-            conv_attrs["padding"] = list(padding.flatten())
-            conv_attrs["dilations"] = list(input_dilation)
-            conv_attrs["groups"] = groups
-            conv_attrs["kernel_shape"] = weights_shape[2:]
+            if any([x != 1 for x in list(input_dilation)]):
+                # Transposed Conv
+                conv_attrs["channels"] = weights_shape[0]
+                conv_attrs["data_format"] = "NCHW"
+                conv_attrs["kernel_layout"] = "OIHW"
+                conv_attrs["strides"] = list(input_dilation)
+                conv_attrs["padding"] = list(output_dilation.flatten())
+                conv_attrs["groups"] = groups
+                conv_attrs["kernel_shape"] = weights_shape[2:]
 
-            out = AttrCvt(
-                op_name=_dimension_picker(
-                    "conv",
-                ),
+                out = AttrCvt(
+                    op_name=_dimension_picker(
+                        "conv", surfix="_transpose"
+                    ),
 
-                transforms={
-                    "kernel_shape": "kernel_size",
-                    "data_format": "data_layout",
-                    "dilations": ("dilation", (0, 0)),
-                    "group": ("groups", 1),
-                },
-                custom_check=_dimension_constraint(),
-            )([inputs_data, inputs[1]], conv_attrs)
+                    transforms={
+                        "kernel_shape": "kernel_size",
+                        "data_format": "data_layout",
+                        "dilations": ("dilation", (0, 0)),
+                        "group": ("groups", 1),
+                    },
+                    custom_check=_dimension_constraint(),
+                )([inputs_data, inputs[1]], conv_attrs)
 
-            out = _op.transpose(out, axes=(0, 1, 3, 2))
-            out = _op.transpose(out, axes=(0, 3, 2, 1))
+                out = _op.transpose(out, axes=(0, 1, 3, 2))
+                out = _op.transpose(out, axes=(0, 3, 2, 1))
+            else:
+                # regular conv
+                conv_attrs["channels"] = weights_shape[0]
+                conv_attrs["data_format"] = "NCHW"
+                conv_attrs["kernel_layout"] = "OIHW"
+                conv_attrs["strides"] = list(strides)
+                conv_attrs["padding"] = list(padding.flatten())
+                conv_attrs["dilations"] = list(input_dilation)
+                conv_attrs["groups"] = groups
+                conv_attrs["kernel_shape"] = weights_shape[2:]
+
+                out = AttrCvt(
+                    op_name=_dimension_picker(
+                        "conv",
+                    ),
+
+                    transforms={
+                        "kernel_shape": "kernel_size",
+                        "data_format": "data_layout",
+                        "dilations": ("dilation", (0, 0)),
+                        "group": ("groups", 1),
+                    },
+                    custom_check=_dimension_constraint(),
+                )([inputs_data, inputs[1]], conv_attrs)
+
+                out = _op.transpose(out, axes=(0, 1, 3, 2))
+                out = _op.transpose(out, axes=(0, 3, 2, 1))
         else:
             assert False
 
@@ -3239,6 +3277,7 @@ def XLA_DotV2():
             mul = _op.multiply(lhs, rhs)
 
             if attr['_output_shapes'][0] != None and list(_infer_shape(mul, mod)) != attr['_output_shapes'][0]:
+                assert np.prod(attr['_output_shapes'][0]) == np.prod(list(_infer_shape(result, mod)))
                 return _op.reshape(mul, newshape=attr['_output_shapes'][0])
             return mul
         else:
@@ -3265,6 +3304,7 @@ def XLA_DotV2():
                 assert False
 
         if attr['_output_shapes'][0] != None and list(_infer_shape(result, mod)) != attr['_output_shapes'][0]:
+            assert np.prod(attr['_output_shapes'][0]) == np.prod(list(_infer_shape(result, mod)))
             return _op.reshape(result, newshape=attr['_output_shapes'][0])
         return result
         
