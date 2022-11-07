@@ -1585,6 +1585,43 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
 
         return tvm.relay.nn.bias_add(act, bias)
 
+class ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.bias = wildcard()
+        
+        self.act = wildcard()
+        self.t_act1 = is_op("transpose")(self.act)
+        self.t_act2 = is_op("transpose")(self.t_act1)
+        
+        self.weight = wildcard()
+        self.t_weight1 = is_op("transpose")(self.weight)
+        self.t_weight2 = is_op("transpose")(self.t_weight1)
+        self.t_weight3 = is_op("transpose")(self.t_weight2)
+        
+        self.conv = is_op('nn.conv2d')(self.t_act2, self.t_weight3)
+        self.t_conv1 = is_op('transpose')(self.conv)
+        self.t_conv2 = is_op('transpose')(self.t_conv1)
+        
+        self.add = is_op('add')(self.t_conv2, self.bias)
+        
+        self.relu = is_op('nn.relu')(self.add)
+        self.t_relu1 = is_op('transpose')(self.relu)
+        self.t_relu2 = is_op('transpose')(self.t_relu1)
+        
+        self.pattern = self.t_relu2
+        
+    def callback(self, pre, post, node_map):
+        from tvm.relay.frontend.common import infer_shape
+        
+        bias = node_map[self.bias][0]
+        conv_act = node_map[self.conv][0]
+
+        bias_add = tvm.relay.nn.bias_add(conv_act, bias)
+        relu = tvm.relay.nn.relu(bias_add)
+        
+        return relu
+    
 class EnsureKeepdims(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -2462,6 +2499,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeMultiRangeTake(),
             LowerTakeToStridedSlice(),
             ConvertAddToBiasAddAfterConv2d(),
+            ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(),
             SkipRedundantConcatenateSlice(),
             DecomposeBatchFlatten(),
             DecomposeRepeat(),
