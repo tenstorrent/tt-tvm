@@ -1584,7 +1584,7 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
         act = node_map[self.act][0]
 
         return tvm.relay.nn.bias_add(act, bias)
-
+    
 class ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -1612,8 +1612,6 @@ class ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(DFPatternCallback):
         self.pattern = self.t_relu2
         
     def callback(self, pre, post, node_map):
-        from tvm.relay.frontend.common import infer_shape
-        
         bias = node_map[self.bias][0]
         conv_act = node_map[self.conv][0]
 
@@ -1622,6 +1620,49 @@ class ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(DFPatternCallback):
         
         return relu
     
+class RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.act = wildcard()
+        self.avg_pool = is_op('nn.avg_pool2d')(self.act)
+        self.t_ap1 = is_op('transpose')(self.avg_pool)
+        self.t_ap2 = is_op('transpose')(self.t_ap1)
+        self.reshape = is_op('reshape')(self.t_ap2)
+        
+        self.pattern = self.reshape
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+
+        avg_pool = node_map[self.avg_pool][0]
+        t1 = node_map[self.t_ap1][0]
+        t2 = node_map[self.t_ap2][0]
+        flatten_reshape = node_map[self.reshape][0]
+
+        avg_pool_shape = list(avg_pool.checked_type.shape)
+        t1_shape = list(t1.checked_type.shape)
+        t2_shape = list(t2.checked_type.shape)
+        flatten_reshape_shape = list(flatten_reshape.checked_type.shape)
+
+        if not (avg_pool_shape == t1_shape and avg_pool_shape[-1] == t2_shape[-3] and flatten_reshape_shape == [1, avg_pool_shape[-1] * avg_pool_shape[-2] * avg_pool_shape[-3]]):
+            return post
+
+        new_avg_pool = tvm.relay.nn.avg_pool2d(
+            act,
+            pool_size=avg_pool.attrs['pool_size'],
+            strides=avg_pool.attrs['strides'],
+            dilation=avg_pool.attrs['dilation'],
+            padding=avg_pool.attrs['padding'],
+            layout=avg_pool.attrs['layout'],
+            out_layout=avg_pool.attrs['out_layout'],
+            ceil_mode=avg_pool.attrs['ceil_mode'],
+            count_include_pad=avg_pool.attrs['count_include_pad'],
+        )
+        flatten = tvm.relay.reshape(new_avg_pool, newshape=flatten_reshape_shape)
+
+        return flatten
+
+
 class EnsureKeepdims(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -2519,6 +2560,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructQKVMatmulToEnableFurtherHstackOverTransposeZ(),
             CombineReshapes(),
             ReconstructJaxLayerNorm(),
+            RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
         ],
         params=params,
         inputs=inputs,
