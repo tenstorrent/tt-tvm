@@ -3117,7 +3117,7 @@ class PyTorchOpConverter:
         if inputs[2] is not None:
             dtype = _convert_dtype_value(inputs[2])
 
-        return _op.cumsum(data, axis=dim, dtype=dtype)
+        return _op.cumsum(data, axis=dim, dtype=dtype, exclusive=False)
 
     def masked_fill(self, inputs, input_types):
         mask = inputs[1]
