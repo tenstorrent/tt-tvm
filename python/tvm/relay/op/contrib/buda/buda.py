@@ -188,6 +188,22 @@ def merge_conv2d_with_bias():
 
     return bias_add
 
+def channel_last_conv():
+    input = wildcard()
+    weight = wildcard()
+
+    transpose_input_0 = is_op("transpose")(input).has_attr({"axes": [0, 3, 2, 1]})
+    transpose_input_1 = is_op("transpose")(transpose_input_0).has_attr({"axes": [0, 1, 3, 2]})
+
+    # transpose_weight_0 = is_op("transpose")(weight).has_attr({"axes": [0, 2, 1, 3]})
+    # transpose_weight_1 = is_op("transpose")(transpose_weight_0).has_attr({"axes": [0, 1, 3, 2]}) 
+
+    conv = is_op("nn.conv2d")(transpose_input_1, weight).has_attr({"data_layout":"NCHW"})
+
+    transpose_result_0 = is_op("transpose")(conv).has_attr({"axes": [0, 1, 3, 2]})
+    transpose_result_1 = is_op("transpose")(transpose_result_0).has_attr({"axes": [0, 3, 2, 1]})
+    return transpose_result_1
+
 @register_pattern_table("pybuda")
 def pattern_table():
     matmul = ("pybuda.matmul", dense_to_matmul())
@@ -207,7 +223,8 @@ def pattern_table():
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
     dropout = ("pybuda.dropout", dropout_tuple_get_item())
 
-    buda_patterns = [*hstack, *binary_stack, hslice, vstack, vslice, matmul, concatenate, buda_conv2d_with_bias, adv_index, dropout]
+    channel_last_conv2d = ("pybuda.channel_last_conv", channel_last_conv())
+    buda_patterns = [*hstack, *binary_stack, channel_last_conv2d, hslice, vstack, vslice, matmul, concatenate, buda_conv2d_with_bias, adv_index, dropout]
 
     return buda_patterns
 

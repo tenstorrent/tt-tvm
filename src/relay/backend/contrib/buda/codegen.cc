@@ -50,6 +50,8 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
         call = GetRootCall(fn->body.as<CallNode>(), 1, names);
       } else if (name == "pybuda.adv_index") {
         call = GetRootCall(fn->body.as<CallNode>(), 0, "adv_index");
+      } else if (name == "pybuda.channel_last_conv") {
+        call = GetRootCall(fn->body.as<CallNode>(), 6, "nn.conv2d");
       }
     } else {
       LOG(FATAL) << "Buda JSON runtime does not support calls to " << cn->op->GetTypeKey();
