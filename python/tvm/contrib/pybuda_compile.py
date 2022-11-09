@@ -796,7 +796,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
 
     full_model = trace.get_concrete_function(*inputs)
     frozen_func = convert_variables_to_constants_v2(full_model)
-    graph_def = frozen_func.graph.as_graph_def()
+    graph_def = frozen_func.graph.as_graph_def(add_shapes=True)
 
     # Extract flatten inputs
     flattened_inputs, flattened_input_names, _, _= extract_flatten_inputs(

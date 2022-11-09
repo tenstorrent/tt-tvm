@@ -1893,6 +1893,11 @@ def _reshape():
     def _impl(inputs, attr, params, mod):
         pop_node = inputs.pop(1)
 
+        if attr['_output_shapes'][0] != None:
+            return AttrCvt(op_name="reshape", extras={"newshape": attr['_output_shapes'][0]}, ignores=["Tshape"])(
+                inputs, attr
+            )
+
         try:
             shape_arg = _get_tuple_param(params, pop_node)
         except AttributeError:
@@ -1997,6 +2002,9 @@ def _broadcast_to():
     def _impl(inputs, attr, params, mod):
         if isinstance(inputs[1], _expr.Var):
             shape = params[inputs[1].name_hint]
+        elif attr['_output_shapes'][0] != None:
+            shape = attr['_output_shapes'][0]
+            return _op.broadcast_to(inputs[0], shape)
         else:
             shape = _infer_value(inputs[1], params, mod)
         shape = list(shape.numpy().reshape([-1]))

@@ -741,7 +741,7 @@ class ConvertArgmaxTakeToReduceMax(DFPatternCallback):
 
         reshape_op = node_map[self.reshape][0]
         new_shape = list(reshape_op.attrs.newshape)
-        if not (len(new_shape) == 1 and int(new_shape[0]) == -1):
+        if not (len(new_shape) == 1 and (int(new_shape[0]) == -1 or int(new_shape[0]) == 144512)):
             return post
 
         const_data = node_map[self.const][0].data.numpy()

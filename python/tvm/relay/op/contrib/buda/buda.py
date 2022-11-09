@@ -198,7 +198,6 @@ def pattern_table():
         ]
     vstack = ("pybuda.vstack", reshape_to_vstack(), is_reshape_vstack)
     vslice = ("pybuda.vslice", reshape_to_vslice(), is_reshape_vslice)
-    layernorm = ("pybuda.layernorm", nn_layernorm_to_buda_layernorm())
     binary_stack = [
         ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
         ("pybuda.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
