@@ -3201,10 +3201,10 @@ def transposeReshape(input, leftDims, rightDims, argShape, batchDims):
     else:
         transposeResult = input
 
-    if (noReshape) or newshape == list(_infer_shape(transposeResult)):
-        return transposeResult
+    if (noReshape) or newshape == list(argShape[i] for i in transposePermutation):
+        return transposeResult, newshape
 
-    return _op.reshape(transposeResult, newshape=newshape)
+    return _op.reshape(transposeResult, newshape=newshape), newshape
 
 
 
@@ -3270,7 +3270,7 @@ def XLA_DotV2():
                         permute_order.append(i)
 
             lhs = _op.transpose(lhs, axes=permute_order)
-            x_shape = _infer_shape(lhs, mod)
+            x_shape = list(orig_shape_x[i] for i in permute_order)
 
             ndim_y = len(orig_shape_y)
 
@@ -3294,11 +3294,9 @@ def XLA_DotV2():
             lhsBatchDims = dnums_proto.lhs_batch_dimensions
             rhsBatchDims = dnums_proto.rhs_batch_dimensions
 
-            lhs = process_xla_dot_arg(inputs[0], lhsContractingDims, lhsBatchDims, outerDimsFirst=True, mod=mod)
-            rhs = process_xla_dot_arg(inputs[1], rhsContractingDims, rhsBatchDims, outerDimsFirst=False, mod=mod)
+            lhs, left_shape = process_xla_dot_arg(inputs[0], lhsContractingDims, lhsBatchDims, outerDimsFirst=True, mod=mod)
+            rhs, right_shape = process_xla_dot_arg(inputs[1], rhsContractingDims, rhsBatchDims, outerDimsFirst=False, mod=mod)
 
-            left_shape = _infer_shape(lhs, mod)
-            right_shape = _infer_shape(rhs, mod)
             if len(left_shape) == 2 and len(right_shape) == 2:
                 result = get_relay_op("matmul")(
                     lhs, rhs, transpose_a=False, transpose_b=False
