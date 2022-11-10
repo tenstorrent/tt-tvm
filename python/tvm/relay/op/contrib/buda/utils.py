@@ -38,7 +38,7 @@ def is_squeeze(call):
 def is_superfluous_reshape(call):
     assert call.op.name == "reshape"
     input_shape = call.args[0].checked_type.shape
-    call = run_infer_type(call)
+    # call = run_infer_type(call)
     output_shape = call.checked_type.shape
 
     joint_size = min(len(input_shape), len(output_shape))
@@ -60,7 +60,7 @@ def is_reshape_vslice(call):
     if is_superfluous_reshape(call):
         return False
     r_input_shape = call.args[0].checked_type.shape
-    call = run_infer_type(call)
+    # call = run_infer_type(call)
     r_newshape = call.checked_type.shape
     
     # new shape has to have 3 dims, or 4 dims with dim W = 1
@@ -87,7 +87,7 @@ def is_reshape_vstack(call):
     if is_superfluous_reshape(call):
         return False
     r_input_shape = call.args[0].checked_type.shape
-    call = run_infer_type(call)
+    # call = run_infer_type(call)
     r_newshape = call.checked_type.shape
     
     # new shape has to have 3 dims, or 4 dims with dim W = 1
