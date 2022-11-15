@@ -189,8 +189,10 @@ class DecomposeMultiAxisMax(DFPatternCallback):
         self.pattern = self.max
 
     def callback(self, pre, post, node_map):
-
-        reduce_axes = list(post.attrs.axis)
+        if post.attrs.axis == None:
+            reduce_axes = [x for x in range(len(list(post.args[0].checked_type.shape)))]
+        else:
+            reduce_axes = list(post.attrs.axis)
         if len(reduce_axes) == 1:
             return post
 
@@ -2512,7 +2514,7 @@ def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, tar
     for callback in callbacks:
         callback_name = _get_callback_name(callback)
         try:
-        relay_module = _run_pattern_callback(relay_module, callback, callback_name)
+            relay_module = _run_pattern_callback(relay_module, callback, callback_name)
         except Exception as ex:
             logger.error(f"Failed on \"{callback_name}\" TVM callback")
             raise ex
