@@ -2456,6 +2456,29 @@ class DecompWTranspose(DFPatternCallback):
         return transpose_xy
 
 
+class RemoveRedundantReshapeTransposeReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape_1 = is_op("reshape")(self.act)
+        self.transpose = is_op("transpose")(self.reshape_1,)
+        self.reshape_2 = is_op("reshape")(self.transpose)
+        self.pattern = self.reshape_2
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        input_shape = pre_node_map[self.act][0].checked_type.shape
+        reshape2 = node_map[self.reshape_2][0]
+        final_shape = reshape2.attrs.newshape
+
+        if list(final_shape) == list(input_shape)[-2:]:
+            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
+
+        if list(final_shape) == [1] + list(input_shape):
+            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
+
+        return post
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2561,6 +2584,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             CombineReshapes(),
             ReconstructJaxLayerNorm(),
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
+            RemoveRedundantReshapeTransposeReshape(),
         ],
         params=params,
         inputs=inputs,
