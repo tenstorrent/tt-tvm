@@ -2468,7 +2468,12 @@ class PyTorchOpConverter:
 
     def broadcast_to(self, inputs, input_types):
         tensor_list = inputs[1]
+        
+        if type(tensor_list) is list:
+            res_shape = tensor_list
+        else:
         res_shape = [x.data.numpy().item() for x in tensor_list]
+
         return _op.broadcast_to(inputs[0], res_shape)
 
     def Bool(self, inputs, input_types):
