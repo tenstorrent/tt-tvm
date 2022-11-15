@@ -3111,7 +3111,11 @@ class PyTorchOpConverter:
                     index_shape[i] <= data_shape[i]
                 ), "Index dim size should be less than data one"
 
-        return _op.scatter_elements(data, index, src, axis=axis, reduction="add")
+        # PyTorch scatter_add requires dtype to be int64
+        if index.data.dtype == 'int32':
+             index = _op.cast(index, "int64")
+        
+        return _op.scatter_add(data, index, src, axis=axis)
 
     def scatter_reduce(self, inputs, input_types):
         assert len(inputs) == 5 or len(inputs) == 6, (
@@ -3160,6 +3164,7 @@ class PyTorchOpConverter:
             reduce = "max"
 
         return _op.scatter_elements(data, index, src, axis=dim, reduction=reduce)
+
 
     def cumsum(self, inputs, input_types):
         data = inputs[0]
