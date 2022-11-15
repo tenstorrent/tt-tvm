@@ -47,6 +47,7 @@ def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
         _register_external_op_helper_pytorch(op, compiler_cfg)
     _register_external_op_helper_pytorch("equal", compiler_cfg)
     _register_external_op_helper_pytorch("nn.log_softmax", compiler_cfg)
+    _register_external_op_helper_pytorch("scatter_add", compiler_cfg)
 
 def _register_external_op_helper_pybuda(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.pybuda")
@@ -348,7 +349,13 @@ class FixCPULinear(ExprMutator):
                     arg0 = call.args[0].args[0]
                 else:
                     arg0 = call.args[0]
-                arg1 = call.args[1].args[0]
+                if isinstance(call.args[1], tvm.relay.expr.Var):
+                    arg1 = call.args[1]
+                    # If transpose is part of a function, and therefore not picked up, add it explicitly
+                    if isinstance(call.op.body.args[1], tvm.relay.expr.Call) and call.op.body.args[1].op.name == "transpose":
+                        arg1 = tvm.relay.transpose(arg1, axes=call.op.body.args[1].attrs['axes'])
+                else:
+                    arg1 = call.args[1].args[0]
 
                 logger.info("Fixed linear")
                 return tvm.relay.nn.dense(arg0, arg1)

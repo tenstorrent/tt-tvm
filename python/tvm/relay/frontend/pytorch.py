@@ -2472,7 +2472,7 @@ class PyTorchOpConverter:
         if type(tensor_list) is list:
             res_shape = tensor_list
         else:
-        res_shape = [x.data.numpy().item() for x in tensor_list]
+            res_shape = [x.data.numpy().item() for x in tensor_list]
 
         return _op.broadcast_to(inputs[0], res_shape)
 
