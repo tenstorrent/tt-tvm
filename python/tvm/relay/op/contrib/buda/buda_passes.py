@@ -2511,7 +2511,11 @@ def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, tar
 
     for callback in callbacks:
         callback_name = _get_callback_name(callback)
+        try:
         relay_module = _run_pattern_callback(relay_module, callback, callback_name)
+        except Exception as ex:
+            logger.error(f"Failed on \"{callback_name}\" TVM callback")
+            raise ex
         if run_verify:
             tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, framework_outputs, callback_name, verify_cfg)
     
