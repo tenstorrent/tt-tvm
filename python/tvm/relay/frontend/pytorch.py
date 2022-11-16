@@ -5781,6 +5781,27 @@ def export_c_graph(location, graph):
     with open(f"{fname}", "w") as f:
         f.write(str(graph))
         
+def outplace_inplace_ops(opnodes):
+
+    replace_map = []
+
+    # Find in-place ops and record their outputs
+    for i, (node_name, op_node) in enumerate(opnodes):
+        operator = op_node.kind()
+        # Check if op is in-place    (avoid '__not__', etc.)
+        if operator[-1] == '_' and operator[-2:] != "__": 
+            input_node = op_node.inputsAt(0)
+            replace_map.append((i, input_node, op_node.outputsAt(0)))
+
+    # Replace future uses of node with an in-place op applied to it with the output of the op
+    for node_idx, orig_node, replacement_node in replace_map:
+        relevant_ops = opnodes[node_idx+1:]
+
+        for _, node in relevant_ops:
+            if orig_node in node.inputs():
+                node.replaceInputWith(orig_node, replacement_node)
+
+
 def from_pytorch(
     script_module,
     input_infos,
@@ -5923,6 +5944,7 @@ def from_pytorch(
         use_parser_friendly_name,
         preserve_pytorch_scopes,
     )
+    outplace_inplace_ops(opnodes)
     ret_name = _get_input_names(graph.return_node())
     outputs = converter.convert_operators(operator_nodes, outputs, ret_name)
 
