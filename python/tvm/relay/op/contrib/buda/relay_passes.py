@@ -17,6 +17,11 @@ from loguru import logger
 
 
 
+def fskip_eliminate(expr):
+    if isinstance(expr, relay.expr.Call) and expr.op.name == "transpose":
+        return True
+    return False
+
 def run_relay_compile_passes(relay_module, print_all=False):
 
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
@@ -43,7 +48,7 @@ def run_relay_compile_passes(relay_module, print_all=False):
     logger.trace("After DynamicToStatic")
     logger.trace(relay_module.functions)
 
-    relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr()])(relay_module)
+    relay_module = tvm.transform.Sequential([transform.EliminateCommonSubexpr(fskip_eliminate)])(relay_module)
     logger.trace("After EliminateCommonSubexpr")
     logger.trace(relay_module.functions)
 
@@ -55,11 +60,6 @@ def run_relay_compile_passes(relay_module, print_all=False):
     logger.trace("After CombineParallelConv2D")
     logger.trace(relay_module.functions)
 
-    # relay_module = tvm.transform.Sequential([transform.CombineParallelDense(3)])(relay_module)
-    # if print_all:
-    # logger.trace("After CombineParallelDense")
-    # logger.trace(relay_module.functions)
-
     relay_module = tvm.transform.Sequential([transform.CombineParallelBatchMatmul(3)])(relay_module)
     logger.trace("After CombineParallelBatchMatmul")
     logger.trace(relay_module.functions)
@@ -67,10 +67,6 @@ def run_relay_compile_passes(relay_module, print_all=False):
     relay_module = tvm.transform.Sequential([transform.FoldConstant()])(relay_module)
     logger.trace("After FoldConstant")
     logger.trace(relay_module.functions)
-
-    # relay_module = tvm.transform.Sequential([transform.FoldScaleAxis()])(relay_module)
-    # logger.trace("After FoldScaleAxis")
-    # logger.trace(relay_module.functions)
 
     relay_module = tvm.transform.Sequential([transform.CanonicalizeCast()])(relay_module)
     logger.trace("After CanonicalizeCast")
