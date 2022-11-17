@@ -401,6 +401,7 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     cpu_pre_functions = []
     device_functions = []
     cpu_post_functions = []
+    
     func_callnodes = extract_function_callnodes(partitioned_mod["main"], partitioned_mod.get_global_vars())
     for node in func_callnodes:
         if node.op.name_hint in dev_functions:
@@ -448,7 +449,29 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
             dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
     if len(cpu_post_functions):
-        graph = join_graphs([cpu_json_graph["functions"][function] for function in cpu_post_functions])
+        cpu_post_callnodes = [node for node in func_callnodes if node.op.name_hint in cpu_post_functions]
+        shared_inputs = []
+        for i, node_1 in enumerate(cpu_post_callnodes):
+            for j, node_2 in enumerate(cpu_post_callnodes):
+                if i >= j:
+                    continue
+                for k, arg_1 in enumerate(node_1.args):
+                    for l, arg_2 in enumerate(node_2.args):
+                        if arg_1 == arg_2:
+                            shared_inputs.append([i, j, k, l])
+
+        for shared_input in shared_inputs:
+            i, j, k, l = shared_input
+            graph_1 = json.loads(cpu_json_graph["functions"][cpu_post_functions[i]])
+            graph_2 = json.loads(cpu_json_graph["functions"][cpu_post_functions[j]])
+            node_1_idx = graph_1["arg_nodes"][k]
+            node_2_idx = graph_1["arg_nodes"][l]
+            graph_1["nodes"][node_1_idx]["name"] = graph_2["nodes"][node_2_idx]["name"]
+            cpu_json_graph["functions"][cpu_post_functions[i]] = json.dumps(graph_1)
+            cpu_json_graph["functions"][cpu_post_functions[j]] = json.dumps(graph_2)
+
+
+        graph = join_graphs([cpu_json_graph["functions"][function] for function in reversed(cpu_post_functions)])
         cpu_post_json_graph = copy.deepcopy(cpu_json_graph)
         cpu_post_json_graph["graph"] = graph
 
@@ -884,7 +907,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
 
     # Reconstruct Ops + export buda graph
-    partitioned_mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg)
+    partitioned_mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
 
     tvm.relay.build_module.build(partitioned_mod, target=target, params=params)
 
