@@ -488,7 +488,6 @@ class DetermineTarget(ExprMutator):
 def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
     added_nodes = set()
     input_nodes = [node for node in graph.nodes if node[1][1] and node[1][0] in input_names]
-    topo_graph = list(nx.topological_sort(graph))
     for fallback_node in fallback_nodes:
         for ancestor in nx.ancestors(graph, fallback_node):
             name, maybe_param = ancestor[1]
