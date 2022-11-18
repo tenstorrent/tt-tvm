@@ -527,6 +527,10 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
     if training_mode and compiler_cfg.enable_tvm_dropout == False:
         torchmod.eval()
 
+    if isinstance(torchmod, torch.jit.ScriptModule):
+        torchmod.eval()
+        torchmod = torch.jit.freeze(torchmod)
+        
     # Trace framework model
     traced_model = torch.jit.trace(torchmod, inputs, strict=False)
 
