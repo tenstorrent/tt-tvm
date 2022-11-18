@@ -140,7 +140,49 @@ class ConvertLayout(DFPatternCallback):
         else:
             return post
 
+class DecomposeDynamicResize2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+        self.input = wildcard()
+        self.input2 = wildcard()
+        self.input3 = wildcard()
+        self.resize = is_op('dyn.image.resize2d')(self.input, self.input2, self.input3)
+        self.pattern = wildcard()(self.resize) | wildcard()(wildcard(), self.resize) | wildcard()(self.resize, wildcard())
 
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input][0]
+        roi = tuple(node_map[self.input3][0].data.numpy())
+        resize = node_map[self.resize][0]
+        consumer = node_map[self.pattern][0]
+
+        supported_ops = [
+            "add",
+            "subtract",
+            "multiply",
+        ]
+
+        assert consumer.op.name in supported_ops, f"Do not support shape finding for op {consumer.op.name}"
+        
+        new_shape = list(consumer.checked_type.shape)
+        new_resize = tvm.relay.image.resize2d(
+            act,
+            size=new_shape[-2:],
+            roi=roi,
+            layout="NCHW",
+            method=resize.attrs.method,
+            coordinate_transformation_mode=resize.attrs.coordinate_transformation_mode,
+            rounding_method=resize.attrs.rounding_method,
+            cubic_alpha=resize.attrs.cubic_alpha,
+            cubic_exclude=resize.attrs.cubic_exclude,
+            extrapolation_value=resize.attrs.extrapolation_value,
+            out_dtype='float32',
+        )
+
+        args = list(consumer.args)
+        resize_idx = args.index(resize)        
+        args[resize_idx] = new_resize
+        
+        return tvm.relay.expr.Call(consumer.op, args)
 
 class RemoveCast(DFPatternCallback):
     def __init__(self):
@@ -667,6 +709,55 @@ class RemoveRedundantReshape(DFPatternCallback):
             return act
         else:
             return post
+
+class LowerCopyToNOP(DFPatternCallback):
+    def __init__(self, rewrite_once=True, require_type=True):
+        super().__init__(rewrite_once=rewrite_once, require_type=require_type)
+        self.pattern = is_op("copy")(wildcard())
+        
+
+    def callback(self, pre, post, node_map):
+        result = tvm.relay.identity(post.args[0])
+        return post.args[0]
+
+class ArgmaxAndMaxReconstruct(DFPatternCallback):
+    def __init__(self, rewrite_once=True):
+        super().__init__(rewrite_once=rewrite_once)
+        self.input_tensor = wildcard()
+        self.softmax = is_op("nn.softmax")(self.input_tensor)
+        
+        self.argmax = is_op("argmax")(self.softmax)
+        self.copy1 = is_op("copy")(self.argmax)
+        self.copy2 = is_op("copy")(self.copy1)
+        self.indices = is_constant()
+        self.add = is_op("add")(self.indices, self.argmax)
+
+        self.reshape = is_op("reshape")(self.softmax)
+        self.take = is_op("take")(self.reshape, self.add)
+        self.copy3 = is_op("copy")(self.take)
+        self.copy4 = is_op("copy")(self.copy3)
+
+        self.pattern = is_tuple([wildcard(), self.copy2, self.copy4])
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.input_tensor][0]
+        softmax = tvm.relay.nn.softmax(act, node_map[self.softmax][0].attrs.axis)
+        argmax = tvm.relay.argmax(
+            softmax,
+            axis=node_map[self.argmax][0].attrs.axis,
+            keepdims=True,
+            exclude=node_map[self.argmax][0].attrs.exclude,
+            select_last_index=node_map[self.argmax][0].attrs.select_last_index,
+        )
+        argmax = tvm.relay.squeeze(argmax, axis=node_map[self.argmax][0].attrs.axis)
+        maximum = tvm.relay.max(
+            softmax,
+            axis=node_map[self.argmax][0].attrs.axis,
+            keepdims=True,
+            exclude=node_map[self.argmax][0].attrs.exclude,
+        )
+        maximum = tvm.relay.squeeze(maximum, axis=node_map[self.argmax][0].attrs.axis)
+        return tvm.relay.Tuple([post.fields[0], argmax, maximum])
 
 class LowerTakeToStridedSlice(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):
@@ -2491,7 +2582,6 @@ def _get_callback_name(callback):
 
 
 def _run_pattern_callback(relay_module, callback, callback_name):
-
     if isinstance(callback, DFPatternCallback):
         relay_module['main'] = rewrite(callback, relay_module['main'])
     elif isinstance(callback, tvm.transform.Pass):
@@ -2530,9 +2620,11 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
         relay_module,
         [
             ConvertLayout(),
+            DecomposeDynamicResize2d(),
             # RemoveCast(),
             DecomposeStack(),
             transform.DecomposeVariance(),
+            ArgmaxAndMaxReconstruct(),
             ConvertArgmaxTakeToReduceMax(),
             AddSqueezeForArgmax(),
             DecompEinsumWithWTranspose(),
@@ -2565,6 +2657,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeMultiAxisBroadcast(),
             RemoveRedundantTake(),
             RemoveRedundantReshape(),
+            LowerCopyToNOP(),
             TransposePad(),
             DecomposeMultiRangeTake(),
             LowerTakeToStridedSlice(),

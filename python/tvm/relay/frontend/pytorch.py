@@ -102,6 +102,17 @@ class _TypeFinder(ExprMutator):
         v = super().visit(expr)
         return v
 
+class _CondEvaluator(ExprMutator):
+    def __init__(self, types):
+        super().__init__()
+
+    def visit_call(self, call):
+        new_args = [self.visit(arg) for arg in call.args]
+        if call.op.name == "equal":
+            if isinstance(new_args[0], _expr.Constant) and isinstance(new_args[1], _expr.Constant):
+                eq = new_args[0].data.numpy() == new_args[1].data.numpy()
+                return _wrap_const(eq)
+        return call
 
 def _should_construct_dynamic_list(list_construct_node):
     # if this list is element-accessed or modified at runtime, generate List ADT
@@ -139,7 +150,6 @@ def _should_construct_dynamic_list(list_construct_node):
 def _is_int_seq(seq):
     # TODO (t-vi): handle non-int constants? (like numpy.intXX)
     return len(seq) > 0 and all([isinstance(i, int) for i in seq])
-
 
 # operator implementation
 class PyTorchOpConverter:
@@ -1262,11 +1272,7 @@ class PyTorchOpConverter:
 
     def adaptive_avg_pool(self, op, inputs, input_types):
         data = inputs[0]
-        output_size = inputs[1]
-        for i, item in enumerate(output_size):
-            if isinstance(item, tvm.relay.expr.Constant):
-                # convert Constant to int
-                output_size[i] = item.data.numpy()[()]
+        output_size = self.convert_const_list(inputs[1])
 
         def func(x):
             return op(x, output_size=output_size)
@@ -1288,7 +1294,8 @@ class PyTorchOpConverter:
 
     @staticmethod
     def convert_const_list(data):
-        if isinstance(data, list):
+        if isinstance(data, (list, _expr.Tuple)):
+            data = list(data)
             for i, _ in enumerate(data):
                 if isinstance(data[i], _expr.Expr):
                     data[i] = int(_infer_value_simulated(data[i], {}).numpy())
@@ -1299,8 +1306,8 @@ class PyTorchOpConverter:
 
         pool_size = self.convert_const_list(inputs[1])
         strides = self.convert_const_list(inputs[2] if inputs[2] else pool_size)
-        padding = inputs[3]
-        dilation = inputs[4]
+        padding = self.convert_const_list(inputs[3])
+        dilation = self.convert_const_list(inputs[4])
         ceil_mode = int(inputs[5])
 
         data_shape = self.infer_shape(data)
@@ -1376,6 +1383,18 @@ class PyTorchOpConverter:
         tanh_min = float(inputs[1])
         tanh_max = float(inputs[2])
         return _op.tensor.clip(a, tanh_min, tanh_max)
+
+    def conv2d(self, inputs, input_types):
+
+        inputs[3] = self.convert_const_list(inputs[3])
+        inputs[4] = self.convert_const_list(inputs[4])
+        inputs[5] = self.convert_const_list(inputs[5])
+
+        # Add no output padding and move groups from inputs[6] to inputs[8]
+        inputs.append([0, 0])
+        inputs.append(inputs[6])
+        inputs[6] = 0 
+        return self.convolution(inputs, input_types)
 
     def convolution(self, inputs, input_types):
         # Use transpose or normal
@@ -1763,7 +1782,7 @@ class PyTorchOpConverter:
         return dense_out + input_mat
 
     def size(self, inputs, input_types):
-        shape = self.infer_shape_with_prelude(inputs[0])
+        shape = list(self.infer_shape_with_prelude(inputs[0]))
         axis = None
         if len(inputs) > 1:
             axis = int(inputs[1])
@@ -1798,12 +1817,14 @@ class PyTorchOpConverter:
 
     def view(self, inputs, input_types):
         data = inputs[0]
-
         if len(inputs) == 3:
             shape_inp = [inputs[1], self.infer_shape(inputs[2])[0]]
         else:
             if isinstance(inputs[1], list):
                 shape_inp = inputs[1]
+            elif isinstance(inputs[1], _expr.Tuple):
+                shape_inp = list(inputs[1].fields)
+                # return inputs[0]
             else:
                 shape_inp = self.infer_shape(inputs[1])
         new_shape = shape_inp
@@ -1812,6 +1833,12 @@ class PyTorchOpConverter:
                 val = _infer_value_simulated(shape, {})
                 new_shape[i] = val.numpy().item(0)
 
+        if isinstance(data, _expr.Constant):
+            old_shape = data.data.shape
+            num_new_dims = len(new_shape) - len(old_shape)
+            
+            if num_new_dims > 1:
+                data = _op.transform.expand_dims(data, -1, num_new_dims)
         return _op.transform.reshape(data, new_shape)
 
     def view_as(self, inputs, input_types):
@@ -2570,6 +2597,9 @@ class PyTorchOpConverter:
             return self.prelude.nth(inputs[0], _wrap_const(inputs[1]))
 
     def list_len(self, inputs, input_types):
+        if isinstance(inputs[0], _expr.Constant):
+            if len(inputs[0].data.shape) == 1:
+                return inputs[0].data.shape[0]
         return self.prelude.length(inputs[0])
 
     def type_as(self, inputs, input_types):
@@ -3850,14 +3880,17 @@ class PyTorchOpConverter:
         return (output, _op.stack(hy, 0), _op.stack(cy, 0))
 
     def all_any_common(self, op, inputs, input_types):
-        if len(inputs) >= 2:
+        # return True
+        if len(inputs) > 1:
             dim = inputs[1]
         else:
-            dim = None
-        if len(inputs) >= 3:
+            dim = 0
+        
+        if len(inputs) > 2:
             keepdim = inputs[2]
         else:
             keepdim = False
+
         if self.infer_type(inputs[0]).dtype != "bool":
             # The input dtype can be uint8.
             inp = _op.cast(inputs[0], "bool")
@@ -4385,6 +4418,27 @@ class PyTorchOpConverter:
 
         return weight_norm
 
+    def dim(self, inputs, input_types):
+        if isinstance(inputs[0], _expr.Constant):
+            return len(inputs[0].data.shape)
+        else:
+            return len(inputs[0].type_annotation.shape)
+
+    def is_impl(self, inputs, input_types):
+        return _expr.const(inputs[0] is inputs[1], dtype='bool')
+
+    def as_tensor(self, inputs, input_types):
+        vals = []
+        for val in inputs[0]:
+            vals.append(val.data.numpy().item())
+        return _expr.const(vals, dtype=inputs[1])
+
+    def format(self, inputs, input_types):
+        return inputs[0]
+
+    def warn(self, inputs, inputs_types):
+        return inputs[0]
+
     # Operator mappings
     def create_convert_map(self):
         self.convert_map = {
@@ -4678,6 +4732,12 @@ class PyTorchOpConverter:
             "aten::as_strided": self.as_strided,
             "aten::_weight_norm": self.weight_norm,
             "aten::new_full": self.new_full,
+            "aten::dim": self.dim,
+            "aten::__is__": self.is_impl,
+            "aten::conv2d": self.conv2d,
+            "aten::as_tensor": self.as_tensor,
+            "aten::format": self.format,
+            "aten::warn": self.warn,
         }
 
     def update_convert_map(self, custom_map):
@@ -4696,6 +4756,9 @@ class PyTorchOpConverter:
             "prim::If",
             "prim::Loop",
             "prim::DictConstruct",
+            "prim::dtype",
+            "prim::SetAttr",
+            "prim::unchecked_cast"
         ]
         known_ops += list(self.convert_map.keys())
         known_ops += list(qnn_torch.convert_map.keys())
@@ -4732,6 +4795,14 @@ class PyTorchOpConverter:
         true_branch = self.convert_block(blocks[0], outputs)
         false_branch = self.convert_block(blocks[1], outputs)
         assert len(true_branch) == 1 and len(false_branch) == 1
+
+        ce = _CondEvaluator(self.types)
+        new_cond = ce.visit(cond)
+        if isinstance(new_cond, _expr.Constant):
+            if np.all(new_cond.data.numpy()):
+                return true_branch[0]
+            else:
+                return false_branch[0]
         return _expr.If(cond, true_branch[0], false_branch[0])
 
     def convert_loop(self, loop_node, outputs):
@@ -4935,11 +5006,17 @@ class PyTorchOpConverter:
                 assert len(inputs) % 2 == 0, "Expected even number of inputs to unpack"
                 # Just turn into tuple for now
                 return _expr.Tuple(inputs[1::2])
+            elif operator == "prim::unchecked_cast":
+                outputs[node_name] = inputs[0]
+            elif operator == "prim::dtype":
+                tf = _TypeFinder(self.types)
+                typ = tf.visit(inputs[0])
+                outputs[node_name] = typ.type_annotation.dtype
             else:
                 if operator not in self.convert_map:
                     # At this point, the only possible ops that are not in convert_map are
                     # in-place variant of ops like aten::relu_
-                    assert operator.endswith("_")
+                    assert operator.endswith("_"), f"Found operator \'{operator}\'"
                     logger.warning(
                         f"An in-place op {operator} found, the result will not be correct "
                         "if the model depends on side-effects by this op.",
@@ -5211,9 +5288,10 @@ def _get_tensor_and_var(torch_tensor, name):
 
 
 def _get_output_name(node):
-    assert node.outputsSize() == 1
-    return node.output().debugName()
+    if node.outputsSize() != 1:
+        return node.inputsAt(0).debugName()
 
+    return node.output().debugName()
 
 def _get_output_names(node):
     return [output.debugName() for output in node.outputs()]
@@ -5277,7 +5355,7 @@ def _get_input_types(op_node, outputs, default_dtype="float32"):
         if inp.node().kind() == "prim::GetAttr":
             # GetAttr nodes always return None when we call scalarType() on it
             name = inp.debugName()
-            assert name in outputs
+            assert name in outputs, f"\'{name}\' is not a key in outputs"
             if isinstance(outputs[name], _expr.Var):
                 in_types.append(outputs[name].type_annotation.dtype)
             else:
@@ -5318,6 +5396,11 @@ def _get_constant(node):
             return node.s(attr_name)
         elif ty == "FunctionType":
             return None
+        elif ty == "ListType":
+            lst = node.outputsAt(0).toIValue()
+            for i in range(len(lst)):
+                lst[i] = _wrap_const(lst[i])
+            return _expr.Tuple(lst)
         else:
             raise NotImplementedError(f"Unsupported type: {ty}")
     else:
@@ -5447,7 +5530,7 @@ def _get_operator_nodes(
         else:
             node_name = _get_output_name(node)
 
-        if node.kind() != "prim::GetAttr":
+        if node.kind() not in ["prim::GetAttr", "prim::SetAttr"]:
             ops.append((node_name, node))
 
     return ops
@@ -5587,7 +5670,7 @@ def get_use_chains(root_node, terminate=lambda _: False):
     Track a chain of users of this node forward, returning a list of chains
     See get_attr_chains below for its usage
     """
-
+    logger.debug(f"GETING USE: {root_node}")
     def concat_lists(lists):
         return itertools.chain.from_iterable(lists)
 
@@ -5616,7 +5699,7 @@ def get_attr_chains(root_getattr_node):
     """
 
     def terminate(users):
-        next_attrs = [user for user in users if user.kind() == "prim::GetAttr"]
+        next_attrs = [user for user in users if (user.kind() in ["prim::GetAttr", "prim::SetAttr"])]
         return len(next_attrs) == 0
 
     return get_use_chains(root_getattr_node, terminate)
@@ -5627,7 +5710,7 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
     Return Relay vars and TVM NDArrays for input parameters
     A chain of prim::GetAttr nodes is processed one at a time
     """
-    getattr_nodes = graph.findAllNodes("prim::GetAttr", recurse=True)
+    getattr_nodes = list(graph.findAllNodes("prim::GetAttr", recurse=True)) + list(graph.findAllNodes("prim::SetAttr", recurse=True))
     params = {}
     param_tensors = {}
     packed_param_map = {}
@@ -5635,7 +5718,6 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
     vars_by_name = {}
     seen = set()
     attr_name_sep = "_" if use_parser_friendly_name else "."
-
     for node in getattr_nodes:
         if _get_output_name(node) in seen:
             continue
@@ -5698,8 +5780,7 @@ def export_c_graph(location, graph):
     fname = os.path.join(location, f"tvm_exported_c_graph_{time_stamp}.txt")
     with open(f"{fname}", "w") as f:
         f.write(str(graph))
-
-
+        
 def from_pytorch(
     script_module,
     input_infos,
@@ -5787,8 +5868,7 @@ def from_pytorch(
             break
 
     _run_jit_passes(graph, enable_lower_all_tuples)
-    _redirect_inplace_output(graph)
-    # graph = _remove_dict_inputs(graph)
+    _redirect_inplace_output(graph) # Potentially redundant
 
 
     if custom_convert_map:

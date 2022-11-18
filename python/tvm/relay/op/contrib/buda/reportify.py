@@ -63,7 +63,7 @@ class CreateJson(ExprVisitor):
                         shape.append([int(dim) for dim in field.shape])
                 op["cache"] = {"shape": shape}
             else:
-                op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
+                op["cache"] = {"shape": [int(dim) if isinstance(dim, tvm.tir.expr.IntImm) else -1 for dim in call.checked_type.shape]}
             op["class"] = name_partial
             op["type"] = name_partial
             op["opcode"] = "RelayOp"
