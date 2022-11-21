@@ -56,6 +56,8 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
         call = GetRootCall(fn->body.as<CallNode>(), 6, "nn.max_pool2d");
       } else if (name == "pybuda.channel_last_resize2d") {
         call = GetRootCall(fn->body.as<CallNode>(), 4, "image.resize2d");
+      } else if (name == "pybuda.channel_last_conv2d_transpose") {
+        call = GetRootCall(fn->body.as<CallNode>(), 6, "nn.conv2d_transpose");
       }
     } else {
       LOG(FATAL) << "Buda JSON runtime does not support calls to " << cn->op->GetTypeKey();

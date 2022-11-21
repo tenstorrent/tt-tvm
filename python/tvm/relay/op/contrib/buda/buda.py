@@ -230,6 +230,19 @@ def channel_last_resize():
 
     return transpose_result_1
 
+def channel_last_transpose_conv():
+    input = wildcard()
+    weight = wildcard()
+
+    transpose_input_0 = is_op("transpose")(input).has_attr({"axes": [0, 3, 2, 1]})
+    transpose_input_1 = is_op("transpose")(transpose_input_0).has_attr({"axes": [0, 1, 3, 2]})
+
+    conv = is_op("nn.conv2d_transpose")(transpose_input_1, weight).has_attr({"data_layout":"NCHW"})
+
+    transpose_result_0 = is_op("transpose")(conv).has_attr({"axes": [0, 1, 3, 2]})
+    transpose_result_1 = is_op("transpose")(transpose_result_0).has_attr({"axes": [0, 3, 2, 1]})
+    return transpose_result_1
+
 
 @register_pattern_table("pybuda")
 def pattern_table():
@@ -253,7 +266,22 @@ def pattern_table():
     channel_last_conv2d = ("pybuda.channel_last_conv", channel_last_conv())
     channel_last_maxpool2d = ("pybuda.channel_last_maxpool", channel_last_maxpool())
     channel_last_resize2d = ("pybuda.channel_last_resize2d", channel_last_resize())
-    buda_patterns = [*hstack, *binary_stack, channel_last_resize2d,channel_last_maxpool2d,channel_last_conv2d, hslice, vstack, vslice, matmul, concatenate, buda_conv2d_with_bias, adv_index, dropout]
+    channel_last_transpose_conv2d = ("pybuda.channel_last_conv2d_transpose", channel_last_transpose_conv())
+    buda_patterns = [
+        *hstack, 
+        *binary_stack, 
+        channel_last_resize2d,
+        channel_last_maxpool2d,
+        channel_last_conv2d,
+        channel_last_transpose_conv2d,
+        hslice, 
+        vstack, 
+        vslice, 
+        matmul, 
+        concatenate, 
+        buda_conv2d_with_bias, 
+        adv_index, 
+        dropout]
 
     return buda_patterns
 
