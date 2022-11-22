@@ -337,7 +337,19 @@ class AllowUnsupportedOps(ExprMutator):
                 tvm.ir.register_op_attr(call.op.name, "target.pybuda", _always_true)
 
         return super().visit_call(call)
+ 
+class CheckFallbackOps(ExprVisitor):
+    def __init__(self, cpu_fallback_ops):
+        super().__init__()
+        self.cpu_fallback_ops = cpu_fallback_ops
+        self.has_fallback_ops = False
+        
+    def visit_op(self, op): 
+        if op.name in self.cpu_fallback_ops:
+            self.has_fallback_ops = True 
+        return super().visit_op(op)
     
+   
 class FixCPULinear(ExprMutator):
     def __init__(self):
         super().__init__()
@@ -775,36 +787,43 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
             import time
             logger.debug(f"Running cpu fallback compilation")
-            logger.debug(f"Constructing digraph...")
-            start = time.time()
-            graph_constructor = ConstructDiGraph()
-            graph_constructor.visit(mod["main"])
-            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-            # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
-            # print(dot)
+            logger.debug(f"Checking if the graph has any cpu-fallback ops...")
+            start = time.time() 
+            check_fallback_ops = CheckFallbackOps(compiler_cfg.cpu_fallback_ops)
+            check_fallback_ops.visit(mod["main"])
+            logger.debug(f"Done, took: {(time.time() - start):.2f} s") 
 
-            logger.debug(f"Finding and adding shared weights...")
-            start = time.time()
-            fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
-            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-            logger.debug(f"Determining target for ops...")
-            terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
-            new_mod = None
-            start = time.time()
-            terget_determiner.modify_graph = False
-            mod["main"] = terget_determiner.visit(mod["main"])
-            terget_determiner.modify_graph = True
-            mod["main"] = terget_determiner.visit(mod["main"])
-            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-            logger.debug(f"Remapping nodes...")
+            if check_fallback_ops.has_fallback_ops: 
+                logger.debug(f"Constructing digraph...")
+                start = time.time()
+                graph_constructor = ConstructDiGraph()
+                graph_constructor.visit(mod["main"])
+                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+                # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
+                # print(dot)
 
-            start = time.time()
-            node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
-            node_remapper.visit(mod["main"])
-            terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
-            logger.trace("After DetermineTarget")
-            logger.trace(mod.functions)
-            logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+                logger.debug(f"Finding and adding shared weights...")
+                start = time.time()
+                fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
+                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+                logger.debug(f"Determining target for ops...")
+                terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
+                new_mod = None
+                start = time.time()
+                terget_determiner.modify_graph = False
+                mod["main"] = terget_determiner.visit(mod["main"])
+                terget_determiner.modify_graph = True
+                mod["main"] = terget_determiner.visit(mod["main"])
+                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+                logger.debug(f"Remapping nodes...")
+
+                start = time.time()
+                node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
+                node_remapper.visit(mod["main"])
+                terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
+                logger.trace("After DetermineTarget")
+                logger.trace(mod.functions)
+                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
 
         mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
         logger.trace("After AnnotateTarget")
