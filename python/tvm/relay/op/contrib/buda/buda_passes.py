@@ -2577,6 +2577,52 @@ class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
             return squeeze
         else:
             return post
+class CommuteIndexPastReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.index = is_op("strided_slice")(self.act)
+        self.bias = wildcard()
+        self.reshape_bias = is_op("reshape")(self.bias)
+        self.add = is_op("add")(self.index, self.reshape_bias)
+        self.reshape0 = is_op("reshape")(self.add)
+        self.transpose0 = is_op("transpose")(self.reshape0).has_attr({"axes" : [0, 1, 3, 2]})
+        self.reshape1 = is_op("reshape")(self.transpose0)
+        self.pattern = self.reshape1
+
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        index_attrs = node_map[self.index][0].attrs
+        if len(index_attrs.begin) != 1 or len(index_attrs.end) != 1:
+            return post
+        bias = node_map[self.bias][0]
+
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = list(pre_node_map[self.act][0].checked_type.shape)
+        if len(act_shape) != 4:
+            return post
+
+        bias_shape = list(pre_node_map[self.bias][0].checked_type.shape)
+        if len(bias_shape) != 1:
+            return post
+
+        reshape0_target = list(node_map[self.reshape0][0].attrs.newshape)
+        if reshape0_target != [1, 1, index_attrs.end[0] - index_attrs.begin[0], act_shape[-2] * act_shape[-1]]:
+            return post
+
+        reshape1_target = list(node_map[self.reshape1][0].attrs.newshape)
+        if reshape1_target != [1,act_shape[-2] * act_shape[-1], index_attrs.end[0] - index_attrs.begin[0]]:
+            return post
+    
+        new_reshape0 = tvm.relay.reshape(act, newshape=[1, 1, act_shape[-3], act_shape[-2] * act_shape[-1]])
+        new_transpose = tvm.relay.transpose(new_reshape0, axes=[0, 1, 3, 2])
+        new_reshape1 = tvm.relay.reshape(new_transpose, newshape=[1,act_shape[-2] * act_shape[-1], act_shape[-3]])
+        new_index = tvm.relay.strided_slice(new_reshape1, begin=index_attrs.begin, end=index_attrs.end, strides=index_attrs.strides, axes=[2])
+
+        new_bias_reshape = tvm.relay.reshape(bias, newshape=[1, 1, bias_shape[0]])
+        new_add = tvm.relay.add(new_index, new_bias_reshape)
+        return new_add
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
@@ -2688,8 +2734,8 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             CombineReshapes(),
             ReconstructJaxLayerNorm(),
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
-            RemoveRedundantReshapeTransposeReshape(),
             ReplicatePyBudaReshapeTranspose(),
+            CommuteIndexPastReshape(),
         ],
         params=params,
         inputs=inputs,
