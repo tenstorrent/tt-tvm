@@ -2548,29 +2548,35 @@ class DecompWTranspose(DFPatternCallback):
 
         return transpose_xy
 
-
-class RemoveRedundantReshapeTransposeReshape(DFPatternCallback):
+class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
-        self.reshape_1 = is_op("reshape")(self.act)
-        self.transpose = is_op("transpose")(self.reshape_1,)
-        self.reshape_2 = is_op("reshape")(self.transpose)
-        self.pattern = self.reshape_2
+        self.transpose_1 = is_op("transpose")(self.act)
+        self.transpose_2 = is_op("transpose")(self.transpose_1,)
+        self.reshape = is_op("reshape")(self.transpose_2)
+        self.pattern = self.reshape
 
     def callback(self, pre, post, node_map):
-        pre_node_map = construct_pre_node_map(self.pattern, pre)
-        input_shape = pre_node_map[self.act][0].checked_type.shape
-        reshape2 = node_map[self.reshape_2][0]
-        final_shape = reshape2.attrs.newshape
-
-        if list(final_shape) == list(input_shape)[-2:]:
-            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
-
-        if list(final_shape) == [1] + list(input_shape):
-            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
-
-        return post
+        t1 = node_map[self.transpose_1][0]
+        t1_axes = [int(dim) for dim in t1.attrs.axes]
+        t2 = node_map[self.transpose_2][0]
+        t2_axes = [int(dim) for dim in t2.attrs.axes]
+        
+        reshape = node_map[self.reshape][0]
+        newshape = [int(dim) for dim in reshape.attrs.newshape]
+        input_shape = [int(dim) for dim in t2.checked_type.shape]
+        if len(input_shape) < 4:
+            return post
+        eos = [input_shape[0], input_shape[1] * input_shape[2], input_shape[3]]
+        if t1_axes == [0, 2, 1, 3] and t2_axes == [0, 1, 3, 2] and newshape == eos:
+            newshape = [1, 1, eos[2], eos[1]]
+            r1 = tvm.relay.reshape(node_map[self.act][0], newshape)
+            t1 = tvm.relay.transpose(r1, axes=[0, 1, 3, 2])
+            squeeze = tvm.relay.reshape(t1, newshape=[1, eos[1], eos[2]])
+            return squeeze
+        else:
+            return post
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
