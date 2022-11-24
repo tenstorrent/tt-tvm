@@ -2615,7 +2615,6 @@ def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, tar
 
 
 def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
-
     return run_pattern_callbacks(
         relay_module,
         [
@@ -2684,6 +2683,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructJaxLayerNorm(),
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
             RemoveRedundantReshapeTransposeReshape(),
+            ReplicatePyBudaReshapeTranspose(),
         ],
         params=params,
         inputs=inputs,

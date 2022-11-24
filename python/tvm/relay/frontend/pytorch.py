@@ -5355,6 +5355,7 @@ def _get_input_types(op_node, outputs, default_dtype="float32"):
         if inp.node().kind() == "prim::GetAttr":
             # GetAttr nodes always return None when we call scalarType() on it
             name = inp.debugName()
+
             assert name in outputs, f"\'{name}\' is not a key in outputs"
             if isinstance(outputs[name], _expr.Var):
                 in_types.append(outputs[name].type_annotation.dtype)
