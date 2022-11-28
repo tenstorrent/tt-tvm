@@ -2548,6 +2548,66 @@ class DecompWTranspose(DFPatternCallback):
 
         return transpose_xy
 
+class RemoveRedundantReshapeTransposeReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape_1 = is_op("reshape")(self.act)
+        self.transpose = is_op("transpose")(self.reshape_1,)
+        self.reshape_2 = is_op("reshape")(self.transpose)
+        self.pattern = self.reshape_2
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        input_shape = pre_node_map[self.act][0].checked_type.shape
+        reshape2 = node_map[self.reshape_2][0]
+        final_shape = reshape2.attrs.newshape
+
+        if list(final_shape) == list(input_shape)[-2:]:
+            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
+
+        if list(final_shape) == [1] + list(input_shape):
+            return tvm.relay.reshape(node_map[self.act][0], newshape=final_shape)
+
+        return post
+    
+class AttemptRemoveStackWDim(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+        self.acts = wildcard()
+        self.stack = is_op("stack")(self.acts)
+        self.t1 = is_op("transpose")(self.stack,)
+        self.reshape = is_op("reshape")(self.t1)
+        self.pattern = is_op("transpose")(self.reshape)
+        
+    def callback(self, pre: Expr, post: Expr, node_map: tvm.ir.container.Map) -> Expr:
+        acts = node_map[self.acts][0]
+        stack = node_map[self.stack][0]
+        t1 = node_map[self.t1][0]
+        reshape = node_map[self.reshape][0]
+        t2 = node_map[self.pattern][0]
+
+        if all(len(stack.args[0].fields[i].checked_type.shape) == 3 for i in range(len(stack.args[0].fields))) \
+                and len(stack.checked_type.shape) > 3 \
+                and stack.checked_type.shape[-4] > 1 \
+                and t2.checked_type.shape[-2] == stack.checked_type.shape[-4]:
+            
+            reshaped_inps = []
+            for arg in stack.args[0].fields:
+                newdim = 1
+                for d in arg.checked_type.shape:
+                    newdim *= d
+                
+                if arg.checked_type.shape[-2] == 1:
+                    arg = tvm.relay.transpose(arg, axes=[1, 0, 2])
+                    
+                flattened = tvm.relay.reshape(arg, newshape=[1, 1, newdim])
+                reshaped_inps.append(flattened)
+            
+            return tvm.relay.concatenate(reshaped_inps, -2)
+        
+        return super().callback(pre, post, node_map)
+
 class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -2736,6 +2796,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
             ReplicatePyBudaReshapeTranspose(),
             CommuteIndexPastReshape(),
+            AttemptRemoveStackWDim()
         ],
         params=params,
         inputs=inputs,
