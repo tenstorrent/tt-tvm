@@ -1547,6 +1547,7 @@ class LowerAdaptiveAvgPool(DFPatternCallback):
             pool_size=kernel,
             strides=stride,
             padding=padding,
+            count_include_pad=True,
         )
 
 
