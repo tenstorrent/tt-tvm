@@ -43,28 +43,26 @@ class ConvertLayout(DFPatternCallback):
     def callback(self, pre, post, node_map):
         act = node_map[self.input][0]
 
-        if node_map[self.pattern][0].op.name == "nn.conv2d" and node_map[self.conv2d][0].attrs.data_layout == "NHWC":
-            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+        if node_map[self.pattern][0].op.name == "nn.conv2d" and node_map[self.conv2d][0].attrs.data_layout == "NHWC" and node_map[self.conv2d][0].attrs.kernel_layout in ["HWIO", "HWOI"]:
 
             weight = node_map[self.conv2d][0].args[1]
-            if (post.attrs.channels == post.attrs.groups) and post.attrs.channels > 1:
+            if node_map[self.conv2d][0].attrs.kernel_layout == "HWOI":
                 channel_first_weight = tvm.relay.transpose(weight, axes=[2, 3, 0, 1])
             else:
                 channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
 
             new_conv2d = tvm.relay.op.nn.conv2d(
-                channel_first_act,
+                act,
                 channel_first_weight,
                 strides=post.attrs.strides,
                 padding=post.attrs.padding,
                 groups=post.attrs.groups,
                 channels=post.attrs.channels,
                 kernel_size=post.attrs.kernel_size,
-                data_layout="NCHW",
+                data_layout="NHWC",
                 kernel_layout="OIHW",
             )
-            out_reshape = tvm.relay.transpose(new_conv2d, axes=[0,2,3,1])
-            return out_reshape
+            return new_conv2d
 
         elif node_map[self.pattern][0].op.name == "nn.conv2d_transpose" and node_map[self.conv2d_tran][0].attrs.data_layout == "NHWC":
             raise NotImplementedError

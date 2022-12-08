@@ -465,8 +465,7 @@ class GraphProto(object):
         try:
             from tensorflow.python.framework import tensor_util
         except ImportError as e:
-            raise ImportError(f"Unable to import tensorflow which is required {e}")
-
+            raise ImportError("Unable to import tensorflow which is required {}".format(e))
         missing_operators = self._parse_import_prerequisites(graph)
         control_flow_nodes = []
         ta_write_nodes = []
