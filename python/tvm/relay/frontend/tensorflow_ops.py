@@ -378,21 +378,21 @@ def _conv(opname):
             weights_shape = tmp_shape
 
         input_shape = _infer_shape(inputs_data, mod)
-        if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
-            input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-            # Buda specific transpose order
-            inputs_data = _op.transpose(inputs_data, axes=(0, 3, 2, 1))
-            inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
-            if opname in ["conv", "conv_transpose"]:
-                weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
-                inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
-            else:
-                weights_shape = [weights_shape[ii] for ii in (2, 3, 0, 1)]
-                inputs[1] = _op.transpose(inputs[1], axes=(2, 3, 0, 1))
+        # if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
+        #     input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
+        #     # Buda specific transpose order
+        #     inputs_data = _op.transpose(inputs_data, axes=(0, 3, 2, 1))
+        #     inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
+        #     if opname in ["conv", "conv_transpose"]:
+        #         weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
+        #         inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
+        #     else:
+        #         weights_shape = [weights_shape[ii] for ii in (2, 3, 0, 1)]
+        #         inputs[1] = _op.transpose(inputs[1], axes=(2, 3, 0, 1))
 
-            attr["data_format"] = "NCHW"
-            attr["strides"] = [attr["strides"][ii] for ii in (0, 3, 1, 2)]
-            flip_layout = True
+        #     attr["data_format"] = "NCHW"
+        #     attr["strides"] = [attr["strides"][ii] for ii in (0, 3, 1, 2)]
+        #     flip_layout = True
 
         if attr["data_format"] == "NHWC":
             in_channels = input_shape[3]

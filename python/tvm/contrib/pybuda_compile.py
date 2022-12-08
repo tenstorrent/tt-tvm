@@ -841,7 +841,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     flattened_outputs = flatten_structured_output([full_model.structured_outputs])
     # Generate TVM module
     outputs = [x.name for x in flattened_outputs]
-    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=outputs)
+    mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
     # Construct TVM IR

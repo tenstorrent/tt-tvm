@@ -200,10 +200,11 @@ def channel_last_conv():
     # transpose_weight_1 = is_op("transpose")(transpose_weight_0).has_attr({"axes": [0, 1, 3, 2]}) 
 
     conv = is_op("nn.conv2d")(transpose_input_1, weight).has_attr({"data_layout":"NCHW"})
+    otherconv = is_op("nn.conv2d")(input, weight).has_attr({"data_layout":"NHWC"})
 
     transpose_result_0 = is_op("transpose")(conv).has_attr({"axes": [0, 1, 3, 2]})
     transpose_result_1 = is_op("transpose")(transpose_result_0).has_attr({"axes": [0, 3, 2, 1]})
-    return transpose_result_1
+    return transpose_result_1 | otherconv
 
 def channel_last_maxpool():
     input = wildcard()
