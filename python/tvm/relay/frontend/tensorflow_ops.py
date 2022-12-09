@@ -340,29 +340,6 @@ def _conv(opname):
         attr["data_format"] = attr["data_format"].decode("utf-8")
         flip_layout = False
 
-        if opname == "conv_transpose" and attr["data_format"] == "NHWC":
-            # transform to NCHW for TVM backend compatible and set 'flip_layout'
-            # to have output flip back to NHWC
-            inputs[2] = _op.transpose(inputs[2], axes=(0, 3, 1, 2))
-            attr["strides"][1], attr["strides"][2], attr["strides"][3] = (
-                attr["strides"][3],
-                attr["strides"][1],
-                attr["strides"][2],
-            )
-            attr["data_format"] = "NCHW"
-
-            # Check whether output shapes attribute is set and not None
-            if (
-                opname == "conv_transpose"
-                and len(attr["_output_shapes"]) > 0
-                and attr["_output_shapes"][0]
-            ):
-                tmp_shape = attr["_output_shapes"][0]
-                tmp_shape = [tmp_shape[ii] for ii in (0, 3, 1, 2)]
-                attr["_output_shapes"][0] = tmp_shape
-
-            flip_layout = True
-
         inputs_data = inputs[0] if opname != "conv_transpose" else inputs[2]
 
         # NCHW Layout require weights transpose
@@ -378,21 +355,6 @@ def _conv(opname):
             weights_shape = tmp_shape
 
         input_shape = _infer_shape(inputs_data, mod)
-        # if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
-        #     input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-        #     # Buda specific transpose order
-        #     inputs_data = _op.transpose(inputs_data, axes=(0, 3, 2, 1))
-        #     inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
-        #     if opname in ["conv", "conv_transpose"]:
-        #         weights_shape = [weights_shape[ii] for ii in (3, 2, 0, 1)]
-        #         inputs[1] = _op.transpose(inputs[1], axes=(3, 2, 0, 1))
-        #     else:
-        #         weights_shape = [weights_shape[ii] for ii in (2, 3, 0, 1)]
-        #         inputs[1] = _op.transpose(inputs[1], axes=(2, 3, 0, 1))
-
-        #     attr["data_format"] = "NCHW"
-        #     attr["strides"] = [attr["strides"][ii] for ii in (0, 3, 1, 2)]
-        #     flip_layout = True
 
         if attr["data_format"] == "NHWC":
             in_channels = input_shape[3]
@@ -488,8 +450,8 @@ def _conv(opname):
             if opname == "conv":
                 attr["kernel_layout"] = "HWIO" if attr["data_format"] == "NHWC" else "OIHW"
             elif opname == "conv_transpose":
-                # conv_transpose has weights be IOHW, because the attr["data_format"] always be NCHW
-                attr["kernel_layout"] = "IOHW"
+                # conv_transpose in TVM has weights be IOHW for NCHW
+                attr["kernel_layout"] = "HWOI" if attr["data_format"] == "NHWC" else "IOHW"
             else:
                 attr["kernel_layout"] = "HWOI" if attr["data_format"] == "NHWC" else "OIHW"
 

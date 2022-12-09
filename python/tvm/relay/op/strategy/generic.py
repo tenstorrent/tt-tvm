@@ -522,7 +522,6 @@ def conv2d_transpose_strategy(attrs, inputs, out_type, target):
     layout = attrs.data_layout
     dilation = get_const_tuple(attrs.dilation)
     groups = attrs.groups
-    assert layout == "NCHW", "only support nchw for now"
     assert dilation == (1, 1), "not support dilate now"
     strategy = _op.OpStrategy()
     if groups == 1:

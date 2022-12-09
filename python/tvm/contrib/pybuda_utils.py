@@ -10,6 +10,7 @@ from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 import tvm
+from tvm.relay import ExprVisitor
 from pybuda.config import CompilerConfig
 from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 from pybuda.tensor import to_pt_tensors
@@ -352,3 +353,24 @@ def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: Compi
         raise RuntimeError("Unsupported framework type: {}".format(framework))
 
     return tvm_mod, param_name_lookup
+
+def has_op(module, opname, attrs={}):
+    
+    class Visitor(ExprVisitor):
+        
+        def __init__(self):
+            super().__init__()
+            self.has_op = False
+        
+        def visit_call(self, call):
+            if call.op.name == opname:
+                self.has_op = True
+                for key in attrs.keys():
+                     self.has_op &= key in call.attrs.keys() and call.attrs[key] == attrs[key]
+                if self.has_op:
+                    return
+            super().visit_call(call)
+                
+    visitor = Visitor()
+    visitor.visit(module)
+    return visitor.has_op
