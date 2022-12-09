@@ -64,24 +64,6 @@ class ConvertLayout(DFPatternCallback):
             )
             return new_conv2d
 
-        elif node_map[self.pattern][0].op.name == "nn.conv2d_transpose" and node_map[self.conv2d_tran][0].attrs.data_layout == "NHWC":
-            raise NotImplementedError
-            # channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
-            # weight = node_map[self.conv2d][0].args[1]
-            # channel_first_weight = tvm.relay.transpose(weight, axes=[3, 2, 0, 1])
-            # new_conv2d = tvm.relay.op.nn.conv2d(
-            #     channel_first_act,
-            #     channel_first_weight,
-            #     strides=post.attrs.strides,
-            #     padding=post.attrs.padding,
-            #     groups=post.attrs.groups,
-            #     channels=post.attrs.channels,
-            #     kernel_size=post.attrs.kernel_size,
-            #     data_layout="NCHW",
-            #     kernel_layout="OIHW",
-            # )
-            # out_reshape = tvm.relay.transpose(new_conv2d, axes=[0,2,3,1])
-            # return out_reshape
         elif node_map[self.pattern][0].op.name == "nn.max_pool2d" and node_map[self.max_pool2d][0].attrs.layout == "NHWC":
 
             channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])

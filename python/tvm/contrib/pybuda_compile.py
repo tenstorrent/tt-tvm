@@ -43,6 +43,7 @@ from tvm.contrib.pybuda_utils import (
     construct_tvm_ir,
     extract_function_callnodes,
     trace_to_origin,
+    has_op
 )
 import hashlib
 
@@ -583,7 +584,12 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
     if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
-        verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)
+        # If we have conv2d_transpose ops that are channel-last, tvm cannot execute the module, skip in this case
+        skip_verify = has_op(mod['main'], "nn.conv2d_transpose", {"data_layout": "NHWC"})
+        if skip_verify:
+            logger.warning("Module contains a channel-last nn.conv2d_transpose op, this is not supported in TVM (but may be supported in PyBuda). Skipping verification...")
+        else:
+            verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)
 
     # Reconstruct Ops + export buda graph
     mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
