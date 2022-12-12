@@ -64,20 +64,20 @@ class ConvertLayout(DFPatternCallback):
             )
             return new_conv2d
 
-        elif node_map[self.pattern][0].op.name == "nn.max_pool2d" and node_map[self.max_pool2d][0].attrs.layout == "NHWC":
+        # elif node_map[self.pattern][0].op.name == "nn.max_pool2d" and node_map[self.max_pool2d][0].attrs.layout == "NHWC":
 
-            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
+        #     channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
 
-            new_pool = tvm.relay.op.nn.max_pool2d(
-                channel_first_act,
-                pool_size=post.attrs.pool_size,
-                strides=post.attrs.strides,
-                padding=post.attrs.padding,
-                layout="NCHW",
-                ceil_mode=post.attrs.ceil_mode,
-            )
-            out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
-            return out_reshape
+        #     new_pool = tvm.relay.op.nn.max_pool2d(
+        #         channel_first_act,
+        #         pool_size=post.attrs.pool_size,
+        #         strides=post.attrs.strides,
+        #         padding=post.attrs.padding,
+        #         layout="NCHW",
+        #         ceil_mode=post.attrs.ceil_mode,
+        #     )
+        #     out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
+        #     return out_reshape
         elif node_map[self.pattern][0].op.name == "nn.avg_pool2d" and node_map[self.avg_pool2d][0].attrs.layout == "NHWC":
 
             channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
@@ -119,6 +119,59 @@ class ConvertLayout(DFPatternCallback):
             return out_reshape
         else:
             return post
+
+class ResolveConvChannels(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.act = wildcard()
+        self.weight = wildcard()
+        
+        t1 = is_op("transpose")(self.act)
+        t2 = is_op("transpose")(t1)
+        self.conv = is_op("nn.conv2d")(t2, self.weight) | is_op("nn.conv2d_transpose")(t2, self.weight) | is_op("nn.max_pool2d")(t2) #| is_op("nn.avg_pool2d")(t2)
+        t3 = is_op("transpose")(self.conv)
+        self.pattern = is_op("transpose")(t3)
+        
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        weight = node_map[self.weight][0] if self.weight in node_map else None
+        conv = node_map[self.conv][0]
+
+        pool = False
+        if conv.op.name == "nn.conv2d":
+            op = tvm.relay.nn.conv2d
+        elif conv.op.name == "nn.conv2d_transpose":
+            op = tvm.relay.nn.conv2d_transpose
+        elif conv.op.name == "nn.max_pool2d":
+            op = tvm.relay.nn.max_pool2d
+            pool = True
+        else:
+            op = tvm.relay.nn.avg_pool2d
+            pool = True
+            
+        data_layout = "NHWC" if conv.attrs.data_layout == "NCHW" else "NCHW"
+        
+        if not pool:
+            return op(
+                act,
+                weight,
+                strides=conv.attrs.strides,
+                padding=conv.attrs.padding,
+                groups=conv.attrs.groups,
+                channels=conv.attrs.channels,
+                kernel_size=conv.attrs.kernel_size,
+                data_layout=data_layout,
+                kernel_layout=conv.attrs.kernel_layout,
+            )
+        else:
+            return op(
+                act,
+                pool_size=conv.attrs.pool_size,
+                strides=conv.attrs.strides,
+                padding=conv.attrs.padding,
+                layout=data_layout,
+                ceil_mode=conv.attrs.ceil_mode,
+            )
 
 class DecomposeDynamicResize2d(DFPatternCallback):
     def __init__(self):
@@ -1645,19 +1698,32 @@ class PopulateStridedSliceAxes(DFPatternCallback):
 
 class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.input = wildcard()
         self.weight = wildcard()
         self.bias = wildcard()
-        self.act = is_op('nn.conv2d')(self.input, self.weight)
-        self.reshaped_bias = is_op('reshape')(self.bias)
-        self.pattern = is_op('add')(self.act, self.reshaped_bias)
+        self.act = is_op('nn.conv2d')(self.input, self.weight) | is_op('nn.conv2d_transpose')(self.input, self.weight)
+        self.pattern = is_op('add')(self.act, self.bias)
 
     def callback(self, pre, post, node_map):
         bias = node_map[self.bias][0]
         act = node_map[self.act][0]
-
-        return tvm.relay.nn.bias_add(act, bias)
+        
+        bias_shape = list(bias.checked_type.shape)
+        if act.attrs.data_layout == "NHWC":
+            single_dim = True
+            for i in bias_shape[:-1]: single_dim = single_dim and i == 1
+            if single_dim:
+                bias = tvm.relay.reshape(bias, [bias.checked_type.shape[-1]])
+            return tvm.relay.nn.bias_add(act, bias, axis=-1)
+        elif act.attrs.data_layout == "NCHW":
+            single_dim = True
+            for i in bias_shape[:-3] + bias_shape[-2:]: single_dim = single_dim and i == 1
+            if single_dim:
+                bias = tvm.relay.reshape(bias, [bias.checked_type.shape[-3]])
+            return tvm.relay.nn.bias_add(act, bias)
+        else:
+            raise NotImplementedError(f"Unhandled data layout: {act.attrs.data_layout}")
     
 class ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(DFPatternCallback):
     def __init__(self):
@@ -2712,6 +2778,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
         relay_module,
         [
             ConvertLayout(),
+            ResolveConvChannels(),
             DecomposeDynamicResize2d(),
             # RemoveCast(),
             DecomposeStack(),
@@ -2754,7 +2821,6 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeMultiRangeTake(),
             LowerTakeToStridedSlice(),
             ConvertAddToBiasAddAfterConv2d(),
-            ConvertAddToBiasAddAfterConv2dTFWithChannelFirst(),
             SkipRedundantConcatenateSlice(),
             DecomposeBatchFlatten(),
             DecomposeRepeat(),
