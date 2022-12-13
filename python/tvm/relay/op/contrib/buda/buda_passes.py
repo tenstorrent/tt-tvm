@@ -63,35 +63,6 @@ class ConvertLayout(DFPatternCallback):
                 kernel_layout="OIHW",
             )
             return new_conv2d
-
-        # elif node_map[self.pattern][0].op.name == "nn.max_pool2d" and node_map[self.max_pool2d][0].attrs.layout == "NHWC":
-
-        #     channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
-
-        #     new_pool = tvm.relay.op.nn.max_pool2d(
-        #         channel_first_act,
-        #         pool_size=post.attrs.pool_size,
-        #         strides=post.attrs.strides,
-        #         padding=post.attrs.padding,
-        #         layout="NCHW",
-        #         ceil_mode=post.attrs.ceil_mode,
-        #     )
-        #     out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
-        #     return out_reshape
-        elif node_map[self.pattern][0].op.name == "nn.avg_pool2d" and node_map[self.avg_pool2d][0].attrs.layout == "NHWC":
-
-            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
-
-            new_pool = tvm.relay.op.nn.avg_pool2d(
-                channel_first_act,
-                pool_size=post.attrs.pool_size,
-                strides=post.attrs.strides,
-                padding=post.attrs.padding,
-                layout="NCHW",
-                ceil_mode=post.attrs.ceil_mode,
-            )
-            out_reshape = tvm.relay.transpose(new_pool, axes=[0,2,3,1])
-            return out_reshape
         elif node_map[self.pattern][0].op.name == "nn.global_max_pool2d" and node_map[self.globalmax_pool2d][0].attrs.layout == "NHWC":
             raise NotImplementedError
         elif node_map[self.pattern][0].op.name == "nn.global_avg_pool2d" and node_map[self.globalavg_pool2d][0].attrs.layout == "NHWC":
