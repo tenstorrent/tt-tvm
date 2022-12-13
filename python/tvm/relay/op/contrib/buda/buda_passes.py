@@ -71,23 +71,6 @@ class ConvertLayout(DFPatternCallback):
             raise NotImplementedError
         elif node_map[self.pattern][0].op.name == "nn.adaptive_avg_pool2d" and node_map[self.adaptiveavg_pool2d][0].attrs.layout == "NHWC":
             raise NotImplementedError
-        elif node_map[self.pattern][0].op.name == "image.resize2d" and node_map[self.imageresize2d][0].attrs.layout == "NHWC":
-            channel_first_act = tvm.relay.transpose(act, axes=[0, 3, 1, 2])
-            new_resize2d = tvm.relay.image.resize2d(
-                channel_first_act,
-                size=post.attrs.size,
-                roi=post.attrs.roi,
-                layout="NCHW",
-                method=post.attrs.method,
-                coordinate_transformation_mode=post.attrs.coordinate_transformation_mode,
-                rounding_method=post.attrs.rounding_method,
-                cubic_alpha=post.attrs.cubic_alpha,
-                cubic_exclude=post.attrs.cubic_exclude,
-                extrapolation_value=post.attrs.extrapolation_value,
-                out_dtype=post.attrs.out_dtype,
-            )
-            out_reshape = tvm.relay.transpose(new_resize2d, axes=[0,2,3,1])
-            return out_reshape
         else:
             return post
 
@@ -99,7 +82,7 @@ class ResolveConvChannels(DFPatternCallback):
         
         t1 = is_op("transpose")(self.act)
         t2 = is_op("transpose")(t1)
-        self.conv = is_op("nn.conv2d")(t2, self.weight) | is_op("nn.conv2d_transpose")(t2, self.weight) | is_op("nn.max_pool2d")(t2) #| is_op("nn.avg_pool2d")(t2)
+        self.conv = is_op("nn.conv2d")(t2, self.weight) | is_op("nn.conv2d_transpose")(t2, self.weight) | is_op("nn.max_pool2d")(t2) | is_op("nn.avg_pool2d")(t2)
         t3 = is_op("transpose")(self.conv)
         self.pattern = is_op("transpose")(t3)
         
@@ -119,8 +102,10 @@ class ResolveConvChannels(DFPatternCallback):
         else:
             op = tvm.relay.nn.avg_pool2d
             pool = True
-            
-        data_layout = "NHWC" if conv.attrs.data_layout == "NCHW" else "NCHW"
+        
+        conv_layout = conv.attrs.data_layout if not pool else conv.attrs.layout
+        
+        data_layout = "NHWC" if conv_layout == "NCHW" else "NCHW"
         
         if not pool:
             return op(
