@@ -55,59 +55,7 @@ def is_superfluous_reshape(call):
             superfluous_reshape = superfluous_reshape and True
     
     return superfluous_reshape
-            
-def is_reshape_vslice(call):
-    if is_superfluous_reshape(call):
-        return False
-    r_input_shape = call.args[0].checked_type.shape
-    # call = run_infer_type(call)
-    r_newshape = call.checked_type.shape
-    
-    # new shape has to have 3 dims, or 4 dims with dim W = 1
-    if not ((len(r_input_shape) == 3) or (len(r_input_shape) == 4 and r_input_shape[0].value == 1)):
-        return False
-    if not ((len(r_newshape) == 3) or (len(r_newshape) == 4 and r_newshape[0].value == 1)):
-        return False
-    
-    if len(r_input_shape) < 2 or len(r_input_shape) > 4 or len(r_input_shape) != len(r_newshape):
-        return False
 
-    # the last dim should not change
-    if r_newshape[-1].value != r_input_shape[-1].value:
-        return False
-    
-    slice_size = int(r_newshape[-3].value // r_input_shape[-3].value)
-    if (slice_size <= 1) or (r_newshape[-1].value == (r_input_shape[-1].value * slice_size)):
-        return False
-    if r_newshape[-2] % 32 != 0:
-        return False
-    return True
-            
-def is_reshape_vstack(call):
-    if is_superfluous_reshape(call):
-        return False
-    r_input_shape = call.args[0].checked_type.shape
-    # call = run_infer_type(call)
-    r_newshape = call.checked_type.shape
-    
-    # new shape has to have 3 dims, or 4 dims with dim W = 1
-    if not ((len(r_input_shape) == 3) or (len(r_input_shape) == 4 and r_input_shape[0].value == 1)):
-        return False
-    if (not ((len(r_newshape) == 3) or (len(r_newshape) == 4 and r_newshape[0].value == 1))):
-        return False
-    
-    if len(r_input_shape) < 2 or len(r_input_shape) > 4 or len(r_input_shape) != len(r_newshape):
-        return False
-    if r_newshape[-1].value != r_input_shape[-1].value:
-        return False
-    
-    slice_size = int(r_input_shape[-3].value // r_newshape[-3].value)
-    if (slice_size <= 1) or (r_input_shape[-2].value == (r_newshape[-2].value * slice_size)):
-        return False
-    if r_input_shape[-2] % 32 != 0:
-        return False
-    return True
-            
 def is_reshape_hslice(call):
     r_input_shape = call.args[0].type_args[0].shape
     r_newshape = call.args[0].checked_type.shape

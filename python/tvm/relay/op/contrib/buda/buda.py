@@ -220,8 +220,6 @@ def pattern_table():
         ("pybuda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
         ("pybuda.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
         ]
-    vstack = ("pybuda.vstack", reshape_to_vstack(), is_reshape_vstack)
-    vslice = ("pybuda.vslice", reshape_to_vslice(), is_reshape_vslice)
     binary_stack = [
         ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
         ("pybuda.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
@@ -238,8 +236,6 @@ def pattern_table():
         *hstack, 
         *binary_stack, 
         hslice, 
-        vstack, 
-        vslice, 
         matmul, 
         concatenate, 
         buda_conv2d_with_bias,
