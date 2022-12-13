@@ -237,7 +237,6 @@ def pattern_table():
     buda_patterns = [
         *hstack, 
         *binary_stack, 
-        channel_last_resize2d,
         hslice, 
         vstack, 
         vslice, 
