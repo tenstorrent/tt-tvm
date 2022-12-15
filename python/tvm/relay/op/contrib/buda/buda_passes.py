@@ -2797,6 +2797,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             CombineReshapes(),
             ReconstructJaxLayerNorm(),
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
+            RemoveRedundantReshapeTransposeReshape(),
             ReplicatePyBudaReshapeTranspose(),
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim()
