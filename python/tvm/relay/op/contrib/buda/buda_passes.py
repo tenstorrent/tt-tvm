@@ -1877,26 +1877,6 @@ class DecomposeRepeat(DFPatternCallback):
         result = tvm.relay.broadcast_to(post.args[0], output_shape)
         return result
 
-class DecomposeTile(DFPatternCallback):
-    def __init__(self):
-        super().__init__(rewrite_once=True, require_type=True)
-        self.pattern = is_op("tile")(wildcard())
-    
-    def callback(self, pre, post, node_map):
-        reps = list(post.attrs.reps)
-        input_shape = list(pre.args[0].checked_type.shape)
-
-        assert len(input_shape) == len(reps)
-        act = post.args[0]
-        for idx, (inp, rep) in enumerate(zip(input_shape, reps)):
-            if rep == 1:
-                continue
-            
-            assert int(inp) == 1, "Cannot decompose tile to broadcast when input dim != 1"
-            input_shape[idx] = rep
-            act = tvm.relay.broadcast_to(act, input_shape)
-
-        return act
 
 class ConvertGlobalAvgPool2dtoAvgPool2d(DFPatternCallback):
     def __init__(self):
@@ -2780,7 +2760,6 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             SkipRedundantConcatenateSlice(),
             DecomposeBatchFlatten(),
             DecomposeRepeat(),
-            DecomposeTile(),
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
