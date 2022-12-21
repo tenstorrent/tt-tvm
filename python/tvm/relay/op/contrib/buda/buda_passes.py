@@ -1664,19 +1664,23 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
     def callback(self, pre, post, node_map):
         bias = node_map[self.bias][0]
         act = node_map[self.act][0]
-        
-        bias_shape = list(bias.checked_type.shape)
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        if not isinstance(bias, (tvm.relay.expr.Var, tvm.relay.expr.Constant)):
+            return post
+
+        bias_shape = list(pre_node_map[self.bias][0].checked_type.shape)
         if act.attrs.data_layout == "NHWC":
             single_dim = True
             for i in bias_shape[:-1]: single_dim = single_dim and i == 1
             if single_dim:
-                bias = tvm.relay.reshape(bias, [bias.checked_type.shape[-1]])
+                bias = tvm.relay.reshape(bias, [bias_shape[-1]])
             return tvm.relay.nn.bias_add(act, bias, axis=-1)
         elif act.attrs.data_layout == "NCHW":
             single_dim = True
             for i in bias_shape[:-3] + bias_shape[-2:]: single_dim = single_dim and i == 1
             if single_dim:
-                bias = tvm.relay.reshape(bias, [bias.checked_type.shape[-3]])
+                bias = tvm.relay.reshape(bias, [bias_shape[-3]])
             return tvm.relay.nn.bias_add(act, bias)
         else:
             raise NotImplementedError(f"Unhandled data layout: {act.attrs.data_layout}")
