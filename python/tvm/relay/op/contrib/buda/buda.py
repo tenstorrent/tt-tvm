@@ -246,6 +246,81 @@ def pattern_table():
 
     return buda_patterns
 
+# TM CPU Fallback ops of interest. Ones that are valuable 
+# to be included as additional fallback nodes
+tm_cpu_fallback_ops_of_interest = [
+    "broadcast_to",
+    "broadcast_to_like",
+    "expand_dims",
+    "repeat",
+    "tile",
+    "where",
+    "squeeze",
+    "reshape",
+    "reshape_like",
+    "full",
+    "full_like",
+    "arange",
+    "meshgrid",
+    "reverse",
+    "reverse_sequence",
+    "cast",
+    "cast_like",
+    "reinterpret",
+    "strided_slice",
+    "slice_like",
+    "split",
+    "take",
+    "stack",
+    "contrib_reverse_reshape",
+    "gather",
+    "gather_nd",
+    "sequence_mask",
+    "one_hot",
+    "collapse_sum_like",
+    "collapse_sum_to",
+    "unravel_index",
+    "sparse_to_dense",
+    "matrix_set_diag",
+    "adv_index",
+    "embedding",
+    #
+    "concatenate",
+]
+
+# TM CPU Fallback ops which should not be included in fallback
+# itself. Those ops often are decomposed into some sort of matmuls
+# which should be forced to be executed on TT device mostly.
+tm_cpu_fallback_ops_to_not_include = [
+    "nn.adaptive_avg_pool1d",
+    "nn.adaptive_avg_pool2d",
+    "nn.adaptive_avg_pool3d",
+    "nn.adaptive_max_pool1d",
+    "nn.adaptive_max_pool2d",
+    "nn.adaptive_max_pool3d",
+    "nn.avg_pool1d",
+    "nn.avg_pool2d",
+    "nn.avg_pool3d",
+    "nn.batch_matmul",
+    "nn.conv1d_transpose",
+    "nn.conv1d",
+    "nn.conv2d_transpose",
+    "nn.conv2d",
+    "nn.conv3d_transpose",
+    "nn.conv3d",
+    "nn.dense",
+    "nn.global_avg_pool2d",
+    "nn.global_max_pool2d",
+    "nn.matmul",
+    "nn.max_pool1d",
+    "nn.max_pool2d",
+    "nn.max_pool3d",
+    "nn.sparse_conv2d",
+    "nn.sparse_dense",
+    "nn.upsampling",
+    "nn.upsampling3d",
+]
+
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True)
@@ -509,6 +584,76 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
 
     return added_nodes | fallback_nodes
 
+
+def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_interest, ops_to_avoid):
+    logger.trace("Checking for fallback nodes based on perf...")
+    
+    output_nodes = [u for u, deg in graph.out_degree() if not deg]
+    
+    if len(output_nodes) != 1:
+        logger.warning("Fallback to CPU based on perf: Currently supporting only single output nodes")
+        return
+    output_node = output_nodes[0]
+    
+    # Traverse until reaching any of the problematic ops (single path)
+    depth = 0
+    early_stop = False
+    do_fallback = False
+    curr_node = output_node
+    for depth in range(max_depth):
+        if early_stop:
+            break
+        print("Depth", depth)
+
+        predecessors = graph.predecessors(curr_node)
+        for predecessor in predecessors:
+            op, _ = predecessor[1]
+            op_name = str(op)
+            print("Predecessor", op_name)
+            
+            # Check for early stop
+            if op_name in ops_to_avoid:
+                print("Early stopping, found:", op_name)
+                early_stop = True
+                break
+            
+            # Check if op is suitable for fallback
+            if op_name in ops_of_interest:
+                do_fallback = True
+            
+            if depth >= max_depth:
+                print("Max depth reach. Latest op:", op_name)
+                break
+            depth += 1
+            
+            curr_node = predecessor
+            break # Only follow single path
+        
+    if not do_fallback:
+        return
+
+    # Check if descendants are OK to run on CPU
+    descendants = nx.descendants(graph, curr_node)
+    descendant_op_types = set([str(des[1][0]) for des in descendants])
+    do_fallback = not any(i in ops_to_avoid for i in descendant_op_types)
+    
+    if not do_fallback:
+        return
+    
+    # Set all descendants to be executed on CPU
+    additional_fallback_ops = set()
+    for descendant in descendants:
+        op, _ = descendant[1]
+        op_name = str(op)
+        print("Descendant for CPU", op_name)
+        
+        # Not working: Attribute target.pybuda_cpudevice of strided_slice is already registered with same plevel=5
+        # tvm.ir.register_op_attr(op.name, "target.pybuda_cpudevice", True, level=5)
+        
+        additional_fallback_ops.add(descendant)
+        
+    return additional_fallback_ops | fallback_nodes
+    
 class ConstructDiGraph(ExprVisitor):
     def __init__(self):
         super().__init__()
@@ -743,6 +888,61 @@ def flatten_inputs(mod, flattened_inputs, flattened_name_map):
     logger.trace(mod.functions)
 
     return mod
+
+
+def fallback_on_cpu(mod, compiler_cfg, input_names):
+    import time
+    
+    logger.debug(f"Running cpu fallback compilation")
+    logger.debug(f"Checking if the graph has any cpu-fallback ops...")
+    start = time.time() 
+    check_fallback_ops = CheckFallbackOps(compiler_cfg.cpu_fallback_ops)
+    check_fallback_ops.visit(mod["main"])
+    logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+    
+    if check_fallback_ops.has_fallback_ops or compiler_cfg.enable_tm_cpu_fallback:
+        logger.debug(f"Constructing digraph...")
+        start = time.time()
+        graph_constructor = ConstructDiGraph()
+        graph_constructor.visit(mod["main"])
+        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
+        # print(dot)
+
+        logger.debug(f"Finding and adding shared weights...")
+        start = time.time()
+        fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
+        
+        # Fallback on end graph if more performant
+        if compiler_cfg.enable_tm_cpu_fallback:
+            fallback_nodes = add_to_fallback_based_on_perf(
+                graph_constructor.graph, fallback_nodes,
+                compiler_cfg.tm_cpu_fallback_max_depth,
+                tm_cpu_fallback_ops_of_interest,
+                tm_cpu_fallback_ops_to_not_include)
+        
+        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        logger.debug(f"Determining target for ops...")
+        terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
+        new_mod = None
+        start = time.time()
+        terget_determiner.modify_graph = False
+        mod["main"] = terget_determiner.visit(mod["main"])
+        terget_determiner.modify_graph = True
+        mod["main"] = terget_determiner.visit(mod["main"])
+        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        logger.debug(f"Remapping nodes...")
+
+        start = time.time()
+        node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
+        node_remapper.visit(mod["main"])
+        terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
+        logger.trace("After DetermineTarget")
+        logger.trace(mod.functions)
+        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        
+
+        
     
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
@@ -750,7 +950,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
         logger.trace(mod.functions)
-
+        
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         logger.trace("After InferType")
         logger.trace(mod.functions)
@@ -777,46 +977,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         logger.trace(mod.functions)
 
         if compiler_cfg.enable_tvm_cpu_fallback:
-
-            import time
-            logger.debug(f"Running cpu fallback compilation")
-            logger.debug(f"Checking if the graph has any cpu-fallback ops...")
-            start = time.time() 
-            check_fallback_ops = CheckFallbackOps(compiler_cfg.cpu_fallback_ops)
-            check_fallback_ops.visit(mod["main"])
-            logger.debug(f"Done, took: {(time.time() - start):.2f} s") 
-
-            if check_fallback_ops.has_fallback_ops: 
-                logger.debug(f"Constructing digraph...")
-                start = time.time()
-                graph_constructor = ConstructDiGraph()
-                graph_constructor.visit(mod["main"])
-                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-                # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
-                # print(dot)
-
-                logger.debug(f"Finding and adding shared weights...")
-                start = time.time()
-                fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
-                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-                logger.debug(f"Determining target for ops...")
-                terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
-                new_mod = None
-                start = time.time()
-                terget_determiner.modify_graph = False
-                mod["main"] = terget_determiner.visit(mod["main"])
-                terget_determiner.modify_graph = True
-                mod["main"] = terget_determiner.visit(mod["main"])
-                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-                logger.debug(f"Remapping nodes...")
-
-                start = time.time()
-                node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
-                node_remapper.visit(mod["main"])
-                terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
-                logger.trace("After DetermineTarget")
-                logger.trace(mod.functions)
-                logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+            fallback_on_cpu(mod, compiler_cfg, input_names)
 
         mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
         logger.trace("After AnnotateTarget")
