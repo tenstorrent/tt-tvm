@@ -569,8 +569,12 @@ class ConstructDiGraph(ExprVisitor):
         self.register_args(t.tuple_value, node)
         return super().visit_tuple_getitem(t)
 
-    # def visit_tuple(self, tup):
-    #     return super().visit_tuple(tup)
+    def visit_tuple(self, t):
+        tuple_node = node_hash(t)
+        for producer in t.fields:
+            producer_node = node_hash(producer)
+            self.graph.add_edge(producer_node, tuple_node)
+        return super().visit_tuple(t)
 
 
 def get_relay_output(mod, params, inputs, target):
