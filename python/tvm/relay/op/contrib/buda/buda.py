@@ -579,14 +579,17 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
     return added_nodes | fallback_nodes
 
 
-def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_interest, ops_to_avoid):
+def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interest, ops_to_avoid):
     logger.trace("Checking for fallback nodes based on perf...")
     
     output_nodes = [u for u, deg in graph.out_degree() if not deg]
     
     if len(output_nodes) != 1:
-        logger.warning("Fallback to CPU based on perf: Currently supporting only single output nodes")
-        return
+        logger.warning("Extended TM CPU Fallback: Currently supporting graphs with single output only")
+        logger.trace("DiGraph outputs:")
+        for out in output_nodes:
+            logger.trace(out)
+        return set()
     output_node = output_nodes[0]
     
     # Traverse until reaching any of the problematic ops (single path)
@@ -597,17 +600,17 @@ def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_inter
     for depth in range(max_depth):
         if early_stop:
             break
-        print("Depth", depth)
+        logger.trace("Depth {}".format(depth))
 
         predecessors = graph.predecessors(curr_node)
         for predecessor in predecessors:
             op, _ = predecessor[1]
             op_name = str(op)
-            print("Predecessor", op_name)
+            logger.trace("Predecessor", op_name)
             
             # Check for early stop
             if op_name in ops_to_avoid:
-                print("Early stopping, found:", op_name)
+                logger.trace("Early stopping, found: {}".format(op_name))
                 early_stop = True
                 break
             
@@ -616,7 +619,7 @@ def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_inter
                 do_fallback = True
             
             if depth >= max_depth:
-                print("Max depth reach. Latest op:", op_name)
+                logger.trace("Max depth reach. Latest op: {}".format(op_name))
                 break
             depth += 1
             
@@ -624,7 +627,7 @@ def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_inter
             break # Only follow single path
         
     if not do_fallback:
-        return
+        return set()
 
     # Check if descendants are OK to run on CPU
     descendants = nx.descendants(graph, curr_node)
@@ -632,17 +635,14 @@ def add_to_fallback_based_on_perf(graph, fallback_nodes, max_depth, ops_of_inter
     do_fallback = not any(i in ops_to_avoid for i in descendant_op_types)
     
     if not do_fallback:
-        return
+        return set()
     
     # Set all descendants to be executed on CPU
     additional_fallback_ops = set()
     for descendant in descendants:
         op, _ = descendant[1]
         op_name = str(op)
-        print("Descendant for CPU", op_name)
-        
-        # Not working: Attribute target.pybuda_cpudevice of strided_slice is already registered with same plevel=5
-        # tvm.ir.register_op_attr(op.name, "target.pybuda_cpudevice", True, level=5)
+        logger.trace("Descendant for CPU: {}".format(op_name))
         
         additional_fallback_ops.add(descendant)
         
@@ -900,8 +900,12 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         graph_constructor = ConstructDiGraph()
         graph_constructor.visit(mod["main"])
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-        # dot = nx.nx_pydot.to_pydot(graph_constructor.graph)
-        # print(dot)
+        
+        # Visualize DiGraph
+        #
+        # Useful online visualizer: https://dreampuf.github.io/GraphvizOnline
+        # dot_graph = nx.nx_pydot.to_pydot(graph_constructor.graph)
+        # print(dot_graph)
 
         logger.debug(f"Finding and adding shared weights...")
         start = time.time()
@@ -909,7 +913,7 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         
         # Fallback on end graph if more performant
         if compiler_cfg.enable_tm_cpu_fallback:
-            fallback_nodes = add_to_fallback_based_on_perf(
+            fallback_nodes = extend_fallback_with_tm_ops(
                 graph_constructor.graph, fallback_nodes,
                 compiler_cfg.tm_cpu_fallback_max_depth,
                 tm_cpu_fallback_ops_of_interest,
