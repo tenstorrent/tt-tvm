@@ -164,10 +164,6 @@ def concat_reshape_reshape_to_binary_stack():
     concat = is_op("concatenate")(act)
     return is_op("reshape")(concat)
 
-def decompose_concat_input_tuple():
-    act = is_tuple(None)
-    return is_op("concatenate")(act)
-
 def decompose_adv_index_input_tuple():
     act = wildcard()
     indices = wildcard()
@@ -225,7 +221,6 @@ def pattern_table():
         ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
         ("pybuda.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
     ]
-    concatenate = ("pybuda.concatenate", decompose_concat_input_tuple())
     adv_index = ("pybuda.adv_index", decompose_adv_index_input_tuple())
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
     buda_conv2d_transpose_with_bias = ("pybuda.buda_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
@@ -238,7 +233,6 @@ def pattern_table():
         *binary_stack, 
         hslice, 
         matmul, 
-        concatenate, 
         buda_conv2d_with_bias,
         buda_conv2d_transpose_with_bias, 
         adv_index, 
