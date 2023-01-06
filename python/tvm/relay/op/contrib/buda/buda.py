@@ -63,6 +63,7 @@ _register_external_op_helper_pybuda("argmax")
 _register_external_op_helper_pybuda("broadcast_to")
 _register_external_op_helper_pybuda("cast")
 _register_external_op_helper_pybuda("clip")
+_register_external_op_helper_pybuda("concatenate")
 _register_external_op_helper_pybuda("cos")
 _register_external_op_helper_pybuda("cumsum")
 _register_external_op_helper_pybuda("divide")
@@ -670,7 +671,6 @@ class ConstructDiGraph(ExprVisitor):
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
-
         elif (
             isinstance(call.op, tvm.relay.function.Function) 
             and isinstance(call.op.body, tvm.relay.expr.TupleGetItem)
