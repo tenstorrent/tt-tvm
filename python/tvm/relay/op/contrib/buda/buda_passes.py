@@ -682,6 +682,19 @@ class PopulateTransposeAxes(DFPatternCallback):
 
         return tvm.relay.transpose(post.args[0], axes=taxes)
 
+class PopulateReduceAxes(DFPatternCallback):
+    def __init__(self, rewrite_once=True, require_type=True):
+        super().__init__()
+        self.pattern = is_op('sum')(wildcard())
+
+    def callback(self, pre, post, node_map):
+        if pre.attrs.axis is not None:
+            return post
+
+        ndims = len(pre.args[0].checked_type.shape)
+        raxes = list(range(0, ndims, 1))
+
+        return tvm.relay.sum(post.args[0], axis=raxes, keepdims=pre.attrs.keepdims)
 
 class RemoveRedundantReshape(DFPatternCallback):
     def __init__(self, rewrite_once=True):
@@ -2740,6 +2753,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ExplicateTranspose(),
             ExplicateHSliceTranspose(),
             DecomposeConv1DToConv2D(),
+            PopulateReduceAxes(),
             DecomposeMultiAxisMax(),
             DecomposeMultiAxisTranspose(),
             EstimateWhereInCausalMask(),
