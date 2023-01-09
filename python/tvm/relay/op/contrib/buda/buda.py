@@ -488,7 +488,7 @@ class NodeReMapper(ExprVisitor):
         return super().visit_call(call)
     
 class DetermineTarget(ExprMutator):
-    def __init__(self, graph, fallback_nodes):
+    def __init__(self, graph, fallback_nodes, compiler_cfg):
         super().__init__()
         self.users_of_unsupported_ops = 0
         self.graph = graph
@@ -502,6 +502,8 @@ class DetermineTarget(ExprMutator):
             if len(ancestors) > len(descendants):
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | descendants
             else:
+                if compiler_cfg.enable_tm_cpu_fallback:
+                    continue
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
 
     def visit_call(self, call):
@@ -586,13 +588,19 @@ def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interes
     output_nodes = [u for u, deg in graph.out_degree() if not deg]
     
     if len(output_nodes) != 1:
-        logger.warning("Extended TM CPU Fallback: Currently supporting graphs with single output only")
-        logger.trace("DiGraph outputs:")
-        for out in output_nodes:
-            logger.trace(out)
-        return set()
-    output_node = output_nodes[0]
-    
+        logger.warning("Extended TM CPU Fallback: Multiple output nodes in DiGraph, using one \
+                       with most ancestor nodes.")
+
+    # Use graph which has most nodes (highly probability to be considered)
+    # as main (most of subgraphs are wrapped TVM Functions with couple of ops)
+    max_ancestors = 0
+    output_node = None
+    for out_n in output_nodes:
+        ancestors = nx.ancestors(graph, out_n)
+        if max_ancestors < len(ancestors):
+            max_ancestors = len(ancestors)
+            output_node = out_n
+
     # Traverse until reaching any of the problematic ops (single path)
     depth = 0
     early_stop = False
@@ -921,7 +929,7 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
         logger.debug(f"Determining target for ops...")
-        terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes)
+        terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes, compiler_cfg)
         new_mod = None
         start = time.time()
         terget_determiner.modify_graph = False
