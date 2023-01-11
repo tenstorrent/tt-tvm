@@ -279,8 +279,14 @@ tm_cpu_fallback_ops_of_interest = [
     "matrix_set_diag",
     "adv_index",
     "embedding",
-    #
     "concatenate",
+]
+
+pybuda_tm_cpu_fallback_ops_of_interest = [
+    "pybuda.hslice",
+    "pybuda.hstack",
+    "pybuda.binary_stack",
+    "pybuda.adv_index",
 ]
 
 # TM CPU Fallback ops which should not be included in fallback
@@ -315,6 +321,12 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.upsampling",
     "nn.upsampling3d",
 ]
+
+pybuda_tm_cpu_fallback_ops_to_not_include = {
+    "pybuda.matmul",
+    "pybuda.buda_conv2d_with_bias",
+    "pybuda.buda_conv2d_transpose_with_bias",
+}
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -445,7 +457,7 @@ class ResetOpAttributes(ExprVisitor):
 def node_hash(node):
     if hasattr(node, "op"):
         if isinstance(node.op, tvm.relay.function.Function):
-            node_descriptor = ("Function", False)
+            node_descriptor = (node.op.attrs["Composite"], False)
         else:
             node_descriptor = (node.op, False)
     elif isinstance(node, tvm.relay.expr.Var):
@@ -582,7 +594,7 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
     return added_nodes | fallback_nodes
 
 
-def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interest, ops_to_avoid):
+def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interest, pybuda_ops_of_interest, ops_to_avoid, pybuda_ops_to_avoid):
     logger.trace("Checking for fallback nodes based on perf...")
     
     output_nodes = [u for u, deg in graph.out_degree() if not deg]
@@ -617,6 +629,13 @@ def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interes
             op_name = str(op)
             logger.trace("Predecessor", op_name)
             
+            # Check for early stop
+            if op_name in pybuda_ops_to_avoid:
+                logger.trace("Early stopping, found: {}".format(op_name))
+                curr_node = predecessor
+                early_stop = True
+                break
+
             # Check for early stop
             if op_name in ops_to_avoid:
                 logger.trace("Early stopping, found: {}".format(op_name))
@@ -925,7 +944,9 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
                 graph_constructor.graph, fallback_nodes,
                 compiler_cfg.tm_cpu_fallback_max_depth,
                 tm_cpu_fallback_ops_of_interest,
-                tm_cpu_fallback_ops_to_not_include)
+                pybuda_tm_cpu_fallback_ops_of_interest,
+                tm_cpu_fallback_ops_to_not_include,
+                pybuda_tm_cpu_fallback_ops_to_not_include)
         
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
         logger.debug(f"Determining target for ops...")
