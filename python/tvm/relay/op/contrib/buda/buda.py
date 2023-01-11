@@ -421,7 +421,7 @@ class CheckFallbackOps(ExprVisitor):
         return super().visit_op(op)
     
    
-class FixCPULinear(ExprMutator):
+class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
     def __init__(self):
         super().__init__()
 
@@ -442,8 +442,33 @@ class FixCPULinear(ExprMutator):
 
                 logger.info("Fixed linear")
                 return tvm.relay.nn.dense(arg0, arg1)
+            
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.hslice":
+                # Get hslice input
+                if isinstance(call.args[0], tvm.relay.expr.Call):
+                    arg0 = call.args[0]
+                else:
+                    return super().visit_call(call)
+
+                # Extract reshape and transpose attributes
+                if isinstance(call.op.body, tvm.relay.expr.Call) and call.op.body.op.name == "transpose" and \
+                isinstance(call.op.body.args[0], tvm.relay.expr.Call) and call.op.body.args[0].op.name == "reshape":
+                    transpose = call.op.body
+                    transpose_axes = transpose.attrs.axes
+                    reshape = call.op.body.args[0]
+                    reshape_new_shape = reshape.attrs.newshape
+                else:
+                    return super().visit_call(call)
+                
+                # Unwrap hslice function into composite ops
+                ops = tvm.relay.reshape(arg0, reshape_new_shape)
+                ops = tvm.relay.transpose(ops, transpose_axes)
+
+                logger.info("Fixed hslice")
+                return ops
 
         return super().visit_call(call)
+
 
 class ResetOpAttributes(ExprVisitor):
     def __init__(self):
@@ -1020,8 +1045,8 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
         for k, v in mod.global_var_map_.items():
             if "cpudevice" in k:
-                mod[v] = FixCPULinear().visit(mod[v])
-        logger.trace("After FixCPULinear")
+                mod[v] = UnwrapPyBudaOpsForCPUFallback().visit(mod[v])
+        logger.trace("After UnwrapPyBudaOpsForCPUFallback")
         logger.trace(mod.functions)
 
         # Unravel f(x) = x functions
