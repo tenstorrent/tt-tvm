@@ -737,7 +737,7 @@ def tm_fallback_traverse(graph, current_node, max_depth, ops_of_interest, ops_to
         graph.nodes[predecessor]["path_suitable_for_fallback"] &= graph.nodes[current_node]["path_suitable_for_fallback"]
         
         # Handle conv based ops to avoid
-        if op_name in ops_to_avoid and "conv" in op_name:
+        if op_name in ops_to_avoid and "conv" in op_name and "bias" not in op_name:
             graph.nodes[current_node]["exec_on_cpu"] = False
             graph.nodes[current_node]["path_suitable_for_fallback"] &= False
         
