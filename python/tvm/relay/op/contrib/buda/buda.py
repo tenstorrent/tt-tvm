@@ -244,49 +244,47 @@ def pattern_table():
 # TM CPU Fallback ops of interest. Ones that are valuable 
 # to be included as additional fallback nodes
 tm_cpu_fallback_ops_of_interest = [
-    "broadcast_to",
-    "broadcast_to_like",
-    "expand_dims",
-    "repeat",
-    "tile",
-    "where",
-    "squeeze",
-    "reshape",
-    "reshape_like",
-    "full",
-    "full_like",
+    "adv_index",
     "arange",
-    "meshgrid",
-    "reverse",
-    "reverse_sequence",
-    "cast",
+    "broadcast_to_like",
+    "broadcast_to",
     "cast_like",
-    "reinterpret",
-    "strided_slice",
-    "slice_like",
-    "split",
-    "take",
-    "stack",
-    "contrib_reverse_reshape",
-    "gather",
-    "gather_nd",
-    "sequence_mask",
-    "one_hot",
+    "cast",
     "collapse_sum_like",
     "collapse_sum_to",
-    "unravel_index",
-    "sparse_to_dense",
-    "matrix_set_diag",
-    "adv_index",
-    "embedding",
     "concatenate",
-]
-
-pybuda_tm_cpu_fallback_ops_of_interest = [
+    "contrib_reverse_reshape",
+    "embedding",
+    "expand_dims",
+    "full_like",
+    "full",
+    "gather_nd",
+    "gather",
+    "matrix_set_diag",
+    "meshgrid",
+    "one_hot",
+    "reinterpret",
+    "repeat",
+    "reshape_like",
+    "reshape",
+    "reverse_sequence",
+    "reverse",
+    "sequence_mask",
+    "slice_like",
+    "sparse_to_dense",
+    "split",
+    "squeeze",
+    "stack",
+    "strided_slice",
+    "take",
+    "tile",
+    "unravel_index",
+    "where",
+    # PyBuda
+    "pybuda.adv_index",
+    "pybuda.binary_stack",
     "pybuda.hslice",
     "pybuda.hstack",
-    "pybuda.binary_stack",
-    "pybuda.adv_index",
 ]
 
 # TM CPU Fallback ops which should not be included in fallback
@@ -320,13 +318,11 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.sparse_dense",
     "nn.upsampling",
     "nn.upsampling3d",
-]
-
-pybuda_tm_cpu_fallback_ops_to_not_include = {
-    "pybuda.matmul",
-    "pybuda.buda_conv2d_with_bias",
+    # PyBuda
     "pybuda.buda_conv2d_transpose_with_bias",
-}
+    "pybuda.buda_conv2d_with_bias",
+    "pybuda.matmul",
+]
 
 class UpdateConstants(DFPatternCallback):
     def __init__(self):
@@ -480,6 +476,25 @@ class ResetOpAttributes(ExprVisitor):
         return super().visit_op(op)
 
 def node_hash(node):
+    """Generate unique TVM node with hash and metadata.
+    
+    TVM node hash is unique identifier of TVM node in the specific
+    graph phase. As TVM doesn't have unique node IDs this is used. 
+    Also, as way of generating TVM hash can depend on op attributes 
+    and position in the graph, it's common that these unique hashes 
+    change with each TVM optimization pass.
+    
+    Besides hash, this function also populates some meta-data related
+    to the node. Here is explanation regarding each of them:
+    1. Node name (depends on node type, op type, etc.)
+    2. Is it variable or not (params)
+
+    Args:
+        node (relay.expr.Call): Visiting node
+
+    Returns:
+        tuple: Unique node identifier
+    """
     if hasattr(node, "op"):
         if isinstance(node.op, tvm.relay.function.Function):
             node_descriptor = (node.op.attrs["Composite"], False)
@@ -619,14 +634,16 @@ def add_shared_weights_to_fallback(graph, fallback_nodes, input_names):
     return added_nodes | fallback_nodes
 
 
-def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interest, pybuda_ops_of_interest, ops_to_avoid, pybuda_ops_to_avoid):
+def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interest, ops_to_avoid):
     logger.trace("Checking for fallback nodes based on perf...")
     
+    # Gether all DiGraph output nodes (includes subgraphs too)
     output_nodes = [u for u, deg in graph.out_degree() if not deg]
     
     if len(output_nodes) != 1:
-        logger.warning("Extended TM CPU Fallback: Multiple output nodes in DiGraph, using one \
-                       with most ancestor nodes.")
+        # Subgraphs are often TVM functions represented as standalone graph, so we'll ignore them
+        # as they are referenced in the original DiGraph
+        logger.warning("Extended TM CPU Fallback: Multiple output nodes in DiGraph, using one with most ancestor nodes.")
 
     # Use graph which has most nodes (highly probability to be considered)
     # as main (most of subgraphs are wrapped TVM Functions with couple of ops)
@@ -637,70 +654,115 @@ def extend_fallback_with_tm_ops(graph, fallback_nodes, max_depth, ops_of_interes
         if max_ancestors < len(ancestors):
             max_ancestors = len(ancestors)
             output_node = out_n
-
-    # Traverse until reaching any of the problematic ops (single path)
-    depth = 0
-    early_stop = False
-    do_fallback = False
-    curr_node = output_node
-    for depth in range(max_depth):
-        if early_stop:
-            break
-        logger.trace("Depth {}".format(depth))
-
-        predecessors = graph.predecessors(curr_node)
-        for predecessor in predecessors:
-            op, _ = predecessor[1]
-            op_name = str(op)
-            logger.trace("Predecessor", op_name)
             
-            # Check for early stop
-            if op_name in pybuda_ops_to_avoid:
-                logger.trace("Early stopping, found: {}".format(op_name))
-                curr_node = predecessor
-                early_stop = True
-                break
-
-            # Check for early stop
-            if op_name in ops_to_avoid:
-                logger.trace("Early stopping, found: {}".format(op_name))
-                early_stop = True
-                break
+    # Initialize DiGraph attributes
+    for node in graph.nodes():
+        graph.nodes[node]['exec_on_cpu'] = False
+        graph.nodes[node]['path_suitable_for_fallback'] = True
             
-            # Check if op is suitable for fallback
-            if op_name in ops_of_interest:
-                do_fallback = True
-            
-            if depth >= max_depth:
-                logger.trace("Max depth reach. Latest op: {}".format(op_name))
-                break
-            depth += 1
-            
-            curr_node = predecessor
-            break # Only follow single path
+    # Traverse all paths until certain depth and mark valid candidates
+    # as CPU fallback nodes
+    tm_fallback_traverse(graph, output_node, max_depth, ops_of_interest, ops_to_avoid, 0)
+    
+    # Optional for debugging purposes
+    print_extended_tm_fallback_graph = False
+    if print_extended_tm_fallback_graph:
+        # Color DiGraph for easier debugging. Meaning of each color:
+        # - green - op of interest, but not on suitable fallback path
+        # - blue - op is on suitable fallback path, but doesn't contain op of interest on path
+        # - red - op is not suitable fallback path as it contains invalid op as one of its descendants
+        # - purple - op is suitable for CPU execution as its on valid path and has ops of interests as descendants
+        for node in graph.nodes():
+            if graph.nodes[node]['exec_on_cpu']:
+                graph.nodes[node]['color'] = 'green'
+                
+            if graph.nodes[node]['path_suitable_for_fallback']:
+                graph.nodes[node]['color'] = 'blue'
+            else:
+                graph.nodes[node]['color'] = 'red'
+                
+            if graph.nodes[node]['exec_on_cpu'] and graph.nodes[node]['path_suitable_for_fallback']:
+                graph.nodes[node]['color'] = 'purple'
         
-    if not do_fallback:
-        return set()
-
-    # Check if descendants are OK to run on CPU
-    descendants = nx.descendants(graph, curr_node)
-    descendant_op_types = set([str(des[1][0]) for des in descendants])
-    do_fallback = not any(i in ops_to_avoid for i in descendant_op_types)
+        # Visualize DiGraph
+        # 
+        # Useful online visualizer: https://dreampuf.github.io/GraphvizOnline
+        dot_graph = nx.nx_pydot.to_pydot(graph)
+        print(dot_graph)
     
-    if not do_fallback:
-        return set()
-    
-    # Set all descendants to be executed on CPU
+    # Gather additional CPU fallback nodes
     additional_fallback_ops = set()
-    for descendant in descendants:
-        op, _ = descendant[1]
-        op_name = str(op)
-        logger.trace("Descendant for CPU: {}".format(op_name))
+    for node in graph.nodes():
+        if not (graph.nodes[node]['exec_on_cpu'] and graph.nodes[node]['path_suitable_for_fallback']):
+            continue
         
-        additional_fallback_ops.add(descendant)
+        op_name = str(node[1][0])
+        logger.trace("Additional descendant for CPU: {}".format(op_name))
+        
+        additional_fallback_ops.add(node)
         
     return additional_fallback_ops | fallback_nodes
-    
+
+def tm_fallback_traverse(graph, current_node, max_depth, ops_of_interest, ops_to_avoid, current_depth):
+    # Traversal depth exit condition
+    if current_depth >= max_depth:
+        logger.trace("Stopping traverse for given path as max allowed depth is reached")
+        return
+    current_depth += 1
+
+    # Invalid paths exit condition
+    for node, descendants in nx.bfs_successors(graph, current_node):
+        valid_descendants_fallback_path = True
+        if not descendants:
+            continue
+
+        for descendant in descendants:
+            valid_descendants_fallback_path &= graph.nodes[descendant]["path_suitable_for_fallback"]
+            
+        if not valid_descendants_fallback_path:
+            logger.trace("Stopping traverse for given path all descendant paths are invalid for fallback")
+            return
+
+    logger.trace("Current: {}".format(current_node[1][0]))
+    predecessors = graph.predecessors(current_node)
+    for predecessor in predecessors:
+        node_desc = predecessor[1]
+        op = node_desc[0]
+        op_name = str(op)
+        logger.trace("Predecessor: {}".format(op_name))
+            
+        # Handle ops to avoid
+        if op_name in ops_to_avoid:
+            graph.nodes[predecessor]["path_suitable_for_fallback"] &= False
+        graph.nodes[predecessor]["path_suitable_for_fallback"] &= graph.nodes[current_node]["path_suitable_for_fallback"]
+        
+        # Handle conv based ops to avoid
+        if op_name in ops_to_avoid and "conv" in op_name:
+            graph.nodes[current_node]["exec_on_cpu"] = False
+            graph.nodes[current_node]["path_suitable_for_fallback"] &= False
+        
+        # Handle ops of interest
+        if op_name in ops_of_interest:
+            graph.nodes[predecessor]["exec_on_cpu"] = True
+            
+            # Handle descendants if path is suitable for fallback
+            for node, children in nx.bfs_successors(graph, predecessor):
+                logger.trace("Correcting descendants for: {}".format(node))
+                for child in children:
+                    logger.trace("Descendant: {}".format(child))
+
+                    if graph.nodes[child]['exec_on_cpu']:
+                        logger.trace("Child ({}) already executes on CPU, breaking further traverse".format(child))
+                        break
+
+                    if graph.nodes[child]['path_suitable_for_fallback']:
+                        logger.trace("Child ({}) is corrected to be executed on CPU".format(child))
+                        graph.nodes[child]['exec_on_cpu'] = True
+                    
+        tm_fallback_traverse(graph, predecessor, max_depth, ops_of_interest, ops_to_avoid, current_depth)
+        
+    logger.trace("Finishing traverse for given path on depth: {}".format(current_depth))
+
 class ConstructDiGraph(ExprVisitor):
     def __init__(self):
         super().__init__()
@@ -963,15 +1025,13 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         start = time.time()
         fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
         
-        # Fallback on end graph if more performant
+        # Extend fallback with valid TM ops from the end of the graph
         if compiler_cfg.enable_tm_cpu_fallback:
             fallback_nodes = extend_fallback_with_tm_ops(
                 graph_constructor.graph, fallback_nodes,
                 compiler_cfg.tm_cpu_fallback_max_depth,
                 tm_cpu_fallback_ops_of_interest,
-                pybuda_tm_cpu_fallback_ops_of_interest,
-                tm_cpu_fallback_ops_to_not_include,
-                pybuda_tm_cpu_fallback_ops_to_not_include)
+                tm_cpu_fallback_ops_to_not_include)
         
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
         logger.debug(f"Determining target for ops...")
