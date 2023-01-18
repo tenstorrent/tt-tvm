@@ -49,76 +49,6 @@ def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     _register_external_op_helper_pytorch("nn.log_softmax", compiler_cfg)
     _register_external_op_helper_pytorch("scatter_add", compiler_cfg)
 
-def _register_external_op_helper_pybuda(op_name, supported=True):
-    @tvm.ir.register_op_attr(op_name, "target.pybuda")
-    def _func_wrapper(expr):
-        return supported
-    return _func_wrapper
-
-_register_external_op_helper_pybuda("abs")
-_register_external_op_helper_pybuda("add")
-_register_external_op_helper_pybuda("adv_index")
-_register_external_op_helper_pybuda("all")
-_register_external_op_helper_pybuda("argmax")
-_register_external_op_helper_pybuda("broadcast_to")
-_register_external_op_helper_pybuda("cast")
-_register_external_op_helper_pybuda("clip")
-_register_external_op_helper_pybuda("concatenate")
-_register_external_op_helper_pybuda("cos")
-_register_external_op_helper_pybuda("cumsum")
-_register_external_op_helper_pybuda("divide")
-_register_external_op_helper_pybuda("erf")
-_register_external_op_helper_pybuda("exp")
-_register_external_op_helper_pybuda("floor")
-_register_external_op_helper_pybuda("gelu")
-_register_external_op_helper_pybuda("greater_equal")
-_register_external_op_helper_pybuda("greater")
-_register_external_op_helper_pybuda("identity")
-_register_external_op_helper_pybuda("image.resize2d")
-_register_external_op_helper_pybuda("layernorm")
-_register_external_op_helper_pybuda("less_equal")
-_register_external_op_helper_pybuda("less")
-_register_external_op_helper_pybuda("log")
-_register_external_op_helper_pybuda("logical_and")
-_register_external_op_helper_pybuda("logical_not")
-_register_external_op_helper_pybuda("max")
-_register_external_op_helper_pybuda("maximum")
-_register_external_op_helper_pybuda("mean")
-_register_external_op_helper_pybuda("minimum")
-_register_external_op_helper_pybuda("multiply")
-_register_external_op_helper_pybuda("nn.avg_pool2d")
-_register_external_op_helper_pybuda("nn.batch_matmul")
-_register_external_op_helper_pybuda("nn.conv2d_transpose")
-_register_external_op_helper_pybuda("nn.conv2d")
-_register_external_op_helper_pybuda("nn.dense")
-_register_external_op_helper_pybuda("nn.dropout")
-_register_external_op_helper_pybuda("nn.leaky_relu")
-_register_external_op_helper_pybuda("nn.matmul")
-_register_external_op_helper_pybuda("nn.max_pool1d")
-_register_external_op_helper_pybuda("nn.max_pool2d")
-_register_external_op_helper_pybuda("nn.pad")
-_register_external_op_helper_pybuda("nn.relu")
-_register_external_op_helper_pybuda("nn.softmax")
-_register_external_op_helper_pybuda("ones")
-_register_external_op_helper_pybuda("power")
-_register_external_op_helper_pybuda("reciprocal")
-_register_external_op_helper_pybuda("reshape")
-_register_external_op_helper_pybuda("scatter_add")
-_register_external_op_helper_pybuda("scatter")
-_register_external_op_helper_pybuda("sigmoid")
-_register_external_op_helper_pybuda("sign")
-_register_external_op_helper_pybuda("sin")
-_register_external_op_helper_pybuda("sqrt")
-_register_external_op_helper_pybuda("stack")
-_register_external_op_helper_pybuda("strided_slice")
-_register_external_op_helper_pybuda("subtract")
-_register_external_op_helper_pybuda("sum")
-_register_external_op_helper_pybuda("tanh")
-_register_external_op_helper_pybuda("tile")
-_register_external_op_helper_pybuda("transpose")
-_register_external_op_helper_pybuda("where")
-_register_external_op_helper_pybuda("zeros")
-
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
     return is_op("layernorm")
@@ -391,20 +321,6 @@ class IdentityFunctionUnraveller(ExprMutator):
                 
         return super().visit_call(call)
 
-class AllowUnsupportedOps(ExprMutator):
-    def __init__(self, check_only=False):
-        super().__init__()
-        self.check_only = check_only
-
-    def visit_call(self, call):
-        if isinstance(call.op, tvm.ir.Op):
-            if self.check_only:
-                assert False, f"Operator {call.op} is not supported"
-            elif call.op.get_attr("target.pybuda") is None:
-                tvm.ir.register_op_attr(call.op.name, "target.pybuda", _always_true)
-
-        return super().visit_call(call)
- 
 class CheckFallbackOps(ExprVisitor):
     def __init__(self, cpu_fallback_ops):
         super().__init__()
@@ -548,13 +464,14 @@ class DetermineTarget(ExprMutator):
         self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | fallback_nodes
         self.graph_changed = True
         self.modify_graph = False
+        self.compiler_cfg = compiler_cfg
         for node in fallback_nodes:
             ancestors = nx.ancestors(graph, node)
             descendants = nx.descendants(graph, node)
             if len(ancestors) > len(descendants):
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | descendants
             else:
-                if compiler_cfg.enable_tm_cpu_fallback:
+                if self.compiler_cfg.enable_tm_cpu_fallback:
                     continue
                 self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
 
@@ -580,14 +497,14 @@ class DetermineTarget(ExprMutator):
             except:
                 pass
 
-        elif isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda") is not None:
-            # for non-unary ops, if one of the args is unsupported, and only has one output, do the op on CPU, to reduce data movement
+        # For non-unary ops, if one of the args is predefined for fallback and only has one output, do that op on CPU too to reduce data movement
+        elif isinstance(call.op, tvm.ir.op.Op) and any([True if hasattr(arg, "op") and hasattr(arg.op, "name") and arg.op.name in self.compiler_cfg.cpu_fallback_ops else False for arg in call.args]):
             non_weight_args = [arg for arg in call.args if not isinstance(arg, tvm.relay.expr.Var)]
             if len(non_weight_args) > 1:
                 call_node_ancestors = nx.ancestors(self.graph, node_hash(call))
                 for arg_index, arg in enumerate(call.args):
                     output_nodes = self.graph.out_degree(node_hash(arg))
-                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda") is None and output_nodes == 1:
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda_cpudevice") is not None and output_nodes == 1:
                         arg_ancestors = nx.ancestors(self.graph, node_hash(arg))
                         arg_ancestors.add(node_hash(arg))
                         non_arg_ancestors = call_node_ancestors - arg_ancestors
@@ -1071,11 +988,6 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         logger.trace("After MergeComposite")
         logger.trace(mod.functions)
 
-        if compiler_cfg.enable_tvm_unsupported_ops:
-            mod["main"] = AllowUnsupportedOps().visit(mod["main"])
-            logger.trace("After AllowUnsupportedOps")
-            logger.trace(mod.functions)
-
         mod["main"] = AddNopsToPassthrough().visit(mod["main"])
         logger.trace("After AddNopsToPassthrough")
         logger.trace(mod.functions)
@@ -1114,10 +1026,6 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         # This will not change any identity op calls
         mod["main"] = IdentityFunctionUnraveller(mod).visit(mod["main"])
         logger.trace("After IdentityFunctionUnraveller")
-        logger.trace(mod.functions)
-
-        mod["main"] = AllowUnsupportedOps(check_only=True).visit(mod["main"])
-        logger.trace("After AllowUnsupportedOps")
         logger.trace(mod.functions)
 
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
