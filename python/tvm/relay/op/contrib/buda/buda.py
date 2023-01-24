@@ -698,7 +698,7 @@ class ConstructDiGraph(ExprVisitor):
     def visit_call(self, call):
         node = node_hash(call)
         self.node_indexer.count_visit("call", node)
-
+        print(call.checked_type.__class__)
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
@@ -717,6 +717,14 @@ class ConstructDiGraph(ExprVisitor):
         ):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.op} to fallback")
+
+        elif (
+            isinstance(call.op, tvm.ir.op.Op) 
+            and isinstance(call.checked_type, tvm.ir.tensor_type.TensorType)
+            and len(call.checked_type.shape) > 4
+        ):
+            self.fallback_nodes.add(node)
+            logger.info(f"Adding: {call.op} to fallback")
 
         self.register_args(call, node)
         # Make sure CPU output shape starts with 1
