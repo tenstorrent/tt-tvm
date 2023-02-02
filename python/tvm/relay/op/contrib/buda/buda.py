@@ -912,14 +912,45 @@ class FlattenInputs(ExprMutator):
 
         new_body = self.visit(fn.body)
         return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs)
+    
+class FlattenOutputs(ExprMutator):
 
-def flatten_inputs(mod, flattened_inputs, flattened_name_map):
+    def visit_tuple_getitem(self, op):
+        # Forego the need to have a TupleGetItem node and just get the item
+        return op.tuple_value[op.index]
+    
+    def visit_function(self, fn):
+        new_body = fn.body
+        def tuple_in_tuple(tup):
+            for field in tup.fields:
+                if isinstance(field, tvm.relay.expr.Tuple):
+                    return field
+            return False
+        
+        if isinstance(new_body, tvm.relay.expr.Tuple):
+            tup = tuple_in_tuple(new_body)
+            while tup:
+                new_fields = []
+                for field in new_body.fields:
+                    if field == tup:
+                        new_fields.extend([self.visit(field) for field in tup.fields])
+                    else:
+                        new_fields.append(field)
+                new_body = tvm.relay.expr.Tuple(new_fields)
+                tup = tuple_in_tuple(new_body)
+        
+        return tvm.relay.Function(fn.params, new_body, fn.ret_type, fn.type_params, fn.attrs)
+
+def flatten_IO(mod, flattened_name_map):
 
     # flattens inputs in IR
     mod["main"] = FlattenInputs(flattened_name_map).visit(mod["main"])
     logger.trace("After FlattenInputs")
     logger.trace(mod.functions)
-
+    
+    mod["main"] = FlattenOutputs().visit(mod["main"])
+    logger.trace("After FlattenOutputs")
+    logger.trace(mod.functions)
     return mod
 
 

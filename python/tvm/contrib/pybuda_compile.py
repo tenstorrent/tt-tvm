@@ -551,7 +551,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
 
     # Generate TVM module
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
-    mod = tvm.relay.op.contrib.flatten_inputs(mod, flattened_inputs, flattened_name_map)
+    mod = tvm.relay.op.contrib.flatten_IO(mod, flattened_name_map)
     
     # Construct TVM IR
     mod, _ = construct_tvm_ir(

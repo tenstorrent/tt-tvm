@@ -178,24 +178,29 @@ def extract_framework_model_outputs(
 
 def extract_flatten_inputs(framework: str, model, inputs):
     if framework == "pytorch":
-        input_structure = []
-        input_names = [i.debugName().replace(".", "_") for i in list(model.graph.inputs())[1:]]
-
-        if isinstance(inputs, (list, tuple)):
-            for i in range(len(inputs)):
-                input = inputs[i]
-                if isinstance(input, (list, tuple)):
-                    structure = (input_names[i], tuple([tuple(t.shape) for t in input]))
-                elif isinstance(input, dict):
-                    structure = (input_names[i], {k: v.shape for k, v in input.items()})
-                else:
-                    structure = (input_names[i], tuple(input.shape))
-                input_structure.append(tuple(structure))
-        else:
-            input_structure = OrderedDict()
-            for k, v in inputs.items():
-                input_structure[k] = v.shape
-
+        input_names = [i.debugName().split(".")[0] for i in list(model.graph.inputs())[1:]]
+        
+        def get_input_structure(inputs, input_names):
+            input_structure = []
+            if isinstance(inputs, (list, tuple)):
+                for i in range(len(inputs)):
+                    input = inputs[i]
+                    if isinstance(input, (list, tuple)):
+                        sub_names = [input_names[i] + "_" + str(ii) for ii in range(len(input))]
+                        structure = (input_names[i], get_input_structure(input, sub_names))
+                    elif isinstance(input, dict):
+                        structure = (input_names[i], {k: v.shape for k, v in input.items()})
+                    else:
+                        structure = (input_names[i], tuple(input.shape))
+                    input_structure.append(tuple(structure))
+            else:
+                input_structure = OrderedDict()
+                for k, v in inputs.items():
+                    input_structure[k] = v.shape
+            return input_structure
+        
+        input_structure = get_input_structure(inputs, input_names)
+        
         flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(
             inputs, input_names
         )
