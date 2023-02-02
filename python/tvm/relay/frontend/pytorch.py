@@ -5228,39 +5228,79 @@ def _get_relay_input_vars(graph, input_infos, prelude, is_module=True, default_d
 
     input_vars = {}
 
-    new_input_infos = []
-    for num, inp in enumerate(input_infos):
-        if not isinstance(inp, tuple):
-            msg = f"Graph input {num} is not a tuple"
-            raise RuntimeError(msg)
-        if len(inp) != 2 or not isinstance(inp[0], str):
-            msg = (
-                f"Graph input {inp} is not valid,"
-                f" expected ('name', shape) or ('name', (shape, dtype))"
-            )
-            raise RuntimeError(msg)
-        if not isinstance(inp[1], tuple) or len(inp[1]) == 0 or not isinstance(inp[1][-1], str):
-            new_input_infos.append((inp[0], (inp[1], default_dtype)))
-        else:
-            new_input_infos.append(inp)
+    
+    def get_new_input_infos(input_infos):
+        new_input_infos = []
+        for num, inp in enumerate(input_infos):
+            
+            if not isinstance(inp, tuple):
+                msg = "Graph input {} is not a tuple".format(num)
+                raise RuntimeError(msg)
+            if len(inp) != 2 or not isinstance(inp[0], str):
+                msg = (
+                    "Graph input {} is not valid,"
+                    " expected ('name', shape) or ('name', (shape, dtype))".format(inp)
+                )
+                
+                raise RuntimeError(msg)
+            if isinstance(inp[1], (list, tuple)) and isinstance(inp[1][0], (list, tuple)) and isinstance(inp[1][0][0], str):
+                new_input_infos.append((inp[0], get_new_input_infos(inp[1])))
+            elif not isinstance(inp[1], tuple) or len(inp[1]) == 0 or not isinstance(inp[1][-1], str):
+                new_input_infos.append((inp[0], (inp[1], default_dtype)))
+            else:
+                new_input_infos.append(inp)
+        return new_input_infos
+    
+    new_input_infos = get_new_input_infos(input_infos)
+    
+    def get_input_types(input_infos, graph_input_types):
+        input_types = []
+        for (name, info), gi_type in zip(input_infos, graph_input_types):
+            if isinstance(info[0], (list, tuple)) and isinstance(info[0][0], str):
+                new_graph_input_types = gi_type.elements()
+                input_types.append((name, get_input_types(info, new_graph_input_types)))
+            else:
+                input_types.append((name, get_relay_ty(info[0], info[1], gi_type)))
+        return input_types
 
-    input_types = [
-        (name, get_relay_ty(info[0], info[1], gi.type()))
-        for (name, info), gi in zip(new_input_infos, graph_inputs)
-    ]
+    
+    graph_input_types = [gi.type() for gi in graph_inputs]
+    input_types = get_input_types(new_input_infos, graph_input_types)
 
-    ir_inputs = [i.debugName() for i in graph_inputs]
-    for ir_input, (name, itype) in zip(ir_inputs, input_types):
-        inp = _expr.var(name, type_annotation=itype)
-        # Translate from graph input to user input name
-        input_vars[ir_input] = inp
+    def get_input_vars(input_types, graph_input_names, use_tuple_type=False, tuple_name=""):        
+        input_vars = {} if not use_tuple_type else []
+        for gi_name, (name, itype) in zip(graph_input_names, input_types):
+            if isinstance(itype, (tuple, list)):
+                new_graph_input_names = [f"{gi_name}_{i}" for i in range(len(itype))]
+                if use_tuple_type:
+                    input_vars.append(get_input_vars(itype, new_graph_input_names, True, name))
+                else:
+                    input_vars[gi_name] = get_input_vars(itype, new_graph_input_names, True, name)
+            else:
+                if use_tuple_type:
+                    input_vars.append(_expr.var(name, type_annotation=itype))
+                else:
+                    input_vars[gi_name] = _expr.var(name, type_annotation=itype)
+        if use_tuple_type:
+            input_vars = _expr.Tuple(input_vars)
+        return input_vars
+
+    graph_input_names = [i.debugName() for i in graph_inputs]
+    input_vars = get_input_vars(input_types, graph_input_names)
 
     return input_vars
 
 
 def _unpack_tuple(tup):
     def unpack(tup, num_fields):
-        return [_expr.TupleGetItem(tup, i) for i in range(num_fields)]
+        unpacked = []
+        for i in range(num_fields):
+            field = tup.fields[i]
+            if isinstance(field, _expr.Tuple):
+                unpacked.append(field)
+            else:
+                unpacked.append(_expr.TupleGetItem(tup, i))
+        return unpacked
 
     if isinstance(tup, _expr.Tuple):
         return unpack(tup, len(tup.fields))
