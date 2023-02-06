@@ -178,7 +178,7 @@ def extract_framework_model_outputs(
 
 def extract_flatten_inputs(framework: str, model, inputs):
     if framework == "pytorch":
-        input_names = [i.debugName().split(".")[0] for i in list(model.graph.inputs())[1:]]
+        input_names = [i.debugName().replace(".", "_") for i in list(model.graph.inputs())[1:]]
         
         def get_input_structure(inputs, input_names):
             input_structure = []
