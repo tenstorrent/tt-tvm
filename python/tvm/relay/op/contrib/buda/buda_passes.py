@@ -1807,47 +1807,6 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
 
         return tvm.relay.reshape(act, newshape=target_shape)
 
-class SkipRedundantConcatenateSlice(DFPatternCallback):
-    def __init__(self):
-        super().__init__(rewrite_once=True, require_type=True)
-        self.concat = is_op("concatenate")(wildcard())
-        self.pattern = is_op("strided_slice")(wildcard())
-        # self.pattern = self.concat
-
-    def callback(self, pre, post, node_map):
-        if not self.concat.match(post.args[0]):
-            return post
-
-        slice_shape = [int(dim) for dim in pre.checked_type.shape]
-        slice_start = int(post.attrs.begin[0])
-        slice_end = int(post.attrs.end[0])
-        slice_axis = int(post.attrs.axes[0])
-        if slice_axis < 0:
-            slice_axis += len(pre.checked_type.shape)
-        slice_strides = int(post.attrs.axes[0])
-
-        concat_axis = post.args[0].attrs.axis
-        if concat_axis < 0:
-            concat_axis += len(post.args[0].checked_type.shape)
-
-        if concat_axis != slice_axis:
-            return post
-
-        # TODO
-        if len(post.args[0].args[0].fields) != 2:
-            return post
-
-        left_shape = [int(dim) for dim in post.args[0].args[0].fields[0].checked_type.shape]
-        right_shape = [int(dim) for dim in post.args[0].args[0].fields[1].checked_type.shape]
-
-        if slice_start == 0:
-            if slice_shape == left_shape:
-                return post.args[0].args[0].fields[0]
-        else:
-            if left_shape[concat_axis] == slice_start and slice_shape == right_shape:
-                return post.args[0].args[0].fields[1]
-
-        return post
 
 class DecomposeRepeat(DFPatternCallback):
     def __init__(self):
@@ -2746,7 +2705,6 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeMultiRangeTake(),
             LowerTakeToStridedSlice(),
             ConvertAddToBiasAddAfterConv2d(),
-            SkipRedundantConcatenateSlice(),
             DecomposeBatchFlatten(),
             DecomposeRepeat(),
             ConvertGlobalAvgPool2dtoAvgPool2d(),
