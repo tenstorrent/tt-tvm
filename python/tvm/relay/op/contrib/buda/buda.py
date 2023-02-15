@@ -46,7 +46,6 @@ def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     for op in compiler_cfg.cpu_fallback_ops:
         _register_external_op_helper_pytorch(op, compiler_cfg)
     _register_external_op_helper_pytorch("equal", compiler_cfg)
-    _register_external_op_helper_pytorch("nn.log_softmax", compiler_cfg)
     _register_external_op_helper_pytorch("scatter_add", compiler_cfg)
 
 def nn_layernorm_to_buda_layernorm():
