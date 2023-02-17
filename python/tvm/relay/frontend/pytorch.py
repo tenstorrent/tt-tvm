@@ -1556,7 +1556,12 @@ class PyTorchOpConverter:
             beta = _create_typed_const(np.zeros([int(channels[1])]), data_type)
 
         moving_mean = inputs[3]
+        if moving_mean is None:
+            moving_mean = _create_typed_const(np.zeros([int(channels[1])]), data_type)
+
         moving_var = inputs[4]
+        if moving_var is None:
+            moving_var = _create_typed_const(np.zeros([int(channels[1])]), data_type)
         epsilon = float(inputs[7])
 
         return _op.nn.batch_norm(
@@ -1859,6 +1864,31 @@ class PyTorchOpConverter:
     def reshape_as(self, inputs, input_types):
         data = inputs[0]
         new_shape = self.infer_shape(inputs[1])
+        tmp_shape = []
+        is_dyn = False
+        for s in new_shape:
+            if isinstance(s, _expr.Constant):
+                tmp_shape.append(int(s.data.numpy()))
+            elif isinstance(s, _expr.Expr):
+                dim, success = try_infer_value(s, lambda ret: int(ret))
+                tmp_shape.append(dim)
+
+                if not success:
+                    is_dyn = True
+            else:
+                tmp_shape.append(s)
+
+        if is_dyn:
+            new_shape = []
+            for i, s in enumerate(tmp_shape):
+                if not isinstance(s, _expr.Expr):
+                    s = _expr.const(s, "int64")
+                else:
+                    s = _op.cast(s, "int64")
+                new_shape.append(_op.expand_dims(s, axis=0))
+            new_shape = _op.concatenate(new_shape, axis=0)
+        else:
+            new_shape = tmp_shape
         return _op.transform.reshape(data, new_shape)
 
     def pixel_shuffle(self, inputs, input_types):
