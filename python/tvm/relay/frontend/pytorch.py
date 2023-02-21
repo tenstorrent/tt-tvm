@@ -1002,6 +1002,9 @@ class PyTorchOpConverter:
     def full(self, inputs, input_types):
         data = inputs[0]
         fill_value = inputs[1]
+        
+        # Convert to scaler if provided values is TVM call expression and is not dependent on any inputs (i.e. constant)
+        fill_value = _infer_value(fill_value, {}).numpy().item() if type(fill_value) == tvm.relay.expr.Call and len(_analysis.free_vars(fill_value)) == 0 else fill_value
 
         import torch
 
