@@ -3549,6 +3549,13 @@ class Where(OnnxOpConverter):
 
     @classmethod
     def _impl_v9(cls, inputs, attr, params):
+        # Handle -inf/inf values for where operator
+        if isinstance(inputs[1], _expr.Constant) and list(analysis.free_vars(inputs[1])) == []:
+            val = infer_value(inputs[1], {}).numpy()
+            if val.shape == ():
+                val = np.sign(val) * 1e4
+                inputs[1] = _expr.const(val)
+        
         return _op.where(*inputs)
 
 
