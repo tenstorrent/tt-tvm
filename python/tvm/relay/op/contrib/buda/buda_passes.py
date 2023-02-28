@@ -1795,8 +1795,10 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
         axis = int(pre.attrs.axis)
+        if axis < 0:
+            axis += 1 + len(pre.args[0].checked_type.shape)
         num_new_axes = int(pre.attrs.num_newaxis)
-
+        
         if not isinstance(pre.args[0], tvm.relay.expr.Var) and pre.args[0].op.name == "reshape":
             target_shape = list(pre.args[0].attrs.newshape)
         else:
