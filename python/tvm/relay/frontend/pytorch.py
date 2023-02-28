@@ -3191,8 +3191,37 @@ class PyTorchOpConverter:
 
     def masked_fill(self, inputs, input_types):
         mask = inputs[1]
+
+        def replace_inf(inp, replacement_val=1e4):
+            if isinstance(inp, _expr.Call) and list(_analysis.free_vars(inp)) == []:
+                inp = _infer_value(inp, {}).asnumpy()
+                inp[np.isneginf(inp)] = -replacement_val
+                inp[np.isposinf(inp)] = replacement_val
+                inp = _expr.const(tvm.nd.array(inp))
+            elif isinstance(inp, float) and np.isinf(inp):
+                inp = np.sign(inp)*replacement_val if np.isinf(inp) else inp
+            return inp
+
+        # Handle constant inputs where we can determine -inf/inf values from it
+        inputs[0] = replace_inf(inputs[0])
+        inputs[2] = replace_inf(inputs[2])
+
+        if isinstance(mask, _expr.Call) and list(_analysis.free_vars(mask)) == []:
+            mask = _expr.const(_infer_value(mask, {}))
+        mask = _op.cast(mask, "float32")
+
         value = _op.cast(_wrap_const(inputs[2]), input_types[0])
-        return _op.where(mask, value, inputs[0])
+        value = _op.broadcast_to_like(value, mask)
+
+        one_const = _expr.const(1, dtype="float32")
+        
+        # Original implementation
+        # return _op.where(mask, value, inputs[0])
+        
+        # Implementaiton without using where operator in order to avoide numerical instability 
+        # for certain models caused by the future matmul (once where is decomposed)
+        return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
+
 
     def masked_select(self, inputs, input_types):
         mask = inputs[1]
