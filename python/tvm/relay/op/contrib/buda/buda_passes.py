@@ -788,7 +788,11 @@ class LowerTakeToStridedSlice(DFPatternCallback):
             return post
 
         axis = pre.attrs.axis
-        strided_slice = tvm.relay.strided_slice(act, begin=(indices[0], ), end=(indices[-1] + 1,), strides=(1, ), axes=(axis, ))
+        if len(indices) == 1 and indices[0] == -1:
+            index = act_shape[int(axis)] - 1
+            strided_slice = tvm.relay.strided_slice(act, begin=(index, ), end=(index + 1,), strides=(1, ), axes=(axis, ))
+        else:
+            strided_slice = tvm.relay.strided_slice(act, begin=(indices[0], ), end=(indices[-1] + 1,), strides=(1, ), axes=(axis, ))
 
         reshape = tvm.relay.reshape(strided_slice, newshape=pre.checked_type.shape)
         return reshape
