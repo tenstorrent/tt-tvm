@@ -638,8 +638,13 @@ def clean_names(json_graph, buda_params, param_name_lookup={}):
     return json_graph
 
 def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+    import onnxruntime as ort
+    
+    assert path != None, "Onnx compile needs path to onnx file on disk."
+    ort_sess = ort.InferenceSession(path)
+
     input_names = []
-    for inp in onnx_mod.graph.input:
+    for inp in ort_sess.get_inputs():
         input_names.append(inp.name)
 
     input_dict = {}
