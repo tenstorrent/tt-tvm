@@ -2740,47 +2740,39 @@ class PyTorchOpConverter:
         data = inputs[0]
         data_shape = self.infer_type(data).shape
 
-        axes_adv_idx = [i for i, v in enumerate(inputs[1]) if v is not None]
-        axes_rest = [i for i in range(len(data_shape)) if i not in axes_adv_idx]
+        # Cover cases like x[:, mask]
+        if indices[0] == None:
+            indices.pop(0)
 
-        # check if the adv_index axes are consecutive
-        # if consecutive, result must be transposed again at the end
-        consecutive = True
-        for curr, nxt in zip(axes_adv_idx[:-1], axes_adv_idx[1:]):
-            if nxt - curr != 1:
-                consecutive = False
-                break
+            try:
+                indices_val = indices[0].data.numpy()
+            except AttributeError as e:
+                indices_val = _infer_value(indices[0], {}).numpy()
+            index_indices = _expr.const(np.transpose(np.argwhere(indices_val)))
 
-        indices_list = []
-        axes_order = axes_adv_idx + axes_rest
+            res = []
+            for dim in range(_infer_shape(data)[0]):
+                partial_res = _op.take(data, _expr.const(dim), 0)
+                index_inputs = (partial_res, index_indices,)
+                partial_res = _op.adv_index(index_inputs)
+                res.append(partial_res)
+            out = _op.concatenate(res, 0)
 
-        for i in axes_adv_idx:
-            inp = inputs[1][i]
-            if self.infer_type(inp).dtype == "bool":
-                # adv_index does not support a mask as the index tensor (it will treat 0/1 as
-                # an index rather than a flag).
-                # So we use argwhere to turn the mask into indices, which will also take care
-                # of the dynamism in the indexing by mask.
-                indices_list.append(_op.squeeze(_op.transform.argwhere(inp), axis=[1]))
-            else:
-                indices_list.append(inp)
+            return out
 
-        data_after_adv_index = _op.adv_index([_op.transpose(data, axes=axes_order)] + indices_list)
+        # Cover cases like x[mask]
+        if self.infer_type(indices[0]).dtype == "bool" and len(_analysis.free_vars(indices[0])) == 0:
+            try:
+                indices_val = indices[0].data.numpy()
+            except AttributeError as e:
+                indices_val = _infer_value(indices[0], {}).numpy()
+            index_indices = _expr.const(np.transpose(np.argwhere(indices_val)))
+            index_inputs = (data, index_indices,)
+            res = _op.adv_index(index_inputs)
 
-        if consecutive:
-            num_dims = len(self.infer_type(data_after_adv_index).shape)
-            num_new_dims = num_dims - len(axes_rest)
-
-            axes_final_order = list(range(num_dims))
-            axes_final_order = (
-                axes_final_order[num_new_dims : num_new_dims + axes_adv_idx[0]]
-                + axes_final_order[:num_new_dims]
-                + axes_final_order[num_new_dims + axes_adv_idx[0] :]
-            )
-
-            return _op.transpose(data_after_adv_index, axes=axes_final_order)
-        else:
-            return data_after_adv_index
+            return res
+            
+        return _op.adv_index([data] + indices)
 
     def meshgrid(self, inputs, input_types):
         data = inputs[0]
