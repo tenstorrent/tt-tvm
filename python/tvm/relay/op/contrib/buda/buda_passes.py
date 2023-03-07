@@ -2694,6 +2694,38 @@ class ConvertIsNaN(DFPatternCallback):
         
         return where
     
+    
+class RemoveRedundantBinaryStacks(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        # IsNaN op with all inputs
+        self.act = wildcard()
+        self.stack = is_op("stack")(self.act)
+        self.reshape = is_op("reshape")(self.stack)
+
+        self.pattern = self.reshape
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        act = node_map[self.act][0]
+        stack = pre_node_map[self.act][0]
+        reshape = pre_node_map[self.act][0]
+        
+        if len(stack.fields) != 1 and len(reshape.fields) != 1:
+            return post
+
+        stack_field_input_shape = stack.fields[0].checked_type.shape
+        reshape_field_input_shape = reshape.fields[0].checked_type.shape
+
+        if stack_field_input_shape == reshape_field_input_shape:
+            unwrap_act_from_tupple = act.fields[0]
+            return unwrap_act_from_tupple
+
+        return post
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2809,6 +2841,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             AttemptRemoveStackWDim(),
             DecomposeScatterND(),
             ConvertIsNaN(),
+            RemoveRedundantBinaryStacks(),
         ],
         params=params,
         inputs=inputs,
