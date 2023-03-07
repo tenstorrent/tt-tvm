@@ -2730,7 +2730,20 @@ class PyTorchOpConverter:
             res = _op.adv_index(index_inputs)
 
             return res
+        
+        # Cover case when adv_index produces incorrect results
+        # E.g. Having inputs: x (1, 18) & y (1, 18), utput of adv_index should 
+        # be also (1, 18). However, it produces output shape of (1, 18, 18). 
+        # Reference for this fix is NumPy style of doing similar indexing 
+        # (as defined in TVM documentation).
+        if len(indices) == 1 and _infer_shape(data)[0] == 1 and _infer_shape(indices[0])[0] == 1:
+            data = tvm.relay.squeeze(data, axis=[0])
+            indices[0] = tvm.relay.squeeze(indices[0], axis=[0])
+            res = _op.adv_index([data] + indices)
+            res = tvm.relay.expand_dims(res, 0)
             
+            return res
+        
         return _op.adv_index([data] + indices)
 
     def meshgrid(self, inputs, input_types):
