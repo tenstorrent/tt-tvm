@@ -45,7 +45,6 @@ def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     ResetOpAttributes().visit(mod["main"])
     for op in compiler_cfg.cpu_fallback_ops:
         _register_external_op_helper_pytorch(op, compiler_cfg)
-    _register_external_op_helper_pytorch("equal", compiler_cfg)
     _register_external_op_helper_pytorch("scatter_add", compiler_cfg)
 
 def nn_layernorm_to_buda_layernorm():
@@ -211,7 +210,6 @@ tm_cpu_fallback_ops_of_interest = [
     "where",
     # PyBuda
     "pybuda.adv_index",
-    "pybuda.binary_stack",
     "pybuda.hslice",
     "pybuda.hstack",
 ]
@@ -248,6 +246,7 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.upsampling",
     "nn.upsampling3d",
     # PyBuda
+    "pybuda.binary_stack",
     "pybuda.buda_conv2d_transpose_with_bias",
     "pybuda.buda_conv2d_with_bias",
     "pybuda.matmul",
