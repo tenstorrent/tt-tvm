@@ -2978,7 +2978,14 @@ class PyTorchOpConverter:
             mode = "add"
         # Combine array of index tensors into one index tensor with shape (N,_)
         index_tensor = _op.stack(indices, axis=0)
-        return _op.scatter_nd(in_tensor, index_tensor, values, mode)
+        
+        # Narrow index tensor to match input tensor
+        shape_diff = len(_infer_shape(index_tensor)) - len(_infer_shape(in_tensor))
+        if shape_diff > 0:
+            for shape in range(shape_diff):
+                index_tensor = _op.squeeze(index_tensor, axis=[0])
+
+        return _op.transform.scatter_nd(in_tensor, index_tensor, values, mode)
 
     def index_copy(self, inputs, input_types):
         in_tensor = inputs[0]
