@@ -2673,6 +2673,27 @@ class DecomposeScatterND(DFPatternCallback):
         
         return out
         
+        
+class ConvertIsNaN(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        # IsNaN op with all inputs
+        self.data = wildcard()
+        self.isnan = is_op("isnan")(self.data)
+        
+        self.pattern = self.isnan
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        data = pre_node_map[self.data][0]
+        
+        cond = tvm.relay.equal(data, tvm.relay.const(np.nan, dtype="float32"))
+        where = tvm.relay.where(cond, tvm.relay.const(True), tvm.relay.const(False))
+        
+        return where
+    
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2787,6 +2808,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim(),
             DecomposeScatterND(),
+            ConvertIsNaN(),
         ],
         params=params,
         inputs=inputs,
