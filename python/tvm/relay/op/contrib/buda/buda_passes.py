@@ -2620,6 +2620,59 @@ class CommuteIndexPastReshape(DFPatternCallback):
         new_add = tvm.relay.add(new_index, new_bias_reshape)
         return new_add
 
+
+class DecomposeScatterND(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        # ScatterND op with all inputs
+        self.data = wildcard()
+        self.indices = wildcard()
+        self.updates = wildcard()
+        self.mode = wildcard()
+        self.scatter_nd = is_op("scatter_nd")(self.data, self.indices, self.updates)
+        
+        self.pattern = self.scatter_nd
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        # Arguments & Op
+        data = node_map[self.data][0]
+        indices = node_map[self.indices][0]
+        updates = node_map[self.updates][0]
+        
+        # Handle only update mode (replacement instead of accumulation)
+        if not pre_node_map[self.scatter_nd][0].attrs.mode == "update":
+            return post
+        
+        # Handle only 2D tensors
+        if len(pre_node_map[self.data][0].checked_type.shape) != 2 or len(pre_node_map[self.indices][0].checked_type.shape) != 2 or len(pre_node_map[self.updates][0].checked_type.shape) != 2:
+            return post
+        
+        # Debug values
+        # import torch
+        # from tvm.relay.frontend.common import analysis
+        # from tvm.relay.frontend.common import infer_shape
+        # from tvm.relay.frontend.common import infer_value
+
+        # analysis.free_vars(data)
+        # data_shape = infer_shape(data)
+        # a = torch.arange(0, np.prod(data_shape), dtype=torch.float32).view(data_shape) / 18
+        # a = tvm.nd.array(a)
+        # analysis.free_vars(indices)
+        # indices_shape = infer_shape(indices)
+        # b = torch.rand(indices_shape, dtype=torch.float32).view(indices_shape)
+        # b = tvm.nd.array(b)
+        
+        # Scatter ND using where op
+        out = tvm.relay.where(indices, updates, data)
+        
+        # infer_shape(out)
+        # infer_value(out, {'input_act': a, 'threshold_1': b})
+        
+        return out
+        
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2733,6 +2786,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReplicatePyBudaReshapeTranspose(),
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim(),
+            DecomposeScatterND(),
         ],
         params=params,
         inputs=inputs,
