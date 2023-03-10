@@ -379,7 +379,7 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
             [second["heads"].insert(i, []) for i, name in enumerate(third_input_names) if name is not None]
             for passthrough_node, name in zip(needed_first_and_second, input_names):
                 if passthrough_node >= 0:
-                    if add_to_first:
+                    if first_exists and add_to_first:
                         add_node_as_passthrough(first, third["nodes"][passthrough_node])
 
                     index = third_input_names.index(name)
