@@ -2731,19 +2731,36 @@ class PyTorchOpConverter:
 
             return res
         
-        # Cover case when adv_index produces incorrect results
-        # E.g. Having inputs: x (1, 18) & y (1, 18), utput of adv_index should 
-        # be also (1, 18). However, it produces output shape of (1, 18, 18). 
-        # Reference for this fix is NumPy style of doing similar indexing 
-        # (as defined in TVM documentation).
+        # Cover cases like x[mask] when mask is dependant on input activaiton
         if len(indices) == 1 and _infer_shape(data)[0] == 1 and _infer_shape(indices[0])[0] == 1:
+            # Valid op usage
+            # Commented code provides correct fix for this op. Howver, due to usage of 
+            # argwhere to extract indices from boolean mask, it causes issues during further
+            # compilation. Therefore, in this case, adv_index should be fallback on CPU to
+            # avoid dynamic shape issues.
+            
+            # Extract indices from boolean mask
+            # index_indices = _op.transform.argwhere(tvm.relay.squeeze(indices[0], axis=[0]))
+            
+            # This reshape is forced in order to remove dynamic shapes. This means that this op
+            # should be fallback on CPU in order for this math to be valid.
+            # index_indices = tvm.relay.reshape(index_indices, newshape=_infer_shape(data)[1:])
+
+            # data_squeezed = tvm.relay.squeeze(data, axis=[0])
+            # res = _op.adv_index([data_squeezed, index_indices])
+            # res = tvm.relay.expand_dims(res, axis=0)
+
+            # Invalid op usage
+            # Op adv_index doesn't support usage of boolean mask, only indices. Therefore,
+            # this math only helps to bypass this limitation as adv_index in this case is
+            # just piping the data. This is a temporary solution until adv_index is fixed.
+            # At the moment, all adv_indexing is done on CPU, so this is valid for now.
             data = tvm.relay.squeeze(data, axis=[0])
             indices[0] = tvm.relay.squeeze(indices[0], axis=[0])
             res = _op.adv_index([data] + indices)
-            res = tvm.relay.expand_dims(res, 0)
             
             return res
-        
+
         return _op.adv_index([data] + indices)
 
     def meshgrid(self, inputs, input_types):
@@ -2984,6 +3001,39 @@ class PyTorchOpConverter:
         if shape_diff > 0:
             for shape in range(shape_diff):
                 index_tensor = _op.squeeze(index_tensor, axis=[0])
+                
+        # If indexes are in form of boolean mask instead of indices, use where op
+        # instead of scatter_nd
+        if _infer_type(index_tensor).checked_type.dtype == "bool":
+            if isinstance(values, float):
+                values = _expr.const(values, dtype=_infer_type(in_tensor).checked_type.dtype)
+                
+            # Debug values
+            # import torch
+            # from tvm.relay.frontend.common import analysis
+            # from tvm.relay.frontend.common import infer_shape
+            # from tvm.relay.frontend.common import infer_value
+
+            # input_shape = (1, 18)
+            # a = torch.rand(input_shape, dtype=torch.float32)
+            # a = tvm.nd.array(a)
+            # weight_shape = (18, 18)
+            # b = torch.rand(weight_shape, dtype=torch.float32)
+            # b = tvm.nd.array(b)
+            # bias_shape = (18,)
+            # c = torch.rand(bias_shape, dtype=torch.float32)
+            # c = tvm.nd.array(c)
+            
+            # analysis.free_vars(in_tensor)
+            # infer_value(in_tensor, {'input': a, 'l1.weight': b, 'l1.bias': c})
+            # analysis.free_vars(values)
+            # infer_value(values, {'input': a, 'l1.weight': b, 'l1.bias': c})
+            # analysis.free_vars(in_tensor)
+            # infer_value(in_tensor, {'input': a, 'l1.weight': b, 'l1.bias': c})
+            
+            res = _op.transform.where(index_tensor, values, in_tensor)
+
+            return res
 
         return _op.transform.scatter_nd(in_tensor, index_tensor, values, mode)
 
