@@ -165,7 +165,8 @@ def pattern_table():
         buda_conv2d_with_bias,
         buda_conv2d_transpose_with_bias, 
         adv_index, 
-        dropout]
+        dropout,
+    ]
 
     return buda_patterns
 
@@ -210,6 +211,7 @@ tm_cpu_fallback_ops_of_interest = [
     "where",
     # PyBuda
     "pybuda.adv_index",
+    "pybuda.binary_stack",
     "pybuda.hslice",
     "pybuda.hstack",
 ]
@@ -246,7 +248,6 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.upsampling",
     "nn.upsampling3d",
     # PyBuda
-    "pybuda.binary_stack",
     "pybuda.buda_conv2d_transpose_with_bias",
     "pybuda.buda_conv2d_with_bias",
     "pybuda.matmul",
@@ -376,6 +377,26 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
 
                 logger.info("Fixed hslice")
                 return ops
+            
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.binary_stack" and "PartitionedFromPattern" in call.op.attrs and call.op.attrs["PartitionedFromPattern"] == "Tuple_stack_reshape_":
+                # Get binary_stack input
+                arg0 = call.args[0] if len(call.args) > 0 else None
+                arg1 = call.args[1] if len(call.args) > 1 else None
+                
+                # First argument is a variable or call expression
+                if not (arg0 and isinstance(arg0, tvm.relay.Var) or isinstance(arg0, tvm.relay.Call)):
+                    return super().visit_call(call)
+                
+                # Second argument isn't provided (fix for invalid binary_stack)
+                if not arg1:
+                    stack_attr = int(call.op.body.args[0].attrs.axis)
+                    reshape_attr = [int(i) for i in call.op.body.attrs.newshape]
+                    ops = tvm.relay.stack([arg0,], axis=stack_attr)
+                    ops = tvm.relay.reshape(ops, newshape=reshape_attr)
+                    
+                    logger.info("Fixed invalid binary_stack (single input)")
+                    
+                    return ops
 
         return super().visit_call(call)
 
