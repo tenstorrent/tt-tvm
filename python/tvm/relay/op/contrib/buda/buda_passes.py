@@ -2699,31 +2699,39 @@ class RemoveRedundantBinaryStacks(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
 
-        # IsNaN op with all inputs
         self.act = wildcard()
-        self.stack = is_op("stack")(self.act)
+        self.tuple = is_tuple([self.act])
+        self.stack = is_op("stack")(self.tuple)
         self.reshape = is_op("reshape")(self.stack)
 
         self.pattern = self.reshape
-
+        
     def callback(self, pre, post, node_map):
         pre_node_map = construct_pre_node_map(self.pattern, pre)
 
         act = node_map[self.act][0]
-        stack = pre_node_map[self.act][0]
-        reshape = pre_node_map[self.act][0]
+        stack = pre_node_map[self.stack][0]
+        reshape = pre_node_map[self.reshape][0]
         
-        if len(stack.fields) != 1 and len(reshape.fields) != 1:
+        if len(stack.args) != 1 and len(reshape.args) != 1:
             return post
 
-        stack_field_input_shape = stack.fields[0].checked_type.shape
-        reshape_field_input_shape = reshape.fields[0].checked_type.shape
+        stack_field_input_shape = [int(i) for i in stack.args[0].checked_type.fields[0].shape]
+        reshape_shape = [int(i) for i in reshape.attrs.newshape]
 
-        if stack_field_input_shape == reshape_field_input_shape:
-            unwrap_act_from_tupple = act.fields[0]
-            return unwrap_act_from_tupple
-
-        return post
+        if stack_field_input_shape != reshape_shape:
+            return post
+        
+        # Creates duplicates
+        # from tvm.relay.frontend.common import infer_type
+        # return infer_type(act.fields[0])
+        
+        # Also, creates duplicates
+        # mod = tvm.ir.IRModule.from_expr(act.fields[0])
+        # mod = transform.InferType()(mod)
+        # return mod['main'].body
+        
+        return act
 
 
 def _get_callback_name(callback):
@@ -2763,6 +2771,7 @@ def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, tar
             logger.error(f"Failed on \"{callback_name}\" TVM callback")
             raise ex
         if run_verify:
+            logger.trace(f"Verifying {callback_name}")
             tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, framework_outputs, callback_name, verify_cfg)
     
     return relay_module
@@ -2839,9 +2848,9 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReplicatePyBudaReshapeTranspose(),
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim(),
+            # RemoveRedundantBinaryStacks(),
             DecomposeScatterND(),
             ConvertIsNaN(),
-            RemoveRedundantBinaryStacks(),
         ],
         params=params,
         inputs=inputs,
