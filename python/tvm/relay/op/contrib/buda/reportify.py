@@ -130,7 +130,10 @@ class CreateJson(ExprVisitor):
         shape = []
         for field in tup.checked_type.fields:
             if hasattr(field, "shape"):
-                shape.append([int(dim) for dim in field.shape])
+                try:
+                    shape.append([int(dim) for dim in field.shape])
+                except Exception:
+                    shape.append([])
 
         op["cache"] = {"shape": shape}
         op["class"] = "tuple"
