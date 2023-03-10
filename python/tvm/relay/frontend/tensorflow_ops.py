@@ -2161,8 +2161,7 @@ def _gather():
         if int(attr.get("batch_dims", 0)) != 0:
             batch_dims = int(attr.get("batch_dims", 0))
         new_input = inputs[0:2]
-
-        if isinstance(inputs[0], tvm.relay.expr.Var):
+        if isinstance(inputs[0], tvm.relay.expr.Var) and inputs[0].name_hint in params:
             # Embedding weights have to be variable
             op_ = AttrCvt(
                 op_name="embedding",
