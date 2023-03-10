@@ -120,6 +120,9 @@ def is_stack_reshape_reshape_to_binary_stack(call):
 
     input_shape = [int(dim) for dim in call.args[0].args[0][0].checked_type.shape]
     output_shape = [int(dim) for dim in call.checked_type.shape]
+    
+    # if input_shape == output_shape:
+    #     return False
 
     works = all([i == o or (dim == stack_axis and o == 2 * i) for dim, (i, o) in enumerate(zip(input_shape, output_shape))])
     return works
