@@ -1654,10 +1654,19 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
         act = node_map[self.act][0]
         pre_node_map = construct_pre_node_map(self.pattern, pre)
 
-        if not isinstance(bias, (tvm.relay.expr.Var, tvm.relay.expr.Constant)):
+        # Check if it's either a bias in form of var or a constant, or evan a reshape
+        # which follows bias.
+        if not (isinstance(bias, (tvm.relay.expr.Var, tvm.relay.expr.Constant)) \
+            or bias.op.name == "reshape" and isinstance(bias.args[0], (tvm.relay.expr.Var, tvm.relay.expr.Constant))):
             return post
 
-        bias_shape = list(pre_node_map[self.bias][0].checked_type.shape)
+        # Skip reshape if follows bias
+        if not isinstance(bias, (tvm.relay.expr.Var, tvm.relay.expr.Constant)) and isinstance(bias.args[0], (tvm.relay.expr.Var, tvm.relay.expr.Constant)) and bias.op.name == "reshape":
+            bias = bias.args[0]
+            bias_shape = list(pre_node_map[self.bias][0].args[0].checked_type.shape)
+        else:
+            bias_shape = list(pre_node_map[self.bias][0].checked_type.shape)
+
         if act.attrs.data_layout == "NHWC":
             single_dim = True
             for i in bias_shape[:-1]: single_dim = single_dim and i == 1
@@ -1667,7 +1676,7 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
         elif act.attrs.data_layout == "NCHW":
             single_dim = True
             for i in bias_shape[:-3] + bias_shape[-2:]: single_dim = single_dim and i == 1
-            if single_dim:
+            if single_dim and len(bias_shape) >= 3:
                 bias = tvm.relay.reshape(bias, [bias_shape[-3]])
             return tvm.relay.nn.bias_add(act, bias)
         else:
