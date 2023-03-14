@@ -339,11 +339,11 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
     def visit_call(self, call):
         if isinstance(call.op, tvm.relay.function.Function):
             if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.matmul":
-                if isinstance(call.args[0], tvm.relay.expr.Call) and call.args[0].op.name == "reshape":
+                if isinstance(call.args[0], tvm.relay.expr.Call) and isinstance(call.args[0], tvm.ir.op.Op) and call.args[0].op.name == "reshape":
                     arg0 = call.args[0].args[0]
                 else:
                     arg0 = call.args[0]
-                if isinstance(call.args[1], tvm.relay.expr.Var):
+                if isinstance(call.args[1], (tvm.relay.expr.Var, tvm.relay.expr.Constant)):
                     arg1 = call.args[1]
                     # If transpose is part of a function, and therefore not picked up, add it explicitly
                     if isinstance(call.op.body.args[1], tvm.relay.expr.Call) and call.op.body.args[1].op.name == "transpose":
@@ -738,13 +738,6 @@ class ConstructDiGraph(ExprVisitor):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.op} to fallback")
 
-        elif (
-            isinstance(call.op, tvm.ir.op.Op) 
-            and isinstance(call.checked_type, tvm.ir.tensor_type.TensorType)
-            and len(call.checked_type.shape) > 4
-        ):
-            self.fallback_nodes.add(node)
-            logger.info(f"Adding: {call.op} to fallback")
 
         self.register_args(call, node)
         # Make sure CPU output shape starts with 1
