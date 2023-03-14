@@ -785,6 +785,11 @@ class LowerTakeToStridedSlice(DFPatternCallback):
         except ValueError as e:
             act_shape = list(pre_node_map[self.input_tensor][0].attrs.newshape)
 
+        # If shape is not fully known, return
+        for dim in act_shape:
+            if isinstance(dim, tvm.tir.Any):
+                return post
+
         try:
             indices = node_map[self.indices][0].data.numpy().flatten()
             start_value = indices[0]
@@ -1828,6 +1833,11 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
             target_shape = list(pre.args[0].attrs.newshape)
         else:
             target_shape = list(pre.args[0].checked_type.shape)
+
+        # Cannot handle dynamic shapes
+        for dim in target_shape:
+            if isinstance(dim, tvm.tir.expr.Any):
+                return post
 
         for i in range(num_new_axes):
             target_shape.insert(axis, 1)

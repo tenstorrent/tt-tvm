@@ -1003,7 +1003,7 @@ class PyTorchOpConverter:
         fill_value = inputs[1]
         
         # Convert to scaler if provided values is TVM call expression and is not dependent on any inputs (i.e. constant)
-        fill_value = _infer_value(fill_value, {}).numpy().item() if type(fill_value) == tvm.relay.expr.Call and len(_analysis.free_vars(fill_value)) == 0 else fill_value
+        fill_value = _infer_value(fill_value, {}).numpy().item() if type(fill_value) == _expr.Call and len(_analysis.free_vars(fill_value)) == 0 else fill_value
 
         import torch
 
@@ -1288,7 +1288,7 @@ class PyTorchOpConverter:
         data = inputs[0]
         output_size = inputs[1]
         for i, item in enumerate(output_size):
-            if isinstance(item, tvm.relay.expr.Constant):
+            if isinstance(item, _expr.Constant):
                 # convert Constant to int
                 output_size[i] = item.data.numpy()[()]
         # returns dummy indices too
@@ -3115,14 +3115,18 @@ class PyTorchOpConverter:
         return _op.ndarray_size(inputs[0])
 
     def empty(self, inputs, input_types):
-        shape = []
-        for s in inputs[0]:
-            if isinstance(s, _expr.Constant):
-                shape.append(s.data.numpy().item())
-            else:
-                assert isinstance(s, int)
-                shape.append(s)
-
+        if isinstance(inputs[0], list):
+            shape = []
+            for item in inputs[0]:
+                if isinstance(item, _expr.Constant):
+                    shape.append(int(item.data.numpy()))
+                elif isinstance(item, _expr.Call):
+                    array = _infer_value(inputs[0][1], {})
+                    shape.append(array.numpy().item())
+                else:
+                    shape.append(item)
+        else:
+            shape = [int(dim.data.numpy()) if isinstance(dim, _expr.Constant) else dim for dim in inputs[0]]
         return _op.zeros(shape, _convert_dtype_value(inputs[1]))
 
     def empty_like(self, inputs, input_types):
@@ -3311,6 +3315,16 @@ class PyTorchOpConverter:
         # for certain models caused by the future matmul (once where is decomposed)
         return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
 
+
+    def baddbmm(self, inputs, input_types):
+        bmm = _op.nn.batch_matmul(inputs[1], inputs[2], out_dtype=input_types[0], transpose_a=False, transpose_b=False)
+        bmm_mul = _op.multiply(tvm.relay.const(tvm.nd.array([np.float32(inputs[4]),]), dtype=input_types[0]), bmm)
+        beta_input = _op.multiply(tvm.relay.const(tvm.nd.array([np.float32(inputs[3]),]), dtype=input_types[0]), inputs[0])
+        final_add = _op.add(bmm_mul, beta_input)
+        return final_add
+
+    def __or__(self, inputs, input_types):
+        return _op.bitwise_or(inputs[0], inputs[1])
 
     def masked_select(self, inputs, input_types):
         mask = inputs[1]
@@ -4155,7 +4169,7 @@ class PyTorchOpConverter:
         shape = inputs[1]
 
         for i, val in enumerate(shape):
-            if isinstance(val, tvm.relay.expr.Call):
+            if isinstance(val, _expr.Call):
                 shape[i] = int(_infer_value(inputs[1][i], {}).numpy())
 
         return _op.zeros(shape, _convert_dtype_value(inputs[2]))
@@ -4602,6 +4616,8 @@ class PyTorchOpConverter:
             "aten::as_tensor": self.as_tensor,
             "aten::format": self.format,
             "aten::warn": self.warn,
+            "aten::baddbmm": self.baddbmm,
+            "aten::__or__": self.__or__,
         }
 
     def update_convert_map(self, custom_map):
@@ -4839,7 +4855,7 @@ class PyTorchOpConverter:
                     _handel_nested_input(inputs), self.source_map[op_node]
                 )
             elif operator in ["prim::ListUnpack", "prim::TupleUnpack"]:
-                # if isinstance(inputs[0], tvm.relay.expr.Call):
+                # if isinstance(inputs[0], _expr.Call):
                 #     inputs[0] = unbind(inputs[0], 1)
 
                 assert len(inputs) == 1
