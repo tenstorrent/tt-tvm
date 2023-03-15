@@ -396,18 +396,18 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     main_graph = str(mod.astext())
     cpu_json_graph["hash"] = graph_hash
     dev_json_graph["hash"] = graph_hash
+    
+    assert len(cpu_json_graph["functions"].keys()) <= 2, "At most two cpu functions should exist (one pre and one post). If there are more they should have been merged into one during tvm partitioning."
     cpu_functions = list(cpu_json_graph["functions"].keys())
-    dev_functions = list(dev_json_graph["functions"].keys())
-
-    cpu_pre_functions = []
-    device_functions = []
-    cpu_post_functions = []
+    assert len(dev_json_graph["functions"].keys()) <= 1, "At most one device function should exist. If there are more they should have been merged into one during tvm partitioning."
+    device_function = list(dev_json_graph["functions"].keys())[0]
+    
+    cpu_pre_function = None
+    cpu_post_function = None
     
     func_callnodes = extract_function_callnodes(partitioned_mod["main"], partitioned_mod.get_global_vars())
     for node in func_callnodes:
-        if node.op.name_hint in dev_functions:
-            if node.op.name_hint not in device_functions:
-                device_functions.append(node.op.name_hint)
+        if node.op.name_hint == device_function:
             for arg in node.args:
                 op = None
                 if isinstance(arg, tvm.relay.expr.TupleGetItem):
@@ -415,20 +415,24 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
                 elif isinstance(arg, tvm.relay.expr.Call):
                     op = arg.op
                 if op is not None:
-                    if op.name_hint not in cpu_pre_functions:
-                        cpu_pre_functions.append(op.name_hint)
+                    if op.name_hint != cpu_pre_function:
+                        if not cpu_pre_function:
+                            cpu_pre_function = op.name_hint
+                        else:
+                            assert op.name_hint == cpu_pre_function, "There is more than one cpu pre function. This should not be possible. They should have been merged into one during tvm partitioning."
+    if cpu_pre_function is not None:
+        cpu_functions.remove(cpu_pre_function)
+    assert len(cpu_functions) <= 1, "There is more than one cpu post function. This should not be possible. They should have been merged into one during tvm partitioning."
+    cpu_post_function = cpu_functions[0] if len(cpu_functions) else None
 
-    cpu_post_functions = [func for func in cpu_functions if func not in cpu_pre_functions]
-
-    if len(cpu_pre_functions):
-        graph = join_graphs([cpu_json_graph["functions"][function] for function in cpu_pre_functions])
+    if cpu_pre_function is not None:
         cpu_pre_json_graph = copy.deepcopy(cpu_json_graph)
-        cpu_pre_json_graph["graph"] = graph
+        cpu_pre_json_graph["graph"] = cpu_json_graph["functions"][cpu_pre_function]
 
         # Only keep the pre function in the pre json
         functions_to_remove = []
         for function in cpu_pre_json_graph["functions"]:
-            if function not in cpu_pre_functions:
+            if function != cpu_pre_function:
                 functions_to_remove.append(function)
         
         for func in functions_to_remove:
@@ -436,50 +440,26 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
 
         cpu_pre_json_graph["params"] = {}
         for function_name in buda_params.keys():
-            if function_name in cpu_pre_functions:
+            if function_name == cpu_pre_function:
                 cpu_pre_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_pre_json_graph["param_names"][function_name])})
     else:
         cpu_pre_json_graph = {"graph":""}
-    
-    dev_graph = join_graphs([dev_json_graph["functions"][function] for function in device_functions])
-    dev_json_graph["graph"] = dev_graph
 
+    dev_json_graph["graph"] = dev_json_graph["functions"][device_function]
+    
     dev_json_graph["params"] = {}
     for function_name in buda_params.keys():
         if function_name in dev_json_graph["param_names"]:
             dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
-    if len(cpu_post_functions):
-        cpu_post_callnodes = [node for node in func_callnodes if node.op.name_hint in cpu_post_functions]
-        shared_inputs = []
-        for i, node_1 in enumerate(cpu_post_callnodes):
-            for j, node_2 in enumerate(cpu_post_callnodes):
-                if i >= j:
-                    continue
-                for k, arg_1 in enumerate(node_1.args):
-                    for l, arg_2 in enumerate(node_2.args):
-                        if arg_1 == arg_2:
-                            shared_inputs.append([i, j, k, l])
-
-        for shared_input in shared_inputs:
-            i, j, k, l = shared_input
-            graph_1 = json.loads(cpu_json_graph["functions"][cpu_post_functions[i]])
-            graph_2 = json.loads(cpu_json_graph["functions"][cpu_post_functions[j]])
-            node_1_idx = graph_1["arg_nodes"][k]
-            node_2_idx = graph_1["arg_nodes"][l]
-            graph_1["nodes"][node_1_idx]["name"] = graph_2["nodes"][node_2_idx]["name"]
-            cpu_json_graph["functions"][cpu_post_functions[i]] = json.dumps(graph_1)
-            cpu_json_graph["functions"][cpu_post_functions[j]] = json.dumps(graph_2)
-
-
-        graph = join_graphs([cpu_json_graph["functions"][function] for function in reversed(cpu_post_functions)])
+    if cpu_post_function is not None:
         cpu_post_json_graph = copy.deepcopy(cpu_json_graph)
-        cpu_post_json_graph["graph"] = graph
+        cpu_post_json_graph["graph"] = cpu_json_graph["functions"][cpu_post_function] 
 
         # Only keep the post function in the post json
         functions_to_remove = []
         for function in cpu_post_json_graph["functions"]:
-            if function not in cpu_post_functions:
+            if function != cpu_post_function:
                 functions_to_remove.append(function)
         
         for func in functions_to_remove:
@@ -487,17 +467,18 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
 
         cpu_post_json_graph["params"] = {}
         for function_name in buda_params.keys():
-            if function_name in cpu_post_functions:
+            if function_name == cpu_post_function:
                 cpu_post_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_post_json_graph["param_names"][function_name])})
     else:
         cpu_post_json_graph = {"graph":""}
     
+    import pdb; pdb.set_trace()
     cpu_pre_json_graph['graph'], dev_json_graph['graph'], cpu_post_json_graph['graph'] = add_passthrough_if_needed(
         cpu_pre_json_graph, dev_json_graph, cpu_post_json_graph, partitioned_mod, input_names, weight_names
     )
 
     json_graphs = []
-    if len(cpu_pre_functions):
+    if cpu_pre_function is not None:
         save_nid_to_input_idx(input_names, cpu_pre_json_graph) # Input order might not be preserved by TVM
         cpu_pre_json_graph["num_pybuda_inputs"] = len(input_names)
         json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_pre_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
