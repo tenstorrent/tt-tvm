@@ -14,66 +14,7 @@ from tvm.relay import ExprVisitor
 from pybuda.config import CompilerConfig
 from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 from pybuda.tensor import to_pt_tensors
-
-class NodeOriginFinder(tvm.relay.ExprVisitor):
-    def __init__(self, origins, include_constants=True):
-        super().__init__()
-        self.produced_by = {}
-        self.consumed_by = {}
-        self.origin = None
-        self.possible_origins = origins
-        self.include_constants_as_origin = include_constants
-    
-    def reset(self):
-        self.origin = None
-
-    def visit_call(self, call):
-        
-        if call.op in self.possible_origins:
-            self.origin = (call.op.name_hint, 0)
-            return
-        super().visit_call(call)
-
-    def visit_constant(self, const):
-        if self.include_constants_as_origin:
-            self.origin = ('constant', -1)
-
-    def visit_var(self, var):
-        if var in self.possible_origins:
-            self.origin = var
-
-    def visit_tuple_getitem(self, t):
-        if isinstance(t.tuple_value, tvm.relay.Call):
-            if t.tuple_value.op in self.possible_origins:
-                self.origin = (t.tuple_value.op.name_hint, t.index)
-                return
-
-        super().visit_tuple_getitem(t)
-
-def trace_to_origin(node, possible_origins, include_constants=True):
-    pd = NodeOriginFinder(possible_origins, include_constants)
-    pd.visit(node)
-    return pd.origin
-
-
-class FunctionFinder(tvm.relay.ExprVisitor):
-
-    def __init__(self, function_names):
-        super().__init__()
-        self.func_names = function_names
-        self.funcs = []
-
-    def visit_call(self, call):
-        if isinstance(call.op, tvm.relay.GlobalVar):
-            if call.op.name_hint in self.func_names:
-                self.funcs.append(call)
-        return super().visit_call(call)
-
-def extract_function_callnodes(main_module, funcs):
-    ff = FunctionFinder([func.name_hint for func in funcs])
-
-    ff.visit(main_module)
-    return ff.funcs
+from tvm.relay.op.contrib.buda.buda import extract_function_callnodes, trace_to_origin
 
 
 def extract_framework_model_outputs(

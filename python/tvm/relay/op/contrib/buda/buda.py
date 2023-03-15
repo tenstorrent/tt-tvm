@@ -439,6 +439,7 @@ def node_hash(node):
         node_descriptor = (node.name_hint, True)
     else:
         node_descriptor = (type(node), False)
+
     return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
 
 class NodeIndexer():
@@ -700,6 +701,7 @@ def tm_fallback_traverse(graph, current_node, max_depth, ops_of_interest, ops_to
     logger.trace("Finishing traverse for given path on depth: {}".format(current_depth))
 
 class ConstructDiGraph(ExprVisitor):
+    
     def __init__(self):
         super().__init__()
         self.graph = nx.MultiDiGraph()
@@ -717,7 +719,6 @@ class ConstructDiGraph(ExprVisitor):
     def visit_call(self, call):
         node = node_hash(call)
         self.node_indexer.count_visit("call", node)
-
         if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
@@ -772,7 +773,99 @@ class ConstructDiGraph(ExprVisitor):
             producer_node = node_hash(producer)
             self.graph.add_edge(producer_node, tuple_node)
         return super().visit_tuple(t)
+    
 
+
+class MainFunctionFinder(ExprVisitor):
+    def __init__(self):
+        super().__init__()
+        self.funcs = []
+        self.cpu_funcs = []
+        self.tt_funcs = []
+
+    def visit_global_var(self, gvar):
+        if "pybuda_cpudevice_main" in gvar.name_hint:
+            self.funcs.append(gvar)
+            self.cpu_funcs.append(gvar)
+        elif "pybuda_main" in gvar.name_hint:
+            self.funcs.append(gvar)
+            self.tt_funcs.append(gvar)
+            
+
+class NodeOriginFinder(ExprVisitor):
+    def __init__(self, origins, include_constants=True):
+        super().__init__()
+        self.produced_by = {}
+        self.consumed_by = {}
+        self.origin = None
+        self.possible_origins = origins
+        self.include_constants_as_origin = include_constants
+    
+    def reset(self):
+        self.origin = None
+
+    def visit_call(self, call):
+        
+        if call.op in self.possible_origins:
+            self.origin = (call.op.name_hint, 0)
+            return
+        super().visit_call(call)
+
+    def visit_constant(self, const):
+        if self.include_constants_as_origin:
+            self.origin = ('constant', -1)
+
+    def visit_var(self, var):
+        if var in self.possible_origins:
+            self.origin = var
+
+    def visit_tuple_getitem(self, t):
+        if isinstance(t.tuple_value, tvm.relay.Call):
+            if t.tuple_value.op in self.possible_origins:
+                self.origin = (t.tuple_value.op.name_hint, t.index)
+                return
+
+        super().visit_tuple_getitem(t)
+        
+    def visit_global_var(self, gvar):
+        if gvar in self.possible_origins:
+            self.origin = gvar
+
+def trace_to_origin(node, possible_origins, include_constants=True):
+    pd = NodeOriginFinder(possible_origins, include_constants)
+    pd.visit(node)
+    return pd.origin
+
+class PartitionFinder(ExprVisitor):
+    def __init__(self, mod, tt_funcs, cpu_funcs):
+        super().__init__()
+        self.tt_funcs = tt_funcs
+        self.cpu_funcs = cpu_funcs
+        self.mod = mod
+        self.cpu_pre_funcs = []
+        self.cpu_post_funcs = []
+        
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.ir.expr.GlobalVar):
+            gvar = call.op
+            if gvar in self.cpu_funcs:
+                # determine if its pre or post
+                origin = trace_to_origin(call, self.tt_funcs)
+                if origin and origin[0] in [func.name_hint for func in self.tt_funcs]:
+                    self.cpu_post_funcs.append(gvar)
+                    
+                    # Given that this cpu function has an input which originates from a tt function,
+                    # we want to make sure that no outputs of this function are consumed by a tt function.
+                    for func in self.tt_funcs:
+                        tt_func_callnodes = extract_function_callnodes(self.mod["main"], [func])
+                        assert len(tt_func_callnodes) == 1, "No tt function should be called more than once."
+                        assert not trace_to_origin(tt_func_callnodes[0], [gvar]), "There is a CPU function which has inputs originating from a TT function, and outputs consumed by a TT function. This should not happen and is not supported."
+                    
+                else:
+                    self.cpu_pre_funcs.append(gvar)
+                
+        super().visit_call(call)
+                
 
 def get_relay_output(mod, params, inputs, target):
     # Build and Run Relay modules with inputs as (key : tensor) pair
@@ -1027,10 +1120,192 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         logger.trace("After DetermineTarget")
         logger.trace(mod.functions)
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-        
 
+
+class VarConverter(ExprMutator):
+    def __init__(self, key, replacement):
+        super().__init__()
+        self.key = key
+        self.replacement = replacement
         
+    def visit_call(self, call):
+        new_args = []
+        for arg in call.args:
+            if isinstance(arg, tvm.relay.expr.Var) and arg.name_hint == self.key.name_hint:
+                new_args.append(self.replacement)
+            else:
+                new_args.append(arg)
+                
+        
+        return super().visit_call(tvm.relay.expr.Call(call.op, new_args, call.attrs, call.type_args))
+
+class FunctionPlacer(ExprMutator):
+    def __init__(self, mod, output_map, input_map, new_func_gvar, new_args):
+        super().__init__()
+        self.output_map = output_map
+        self.input_map = input_map
+        self.new_func_gvar = new_func_gvar
+        self.mod = mod
+        self.new_args = new_args
+        self.inserted_node = None
     
+    def visit_tuple_getitem(self, tgi):
+        if isinstance(tgi.tuple_value, tvm.relay.expr.Call):
+            call = tgi.tuple_value
+            if isinstance(call.op, tvm.relay.expr.GlobalVar) and call.op.name_hint in self.output_map:
+                if not self.inserted_node:
+                    self.inserted_node = tvm.relay.expr.Call(self.new_func_gvar, [])
+                    
+                new_index = self.output_map[call.op.name_hint][tgi.index]
+                return tvm.relay.expr.TupleGetItem(self.inserted_node, new_index)
+            
+        return super().visit_tuple_getitem(tgi)
+    
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.expr.GlobalVar) and call.op.name_hint in self.output_map: 
+            if not self.inserted_node:
+                self.inserted_node = tvm.relay.expr.Call(self.new_func_gvar, [], call.attrs, call.type_args)
+                
+                if isinstance(self.mod[self.new_func_gvar].checked_type.ret_type, tvm.ir.type.TupleType):
+                    getitem = tvm.relay.expr.TupleGetItem(self.inserted_node, self.output_map[call.op.name_hint][0])
+                    return getitem
+                else:
+                    return self.inserted_node
+            else:
+                if isinstance(self.mod[self.new_func_gvar].checked_type.ret_type, tvm.ir.type.TupleType):
+                    getitem = tvm.relay.expr.TupleGetItem(self.inserted_node, self.output_map[call.op.name_hint][0])
+                    return getitem
+                else:
+                    return self.inserted_node
+            
+        return super().visit_call(call)
+
+class FunctionFinder(ExprVisitor):
+
+    def __init__(self, function_names):
+        super().__init__()
+        self.func_names = function_names
+        self.funcs = []
+
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.GlobalVar):
+            if call.op.name_hint in self.func_names:
+                self.funcs.append(call)
+        return super().visit_call(call)
+
+def extract_function_callnodes(main_module, funcs):
+    ff = FunctionFinder([func.name_hint for func in funcs])
+
+    ff.visit(main_module)
+    return ff.funcs
+
+class FunctionArgPlacer(ExprMutator):
+    
+    def __init__(self, func, new_args):
+        super().__init__()
+        assert isinstance(func, tvm.ir.GlobalVar), "Must supply function GlobalVar"
+        
+        self.func = func
+        self.new_args = new_args
+        
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.expr.GlobalVar) and call.op.name_hint == self.func.name_hint:
+            return super().visit_call(tvm.relay.expr.Call(call.op, self.new_args, call.attrs, call.type_args))
+        return super().visit_call(call)
+
+def merge_functions(mod, funcs_to_merge, new_name):
+    assert all([isinstance(func, tvm.relay.expr.GlobalVar) for func in funcs_to_merge]), "Must supply functions as GlobalVars"
+    funcs = []
+    new_output_map = {}
+    new_input_map = {}
+    
+    new_params = []
+    new_type_params = []
+    new_body = []
+    
+    if len(funcs_to_merge) <= 1:
+        return mod
+    
+    for i, func in enumerate(funcs_to_merge):
+        new_output_map[func.name_hint] = {}
+        body = mod[func].body
+
+        # Merge bodies
+        if isinstance(body, tvm.relay.expr.Tuple):
+            for j, output in enumerate(body.fields):
+                new_output_map[func.name_hint][j] = len(new_body)
+                new_body.append(output)
+        else:
+            new_output_map[func.name_hint][0] = len(new_body)
+            new_body.append(body)
+            
+    if len(new_body) == 1:
+        new_body = new_body[0]
+    else:
+        new_body = tvm.relay.expr.Tuple(new_body)
+        
+    for i, func in enumerate(funcs_to_merge):
+        params = mod[func].params
+        type_params = mod[func].type_params
+        
+        new_input_map[func.name_hint] = {}
+        
+        # Merge params/type params
+        for j, param in enumerate(params):
+            new_param_names = [p.name_hint for p in new_params]
+            if not param.name_hint in new_param_names:
+                new_input_map[func.name_hint][j] = len(new_params)
+                new_params.append(param)
+            else:
+                # convert all usages of this param to the param currently in the list
+                for name in new_param_names:
+                    if name == param.name_hint:
+                        new_input_map[func.name_hint][j] = new_param_names.index(name)
+                        new_body = VarConverter(param, new_params[new_param_names.index(name)]).visit(new_body)
+                        
+                
+        for type_param in type_params:
+            if not type_param in new_type_params:
+                new_type_params.append(type_param)
+    
+    # new_attrs = mod[funcs_to_merge[0]].attrs
+    
+    new_fn = tvm.relay.Function(new_params, new_body)
+    new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in mod[funcs_to_merge[0]].attrs.items()}
+    new_attrs["global_symbol"] = new_name
+    new_fn = new_fn.with_attr(new_attrs)
+    
+    gvar = tvm.ir.expr.GlobalVar(new_name)
+    mod.update_func(gvar, new_fn)
+        
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+    logger.trace("After InferType")
+    logger.trace(mod.functions)
+    
+    # Replace functions with merged function
+    fn_placer = FunctionPlacer(mod, new_output_map, new_input_map, gvar, new_params)
+    placed = fn_placer.visit(mod["main"])
+    
+    # Place arguments for new function in correct order
+    new_args = []
+    
+    while len(new_args) < len(new_params):
+        for fn_name, input_map in new_input_map.items():
+            fn_gvar = mod.get_global_vars()[[gvar.name_hint for gvar in mod.get_global_vars()].index(fn_name)]
+            fn_callnode = extract_function_callnodes(mod["main"], [fn_gvar])[0]
+            for old_idx, new_idx in input_map.items():
+                if new_idx == len(new_args):
+                    new_args.append(fn_callnode.args[old_idx])
+        
+    placed = FunctionArgPlacer(gvar, new_args).visit(placed)
+    mod["main"] = placed
+    
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+    logger.trace("After InferType")
+    logger.trace(mod.functions)
+    
+    return mod
+
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
 
@@ -1085,7 +1360,21 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         mod["main"] = IdentityFunctionUnraveller(mod).visit(mod["main"])
         logger.trace("After IdentityFunctionUnraveller")
         logger.trace(mod.functions)
+        
+        func_finder = MainFunctionFinder()
+        func_finder.visit(mod["main"])
 
+        partition_finder = PartitionFinder(mod, func_finder.tt_funcs, func_finder.cpu_funcs)
+        partition_finder.visit(mod["main"])
+        
+        # now we have the pre/post functions figured out
+        # merge the pre-functions, tt-functions, and post-functions into one each
+        #     i.e we have one cpu pre function, one cpu post function, and one tt function
+
+        mod = merge_functions(mod, partition_finder.cpu_pre_funcs, "tvmgen_default_pybuda_cpudevice_main_pre")
+        mod = merge_functions(mod, partition_finder.tt_funcs, "tvmgen_default_pybuda_main")
+        mod = merge_functions(mod, partition_finder.cpu_post_funcs, "tvmgen_default_pybuda_cpudevice_main_post")
+        
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
             main_body_call_node = [mod["main"].body]
         else:
