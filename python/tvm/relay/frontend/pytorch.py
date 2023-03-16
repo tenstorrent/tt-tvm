@@ -2740,66 +2740,94 @@ class PyTorchOpConverter:
         data = inputs[0]
         data_shape = self.infer_type(data).shape
 
-        # Cover cases like x[:, mask]
+        # Cover case when first row is selected as whole in Python style using ':' (e.g. x[:, mask])
+        # while second is selected using a boolean mask
         if indices[0] == None:
+            # Remove first None argument (represents ':')
             indices.pop(0)
+            
+            assert len(_infer_shape(data)) == 2 and len(indices) == 1, "Currently supportes only 2D tensors with single mask"
 
-            try:
-                indices_val = indices[0].data.numpy()
-            except AttributeError as e:
-                indices_val = _infer_value(indices[0], {}).numpy()
-            index_indices = _expr.const(np.transpose(np.argwhere(indices_val)))
+            indices = indices[0]
+            if len(_analysis.free_vars(indices)) == 0:
+                if isinstance(indices, _expr.Constant):
+                    # Extract direct data as numpy array
+                    indices = indices.data.numpy()
+                else:
+                    # Infer values to get constant data (discards irelevant math which
+                    # will eventually be optimized out)
+                    indices = _infer_value(indices, {}).numpy()
+                indices = np.transpose(np.argwhere(indices))
+                indices = indices[0] if len(indices.shape) == 2 and indices.shape[0] == 1 else indices
+                indices = _expr.const(indices)
 
+            # Iterate over each row and extract the selected columns
             res = []
             for dim in range(_infer_shape(data)[0]):
                 partial_res = _op.take(data, _expr.const(dim), 0)
-                index_inputs = (partial_res, index_indices,)
-                partial_res = _op.adv_index(index_inputs)
+                partial_res = _op.adv_index([partial_res, indices])
+                partial_res = _op.expand_dims(partial_res, 0)
                 res.append(partial_res)
-            out = _op.concatenate(res, 0)
-
-            return out
-
-        # Cover cases like x[mask]
-        if self.infer_type(indices[0]).dtype == "bool" and len(_analysis.free_vars(indices[0])) == 0:
-            try:
-                indices_val = indices[0].data.numpy()
-            except AttributeError as e:
-                indices_val = _infer_value(indices[0], {}).numpy()
-            index_indices = _expr.const(np.transpose(np.argwhere(indices_val)))
-            index_inputs = (data, index_indices,)
-            res = _op.adv_index(index_inputs)
+            res = _op.concatenate(res, 0)
 
             return res
-        
-        # Cover cases like x[mask] when mask is dependant on input activaiton
-        if len(indices) == 1 and _infer_shape(data)[0] == 1 and _infer_shape(indices[0])[0] == 1:
-            # Valid op usage
-            # Commented code provides correct fix for this op. Howver, due to usage of 
-            # argwhere to extract indices from boolean mask, it causes issues during further
-            # compilation. Therefore, in this case, adv_index should be fallback on CPU to
-            # avoid dynamic shape issues.
-            
+
+        # Cover cases when first dim (row) is selected based on boolean mask as indices (e.g. x[mask]),
+        # and indices aren't dependant on input activation
+        elif len(indices) == 1 and self.infer_type(indices[0]).dtype == "bool" and len(_analysis.free_vars(indices[0])) == 0:
+            indices = indices[0]
+
+            # Reduce data to 1D vector if needed
+            data_shape = _infer_shape(data)
+            data = _op.squeeze(data, axis=0) if len(data_shape) == 2 and data_shape[0] == 1 else data
+
+            assert len(_infer_shape(data)) == 1 and len(_infer_shape(indices)) == 1, "Currently supportes only 1D tensors"
+
+            if isinstance(indices, _expr.Constant):
+                # Extract direct data as numpy array
+                indices = indices.data.numpy()
+            else:
+                # Infer values to get constant data (discards irelevant math which
+                # will eventually be optimized out)
+                indices = _infer_value(indices, {}).numpy()
+
+            indices = np.transpose(np.argwhere(indices))
+            indices = indices[0] if len(indices.shape) == 2 and indices.shape[0] == 1 else indices
+            indices = _expr.const(indices)
+            res = _op.adv_index([data, indices])
+
+            return res
+
+        # Cover cases where boolean mask is used as indices (e.g. x[mask]), while indices have
+        # dependecies on input activations (or parameters)
+        elif len(indices) == 1 and self.infer_type(indices[0]).dtype == "bool" and len(_analysis.free_vars(indices[0])) > 0:
+            indices = indices[0]
+
+            # Reduce data to 1D vector if possible
+            data_shape = _infer_shape(data)
+            data = _op.squeeze(data, axis=_op.const([0])) if len(data_shape) == 2 and data_shape[0] == 1 else data
+
+            # Reduce indices to 1D vector if possible
+            indices_shape = _infer_shape(indices)
+            indices = _op.squeeze(indices, axis=_op.const([0])) if len(indices_shape) == 2 and indices_shape[0] == 1 else indices
+
+            assert len(_infer_shape(data)) == 1 and len(_infer_shape(indices)) == 1, "Currently supportes only 1D tensors"
+
+            # Make sure to have valid indices shape
+            # indices = _op.reshape(indices, newshape=[int(i) for i in _infer_shape(indices)])
+            indices = _op.reshape(indices, newshape=(-1,))
+
             # Extract indices from boolean mask
-            # index_indices = _op.transform.argwhere(tvm.relay.squeeze(indices[0], axis=[0]))
-            
-            # This reshape is forced in order to remove dynamic shapes. This means that this op
-            # should be fallback on CPU in order for this math to be valid.
-            # index_indices = tvm.relay.reshape(index_indices, newshape=_infer_shape(data)[1:])
+            indices = _op.transform.argwhere(indices)
+            # Doing this reshape to remove dynamic shapes caused by argwhere op (e.g. '?' shapes). This
+            # reshape will ensure that the output of argwhere (and following ops) is "predictable" in a 
+            # manner to suport further TVM compilation. However, this is only valid if this op is fallback
+            # on CPU. Otherwise, this reshape will cause incorrect results.
+            # indices = _op.reshape(indices, newshape=_infer_shape(data)[0])
+            indices = _op.transpose(indices, (1, 0))
+            indices = _op.squeeze(indices, _expr.const([0])) if len(_infer_shape(indices)) == 2 and _infer_shape(indices)[0] == 1 else indices
+            res = _op.adv_index([data, indices])
 
-            # data_squeezed = tvm.relay.squeeze(data, axis=[0])
-            # res = _op.adv_index([data_squeezed, index_indices])
-            # res = tvm.relay.expand_dims(res, axis=0)
-
-            # Invalid op usage
-            # Op adv_index doesn't support usage of boolean mask, only indices. Therefore,
-            # this math only helps to bypass this limitation as adv_index in this case is
-            # just piping the data. This is a temporary solution until adv_index is fixed.
-            # At the moment, all adv_indexing is done on CPU, so this is valid for now.
-            data = tvm.relay.squeeze(data, axis=[0])
-            indices[0] = tvm.relay.squeeze(indices[0], axis=[0])
-            res = _op.adv_index([data] + indices)
-            
             return res
 
         return _op.adv_index([data] + indices)
