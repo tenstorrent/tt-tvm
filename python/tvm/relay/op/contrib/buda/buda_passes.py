@@ -2755,6 +2755,21 @@ class RemoveRedundantBinaryStacks(DFPatternCallback):
         return act
 
 
+class RemoveStopFusionAnnotationNodes(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard()
+        self.stop_fusion_node = is_op("annotation.stop_fusion")(self.act)
+        
+        self.pattern = self.stop_fusion_node
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        
+        return act
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2872,6 +2887,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             # RemoveRedundantBinaryStacks(),
             DecomposeScatterND(),
             ConvertIsNaN(),
+            RemoveStopFusionAnnotationNodes(),
         ],
         params=params,
         inputs=inputs,
