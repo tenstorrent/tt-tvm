@@ -2796,6 +2796,39 @@ class Enforce1DOutputForArgwhereOp(DFPatternCallback):
 
         return post
 
+
+class BroadcastScatterValuesToMatchIndices(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard()
+        self.indices = wildcard()
+        self.updates = wildcard()
+        self.scatter = is_op("scatter")(self.act, self.indices, self.updates)
+        
+        self.pattern = self.scatter
+        
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        act = node_map[self.act][0]
+        indices = node_map[self.indices][0]
+        updates = node_map[self.updates][0]
+        updates_shape = pre_node_map[self.updates][0].checked_type.shape
+        scatter = node_map[self.scatter][0]
+
+        if len(updates_shape) == 1 and isinstance(updates_shape[0], tvm.tir.expr.IntImm) and int(updates_shape[0]) == 1:
+            # Match dtype for bcast
+            updates = tvm.relay.cast(updates, indices.checked_type.dtype)
+            updates = tvm.relay.broadcast_to_like(updates, indices)
+            # Match dtype for scatter
+            updates = tvm.relay.cast(updates, act.checked_type.dtype)
+            out = tvm.relay.scatter(act, indices, updates, int(scatter.attrs.axis))
+            return out
+
+        return post
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2915,6 +2948,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertIsNaN(),
             RemoveStopFusionAnnotationNodes(),
             Enforce1DOutputForArgwhereOp(),
+            BroadcastScatterValuesToMatchIndices(),
         ],
         params=params,
         inputs=inputs,
