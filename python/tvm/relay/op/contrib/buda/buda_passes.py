@@ -2770,6 +2770,32 @@ class RemoveStopFusionAnnotationNodes(DFPatternCallback):
         return act
 
 
+class Enforce1DOutputForArgwhereOp(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard()
+        self.argwhere = is_op("argwhere")(self.act)
+        self.transpose = is_op("transpose")(self.argwhere)
+        
+        self.pattern = self.transpose
+        
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        act = node_map[self.act][0]
+        act_shape = pre_node_map[self.act][0].checked_type.shape
+        transpose_shape = pre_node_map[self.transpose][0].checked_type.shape
+        
+        if len(act_shape) == 2 and int(act_shape[0]) == 1 and len(transpose_shape) == 2 and int(transpose_shape[0]) == 2:
+            out = tvm.relay.squeeze(act, axis=[0])
+            out = tvm.relay.argwhere(out)
+            out = tvm.relay.transpose(out, axes=[1, 0])
+            out = tvm.relay.squeeze(out, axis=[0])
+            return out
+
+        return post
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2888,6 +2914,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeScatterND(),
             ConvertIsNaN(),
             RemoveStopFusionAnnotationNodes(),
+            Enforce1DOutputForArgwhereOp(),
         ],
         params=params,
         inputs=inputs,
