@@ -3035,31 +3035,27 @@ class PyTorchOpConverter:
         if _infer_type(index_tensor).checked_type.dtype == "bool":
             if isinstance(values, float):
                 values = _expr.const(values, dtype=_infer_type(in_tensor).checked_type.dtype)
-                
-            # Debug values
-            # import torch
-            # from tvm.relay.frontend.common import analysis
-            # from tvm.relay.frontend.common import infer_shape
-            # from tvm.relay.frontend.common import infer_value
+            
+            # Make sure that dynamic output will be 1D vector
+            # index_tensor = _op.reshape(index_tensor, newshape=(-1,))
+            # Make sure that dynamic output will be 1D vector
+            # index_tensor_shape = _infer_shape(index_tensor)
+            # index_tensor = _op.squeeze(index_tensor, axis=_op.const([0])) if len(index_tensor_shape) == 2 and index_tensor_shape[0] == 1 else index_tensor
+            # Make sure that dynamic output will be 1D vector
+            # index_tensor_shape = _infer_shape(index_tensor)
+            # index_tensor = _op.take(index_tensor, _op.const(0), axis=0) if len(index_tensor_shape) == 2 and index_tensor_shape[0] == 1 else index_tensor
 
-            # input_shape = (1, 18)
-            # a = torch.rand(input_shape, dtype=torch.float32)
-            # a = tvm.nd.array(a)
-            # weight_shape = (18, 18)
-            # b = torch.rand(weight_shape, dtype=torch.float32)
-            # b = tvm.nd.array(b)
-            # bias_shape = (18,)
-            # c = torch.rand(bias_shape, dtype=torch.float32)
-            # c = tvm.nd.array(c)
+            indices = _op.transform.argwhere(index_tensor)
+            indices = _op.transpose(indices, (1, 0))
+            indices = _op.squeeze(indices, _expr.const([0])) if len(_infer_shape(indices)) == 2 and _infer_shape(indices)[0] == 1 else indices
             
-            # analysis.free_vars(in_tensor)
-            # infer_value(in_tensor, {'input': a, 'l1.weight': b, 'l1.bias': c})
-            # analysis.free_vars(values)
-            # infer_value(values, {'input': a, 'l1.weight': b, 'l1.bias': c})
-            # analysis.free_vars(in_tensor)
-            # infer_value(in_tensor, {'input': a, 'l1.weight': b, 'l1.bias': c})
+            # Make sure that dynamic output will be 1D vector
+            values = _op.reshape(values, newshape=(-1,))
             
-            res = _op.transform.where(index_tensor, values, in_tensor)
+            # Reduce data to 1D vector if possible
+            in_tensor = _op.reshape(in_tensor, newshape=(-1,))
+            
+            res = _op.scatter(in_tensor, indices, values, 0)
 
             return res
 
