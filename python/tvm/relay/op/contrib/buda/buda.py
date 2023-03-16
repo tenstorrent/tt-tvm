@@ -776,13 +776,15 @@ class MainFunctionFinder(ExprVisitor):
         self.cpu_funcs = []
         self.tt_funcs = []
 
-    def visit_global_var(self, gvar):
-        if "pybuda_cpudevice_main" in gvar.name_hint:
-            self.funcs.append(gvar)
-            self.cpu_funcs.append(gvar)
-        elif "pybuda_main" in gvar.name_hint:
-            self.funcs.append(gvar)
-            self.tt_funcs.append(gvar)
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.relay.expr.GlobalVar):
+            if "pybuda_cpudevice_main" in call.op.name_hint:
+                self.funcs.append(call.op)
+                self.cpu_funcs.append(call.op)
+            elif "pybuda_main" in call.op.name_hint:
+                self.funcs.append(call.op)
+                self.tt_funcs.append(call.op)
+        super().visit_call(call)
             
 
 class NodeOriginFinder(ExprVisitor):
@@ -1173,7 +1175,7 @@ class FunctionPlacer(ExprMutator):
             
         return super().visit_call(call)
 
-class FunctionFinder(ExprVisitor):
+class FunctionCallNodeFinder(ExprVisitor):
 
     def __init__(self, function_names):
         super().__init__()
@@ -1187,7 +1189,7 @@ class FunctionFinder(ExprVisitor):
         return super().visit_call(call)
 
 def extract_function_callnodes(main_module, funcs):
-    ff = FunctionFinder([func.name_hint for func in funcs])
+    ff = FunctionCallNodeFinder([func.name_hint for func in funcs])
 
     ff.visit(main_module)
     return ff.funcs
@@ -1299,6 +1301,148 @@ def merge_functions(mod, funcs_to_merge, new_name):
     
     return mod
 
+class TupleGetItemIndexSwapper(ExprMutator):
+    def __init__(self, relavent_tup, old_idx, new_idx):
+        super().__init__()
+        self.relevant_tup = relavent_tup
+        self.old_idx = old_idx
+        self.new_idx = new_idx
+        self.already_changed = []
+        
+    def visit_tuple_getitem(self, tup_getitem):
+        if tup_getitem.tuple_value == self.relevant_tup and tup_getitem not in self.already_changed:
+            if tup_getitem.index == self.old_idx:
+                self.already_changed.append(super().visit_tuple_getitem(tvm.relay.expr.TupleGetItem(tup_getitem.tuple_value, self.new_idx)))
+                return self.already_changed[-1]
+            elif self.old_idx < self.new_idx and self.new_idx >= tup_getitem.index > self.old_idx:
+                self.already_changed.append(super().visit_tuple_getitem(tvm.relay.expr.TupleGetItem(tup_getitem.tuple_value, tup_getitem.index - 1)))
+                return self.already_changed[-1]
+            
+            elif self.old_idx > self.new_idx and self.new_idx <= tup_getitem.index < self.old_idx:
+                self.already_changed.append(super().visit_tuple_getitem(tvm.relay.expr.TupleGetItem(tup_getitem.tuple_value, tup_getitem.index + 1)))
+                return self.already_changed[-1]
+        return super().visit_tuple_getitem(tup_getitem)
+
+class CallNodeReplacer(ExprMutator):
+    def __init__(self, old_callnode, new_callnode):
+        super().__init__()
+        self.old_callnode = old_callnode
+        self.new_callnode = new_callnode
+        
+    def visit_call(self, call):
+        if call == self.old_callnode:
+            return super().visit_call(self.new_callnode)
+        return super().visit_call(call)
+
+
+def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
+
+    def swap_outputs(mod, func, old_idx, new_idx):
+        
+        function = mod[func]
+        new_body = function.body
+
+        assert isinstance(new_body, tvm.relay.expr.Tuple), "Expected tuple output"
+        outputs = list(new_body.fields)
+        if new_idx >= len(outputs):
+            new_idx = len(outputs) - 1
+        
+        tmp = outputs.pop(old_idx)
+        outputs.insert(new_idx, tmp)
+        new_body = tvm.relay.expr.Tuple(outputs)
+        
+        new_return_type = list(function.ret_type.fields)
+        tmp = new_return_type.pop(old_idx)
+        new_return_type.insert(new_idx, tmp)
+        new_fn = tvm.relay.Function(function.params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=function.attrs)
+        mod[func] = new_fn
+
+        # swap tuplegetitem indices in main module
+        func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+        mod["main"] = TupleGetItemIndexSwapper(func_callnode, old_idx, new_idx).visit(mod["main"])
+        return mod
+
+    def swap_inputs(mod, func, old_idx, new_idx):
+        function = mod[func]
+
+        # Switch params
+        new_params = list(function.params)
+        tmp = new_params.pop(old_idx)
+        new_params.insert(new_idx, tmp)
+        
+        new_fn = tvm.relay.Function(new_params, function.body, ret_type=function.ret_type, attrs=function.attrs)
+        mod[func] = new_fn
+        
+        # switch args in main module
+        func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+        new_args = list(func_callnode.args)
+        tmp = new_args.pop(old_idx)
+        new_args.insert(new_idx, tmp)
+        new_call = tvm.relay.expr.Call(func_callnode.op, new_args, attrs=func_callnode.attrs)
+        
+        mod["main"] = CallNodeReplacer(func_callnode, new_call).visit(mod["main"])
+        
+        return mod
+    
+    
+    
+    # if there is a cpu pre function, align its output with the tt function input
+    if cpu_pre_func:
+        tt_func_callnode = extract_function_callnodes(mod["main"], [tt_func])[0]
+        tt_arg_origins = [trace_to_origin(arg, [cpu_pre_func]) for arg in tt_func_callnode.args]
+        
+        inter_fn_idx = 0
+        for input_idx, origin in enumerate(tt_arg_origins):
+            if origin is not None:
+                if inter_fn_idx != input_idx:
+                    assert input_idx > inter_fn_idx, "Expected input_idx to be greater than inter_fn_idx"
+                    
+                    # This means that the current tt func arg originates from the cpu pre func, but weights come before it, move to the front
+                    mod = swap_inputs(mod, tt_func, input_idx, inter_fn_idx)
+                inter_fn_idx += 1
+        
+        # Retrieve these two again since the order may have changed
+        tt_func_callnode = extract_function_callnodes(mod["main"], [tt_func])[0]
+        tt_arg_origins = [trace_to_origin(arg, [cpu_pre_func]) for arg in tt_func_callnode.args]
+        
+        for input_idx, origin in enumerate(tt_arg_origins):
+            if origin is not None:
+                _, output_idx = origin
+                if input_idx != output_idx and isinstance(mod[cpu_pre_func].body, tvm.relay.expr.Tuple):
+                    mod = swap_outputs(mod, cpu_pre_func, output_idx, input_idx)
+
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+    
+    # if there is a cpu post function, align its input with the tt function output
+    if cpu_post_func:
+        cpu_post_func_callnode = extract_function_callnodes(mod["main"], [cpu_post_func])[0]
+        cpu_post_arg_origins = [trace_to_origin(arg, [tt_func]) for arg in cpu_post_func_callnode.args]
+        
+        inter_fn_idx = 0
+        for input_idx, origin in enumerate(cpu_post_arg_origins):
+            if origin is not None:
+                if inter_fn_idx != input_idx:
+                    assert input_idx > inter_fn_idx, "Expected input_idx to be greater than inter_fn_idx"
+                    
+                    # This means that the current tt func arg originates from the cpu pre func, but weights come before it, move to the front
+                    mod = swap_inputs(mod, cpu_post_func, input_idx, inter_fn_idx)
+                inter_fn_idx += 1
+        
+        # Retrieve these two again since the order may have changed
+        cpu_post_func_callnode = extract_function_callnodes(mod["main"], [cpu_post_func])[0]
+        cpu_post_arg_origins = [trace_to_origin(arg, [tt_func]) for arg in cpu_post_func_callnode.args]
+        
+        for input_idx, origin in enumerate(cpu_post_arg_origins):
+            if origin is not None:
+                _, output_idx = origin
+                if input_idx != output_idx and isinstance(mod[tt_func].body, tvm.relay.expr.Tuple):
+                    # swap the outputs of tt_func
+                    mod = swap_outputs(mod, tt_func, output_idx, input_idx)
+
+    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+    return mod
+    
+
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
 
@@ -1367,6 +1511,25 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         mod = merge_functions(mod, partition_finder.cpu_pre_funcs, "tvmgen_default_pybuda_cpudevice_main_pre")
         mod = merge_functions(mod, partition_finder.tt_funcs, "tvmgen_default_pybuda_main")
         mod = merge_functions(mod, partition_finder.cpu_post_funcs, "tvmgen_default_pybuda_cpudevice_main_post")
+        
+        # Since the tvm graph is valid, the order of the outputs/inputs to each function doesnt matter yet.
+        # However, if for example the 10th output of the tt function is the 2nd input of the cpu post function,
+        # the json graphs that get generated will not contain the information about the order of the inputs/outputs.
+        
+        func_finder = MainFunctionFinder()
+        func_finder.visit(mod["main"])
+
+        partition_finder = PartitionFinder(mod, func_finder.tt_funcs, func_finder.cpu_funcs)
+        partition_finder.visit(mod["main"])
+        assert len(partition_finder.cpu_pre_funcs) <= 1, "There should only be one cpu pre function"
+        assert len(partition_finder.tt_funcs) == 1, "There should only be one tt function"
+        assert len(partition_finder.cpu_post_funcs) <= 1, "There should only be one cpu post function"
+        
+        cpu_pre_func = partition_finder.cpu_pre_funcs[0] if len(partition_finder.cpu_pre_funcs) > 0 else None
+        tt_func = partition_finder.tt_funcs[0]
+        cpu_post_func = partition_finder.cpu_post_funcs[0] if len(partition_finder.cpu_post_funcs) > 0 else None
+        
+        mod = align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func)
         
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
             main_body_call_node = [mod["main"].body]

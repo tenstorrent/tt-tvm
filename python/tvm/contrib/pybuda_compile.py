@@ -224,20 +224,25 @@ def add_node_as_passthrough(graph, node, index=None):
     else:
         graph["heads"][index] = [len(graph["nodes"])-1, 0, 0]
 
-def classify_passthrough_inputs_as_heads(graph, num_inputs, weight_names):
-    for i in range(num_inputs):
-        # Find index of ith input
-        inp_count = -1
-        node_idx = -1
-        while i != inp_count:
-            node_idx += 1
-            node = graph["nodes"][node_idx]
+def classify_passthrough_inputs_as_heads(graph, input_idx_list, weight_names):
+    # for i in range(num_inputs):
+    #     # Find index of ith input
+    #     inp_count = -1
+    #     node_idx = -1
+    #     while i != inp_count:
+    #         node_idx += 1
+    #         node = graph["nodes"][node_idx]
             
-            if node['op'] == 'input' and node['name'] not in weight_names:
-                inp_count += 1
+    #         if node['op'] == 'input' and node['name'] not in weight_names:
+    #             inp_count += 1
         
-        if [node_idx, 0, 0] not in graph["heads"]:
-            graph["heads"].append([node_idx, 0, 0])
+    #     if [node_idx, 0, 0] not in graph["heads"]:
+    #         graph["heads"].append([node_idx, 0, 0])
+
+    for i in input_idx_list:
+        head_node_idx = graph["arg_nodes"][i]
+        if [head_node_idx, 0, 0] not in graph["heads"]:
+            graph["heads"].append([head_node_idx, 0, 0])
 
 def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_mod, input_names, weight_names):
     first, second, third = first_json["graph"], second_json["graph"], third_json["graph"]
@@ -307,7 +312,7 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
                     add_node_as_passthrough(first, new_arg_node)
                 else:
                     # Make sure this input is a head of the first module
-                    classify_passthrough_inputs_as_heads(first, len(first_input_origins), weight_names)
+                    classify_passthrough_inputs_as_heads(first, list(range(len(first_input_origins))), weight_names)
         
             # Add passthrough to second module
             if output not in second_input_origins:
@@ -332,7 +337,7 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
                     add_node_as_passthrough(second, new_arg_node)
                 # Otherwise ensure that the model output which is also consumed in the second module is passed through
                 else:
-                    classify_passthrough_inputs_as_heads(second, len(second_input_origins), weight_names)
+                    classify_passthrough_inputs_as_heads(second, list(range(len(second_input_origins))), weight_names)
 
                 if third_exists:
                     # If the output in question is not already passed into the third module
@@ -340,7 +345,7 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
                         add_node_as_passthrough(third, new_arg_node)
                     # Otherwise ensure that the model output which is also consumed in the third module is passed through
                     else:
-                        classify_passthrough_inputs_as_heads(third, len(third_input_origins), weight_names)
+                        classify_passthrough_inputs_as_heads(third, list(range(len(third_input_origins))), weight_names)
                     
 
             elif originating_function_name == second_name:
@@ -352,7 +357,7 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
                     if output not in third_input_origins:
                         add_node_as_passthrough(third, new_arg_node)
                     else:
-                        classify_passthrough_inputs_as_heads(third, len(third_input_origins), weight_names)
+                        classify_passthrough_inputs_as_heads(third, [third_input_origins.index(output)], weight_names)
 
 
     if first_exists:
@@ -367,11 +372,10 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
                 if passthrough_node >= 0:
                     index = second_input_names.index(name)
                     add_node_as_passthrough(first, second["nodes"][passthrough_node], index)
-
         first = json.dumps(first)
+        
     
     if third_exists:
-
         # Ensure input variables required in multiple modules are passed through
         needed_first_and_second = [[input_name == node["name"] for node in third["nodes"]].index(True) if any([input_name == node["name"] for node in third["nodes"]]) else -1 for input_name in input_names]
         third_input_names = [inp.name_hint if isinstance(inp, tvm.relay.expr.Var) else None for inp in third_input_origins]
@@ -384,9 +388,9 @@ def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_m
 
                     index = third_input_names.index(name)
                     add_node_as_passthrough(second, third["nodes"][passthrough_node], index)
-
+                    
         third = json.dumps(third)
-
+        
     second = json.dumps(second)
     return first, second, third
 
