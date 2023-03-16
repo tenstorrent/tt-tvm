@@ -656,6 +656,10 @@ class RemoveRedundantTake(DFPatternCallback):
         act_shape = list(pre.args[0].checked_type.shape)
         axis = pre.attrs.axis
 
+        # Skip removal of takes which contain dynamic shapes
+        if any([isinstance(dim, tvm.tir.expr.Any) for dim in act_shape]):
+            return post
+
         if act_shape[int(axis)] == 1 and indices == 0:
             newshape = act_shape
             del newshape[int(axis)]
@@ -770,6 +774,10 @@ class LowerTakeToStridedSlice(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        # Skip removal of takes which contain dynamic shapes
+        if any([isinstance(dim, tvm.tir.expr.Any) for dim in pre.checked_type.shape]):
+            return post
 
         act = node_map[self.input_tensor][0]
         try:
@@ -1589,6 +1597,10 @@ class LowerSqueezeToReshape(DFPatternCallback):
         self.pattern = is_op('squeeze')(wildcard())
 
     def callback(self, pre, post, node_map):
+        # Skip removal of squeeze which contain dynamic shapes
+        if any([isinstance(dim, tvm.tir.expr.Any) for dim in pre.checked_type.shape]):
+            return post
+        
         return tvm.relay.reshape(post.args[0], newshape=pre.checked_type.shape)
 
 class TransposePad(DFPatternCallback):
