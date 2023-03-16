@@ -81,7 +81,7 @@ class CreateJson(ExprVisitor):
                     shape.append([int(dim) for dim in field.shape])
             op["cache"] = {"shape": shape}
         else:
-            op["cache"] = {"shape": [int(dim) for dim in call.checked_type.shape]}
+            op["cache"] = {"shape": [int(dim) if isinstance(dim, (int, float, complex)) else str(dim) for dim in call.checked_type.shape]}
         op["opcode"] = "Input"
         op["class"] = "Input::"
         op["type"] = "Input::input"
@@ -130,10 +130,7 @@ class CreateJson(ExprVisitor):
         shape = []
         for field in tup.checked_type.fields:
             if hasattr(field, "shape"):
-                try:
-                    shape.append([int(dim) for dim in field.shape])
-                except Exception:
-                    shape.append([])
+                shape.append([int(dim) if isinstance(dim, (int, float, complex)) else str(dim) for dim in field.shape])
 
         op["cache"] = {"shape": shape}
         op["class"] = "tuple"
