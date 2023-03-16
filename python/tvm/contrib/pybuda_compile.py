@@ -472,7 +472,6 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     else:
         cpu_post_json_graph = {"graph":""}
     
-    import pdb; pdb.set_trace()
     cpu_pre_json_graph['graph'], dev_json_graph['graph'], cpu_post_json_graph['graph'] = add_passthrough_if_needed(
         cpu_pre_json_graph, dev_json_graph, cpu_post_json_graph, partitioned_mod, input_names, weight_names
     )
