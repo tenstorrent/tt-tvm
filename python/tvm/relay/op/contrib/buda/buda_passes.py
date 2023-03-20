@@ -560,12 +560,11 @@ class LiftLinearSplit(DFPatternCallback):
         newshape = list(output_shape)
         newshape[axis] = -1
 
-        if (is_unsqueeze(node_map[self.reshape][0])):
-            # Weight should be transposed in nn.dense, so if splitting
-            # along the final output axis, split along the first weight
-            if axis == len(output_shape) - 1 or axis == -1:
-                assert output_shape[axis] == pre_node_map[self.dense_weight][0].checked_type.shape[0]
-                axis = 0
+        # Weight should be transposed in nn.dense, so if splitting
+        # along the final output axis, split along the first weight
+        if axis == len(output_shape) - 1 or axis == -1:
+            assert output_shape[axis] == pre_node_map[self.dense_weight][0].checked_type.shape[0]
+            axis = 0
 
         act = node_map[self.dense][0].args[0]
 
@@ -2585,6 +2584,8 @@ class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
         self.pattern = self.reshape
 
     def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = pre_node_map[self.act][0].checked_type.shape
         t1 = node_map[self.transpose_1][0]
         t1_axes = [int(dim) for dim in t1.attrs.axes]
         t2 = node_map[self.transpose_2][0]
@@ -2597,10 +2598,10 @@ class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
             return post
         eos = [input_shape[0], input_shape[1] * input_shape[2], input_shape[3]]
         if t1_axes == [0, 2, 1, 3] and t2_axes == [0, 1, 3, 2] and newshape == eos:
-            newshape = [1, 1, eos[2], eos[1]]
+            newshape = [1, int(act_shape[0]), eos[2], eos[1]]
             r1 = tvm.relay.reshape(node_map[self.act][0], newshape)
             t1 = tvm.relay.transpose(r1, axes=[0, 1, 3, 2])
-            squeeze = tvm.relay.reshape(t1, newshape=[1, eos[1], eos[2]])
+            squeeze = tvm.relay.reshape(t1, newshape=[int(act_shape[0]), eos[1], eos[2]])
             return squeeze
         else:
             return post
