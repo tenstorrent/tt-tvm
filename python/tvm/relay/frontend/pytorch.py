@@ -3127,7 +3127,9 @@ class PyTorchOpConverter:
                     shape.append(item)
         else:
             shape = [int(dim.data.numpy()) if isinstance(dim, _expr.Constant) else dim for dim in inputs[0]]
-        return _op.zeros(shape, _convert_dtype_value(inputs[1]))
+
+        data = np.zeros(shape)
+        return _create_typed_const(data, _convert_dtype_value(inputs[1]))
 
     def empty_like(self, inputs, input_types):
         shape = self.infer_shape(inputs[0])
