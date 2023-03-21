@@ -1263,8 +1263,6 @@ def merge_functions(mod, funcs_to_merge, new_name):
             if not type_param in new_type_params:
                 new_type_params.append(type_param)
     
-    # new_attrs = mod[funcs_to_merge[0]].attrs
-    
     new_fn = tvm.relay.Function(new_params, new_body)
     new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in mod[funcs_to_merge[0]].attrs.items()}
     new_attrs["global_symbol"] = new_name
@@ -1290,8 +1288,11 @@ def merge_functions(mod, funcs_to_merge, new_name):
             fn_callnode = extract_function_callnodes(mod["main"], [fn_gvar])[0]
             for old_idx, new_idx in input_map.items():
                 if new_idx == len(new_args):
-                    new_args.append(fn_callnode.args[old_idx])
-        
+                    arg = fn_callnode.args[old_idx]
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.relay.expr.GlobalVar):
+                        arg = extract_function_callnodes(placed, [arg.op])[0]
+                    new_args.append(arg)
+                    
     placed = FunctionArgPlacer(gvar, new_args).visit(placed)
     mod["main"] = placed
     
@@ -1324,16 +1325,43 @@ class TupleGetItemIndexSwapper(ExprMutator):
         return super().visit_tuple_getitem(tup_getitem)
 
 class CallNodeReplacer(ExprMutator):
-    def __init__(self, old_callnode, new_callnode):
+    def __init__(self, old_callnode, replacement):
         super().__init__()
         self.old_callnode = old_callnode
-        self.new_callnode = new_callnode
+        self.replacement = replacement
         
     def visit_call(self, call):
         if call == self.old_callnode:
-            return super().visit_call(self.new_callnode)
+            if isinstance(self.replacement, tvm.relay.expr.Call):
+                self.replacement = super().visit_call(self.replacement)
+                return self.replacement
+            else:
+                self.replacement = super().visit(self.replacement)
+                return self.replacement
         return super().visit_call(call)
 
+class TupleGetItemReplacer(ExprMutator):
+    def __init__(self, old_tup_getitem, new_tup_getitem):
+        super().__init__()
+        self.old_tup_getitem = old_tup_getitem
+        self.new_tup_getitem = new_tup_getitem
+        self.replaced = False
+        
+    def visit_tuple_getitem(self, tup_getitem):
+        if tup_getitem == self.old_tup_getitem:
+            if isinstance(self.new_tup_getitem, tvm.relay.expr.TupleGetItem):
+                return super().visit_tuple_getitem(self.new_tup_getitem)
+            else:
+                return super().visit(self.new_tup_getitem)
+        return super().visit_tuple_getitem(tup_getitem)
+        
+    def visit_call(self, call):
+        if call == self.old_tup_getitem:
+            if isinstance(self.new_tup_getitem, tvm.relay.expr.TupleGetItem):
+                return super().visit_tuple_getitem(self.new_tup_getitem)
+            else:
+                return super().visit(self.new_tup_getitem)
+        return super().visit_call(call)
 
 def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
 
@@ -1384,8 +1412,14 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
         
         return mod
     
-    
-    
+    def permute_list(l, permute_map):
+        assert len(l) == len(permute_map.items()), "Require an i->j mapping for each element in the list"
+        
+        new_list = [None] * len(l)
+        for old_idx, new_idx in permute_map.items():
+            new_list[new_idx] = l[old_idx]
+
+        return new_list
     # if there is a cpu pre function, align its output with the tt function input
     if cpu_pre_func:
         tt_func_callnode = extract_function_callnodes(mod["main"], [tt_func])[0]
@@ -1411,6 +1445,31 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
                 if input_idx != output_idx and isinstance(mod[cpu_pre_func].body, tvm.relay.expr.Tuple):
                     mod = swap_outputs(mod, cpu_pre_func, output_idx, input_idx)
 
+        # Find a map for which outputs from cpu pre go to which inputs of tt
+        tt_func_callnode = extract_function_callnodes(mod["main"], [tt_func])[0]
+        tt_arg_origins = [trace_to_origin(arg, [cpu_pre_func]) for arg in tt_func_callnode.args]
+        io_map = {}
+        num_args = 0
+        for input_idx, origin in enumerate(tt_arg_origins):
+            if origin is not None:
+                _, output_idx = origin
+                io_map[input_idx] = output_idx
+                num_args += 1
+            
+        # Permute the params of the function
+        tt_function = mod[tt_func]
+        new_params = list(tt_function.params)
+        new_params = permute_list(new_params[:num_args], io_map) + new_params[num_args:] # Everything after index: num_args are actual parameters, not activations
+        new_tt_function = tvm.relay.Function(new_params, tt_function.body, ret_type=tt_function.ret_type, attrs=tt_function.attrs)
+        mod[tt_func] = new_tt_function
+        
+        # Permute the args of the tt function call
+        tt_func_callnode = extract_function_callnodes(mod["main"], [tt_func])[0]
+        old_args = list(tt_func_callnode.args)[:num_args] 
+        new_args = permute_list(old_args, io_map) + list(tt_func_callnode.args)[num_args:] # Everything after index: num_args are actual parameters, not activations
+        new_call = tvm.relay.expr.Call(tt_func_callnode.op, new_args, attrs=tt_func_callnode.attrs)
+        mod["main"] = CallNodeReplacer(tt_func_callnode, new_call).visit(mod["main"])
+        
     mod = tvm.transform.Sequential([transform.InferType()])(mod)
     
     # if there is a cpu post function, align its input with the tt function output
@@ -1439,9 +1498,211 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
                     # swap the outputs of tt_func
                     mod = swap_outputs(mod, tt_func, output_idx, input_idx)
 
+        # Find a map for which outputs from tt go to which inputs of cpu post
+        cpu_post_func_callnode = extract_function_callnodes(mod["main"], [cpu_post_func])[0]
+        cpu_post_arg_origins = [trace_to_origin(arg, [tt_func]) for arg in cpu_post_func_callnode.args]
+        io_map = {}
+        num_args = 0
+        for input_idx, origin in enumerate(cpu_post_arg_origins):
+            if origin is not None:
+                _, output_idx = origin
+                io_map[input_idx] = output_idx
+                num_args += 1
+        
+        # Permute the params of the function
+        cpu_post_function = mod[cpu_post_func]
+        new_params = list(cpu_post_function.params)
+        new_params = permute_list(new_params[:num_args], io_map) + new_params[num_args:] # Everything after index: num_args are actual parameters, not activations
+        new_cpu_post_function = tvm.relay.Function(new_params, cpu_post_function.body, ret_type=cpu_post_function.ret_type, attrs=cpu_post_function.attrs)
+        mod[cpu_post_func] = new_cpu_post_function
+        
+        # Permute the args of the tt function call
+        cpu_post_func_callnode = extract_function_callnodes(mod["main"], [cpu_post_func])[0]
+        old_args = list(cpu_post_func_callnode.args)[:num_args]
+        new_args = permute_list(old_args, io_map) + list(cpu_post_func_callnode.args)[num_args:] # Everything after index: num_args are actual parameters, not activations
+        new_call = tvm.relay.expr.Call(cpu_post_func_callnode.op, new_args, attrs=cpu_post_func_callnode.attrs)
+        mod["main"] = CallNodeReplacer(cpu_post_func_callnode, new_call).visit(mod["main"])
+        
     mod = tvm.transform.Sequential([transform.InferType()])(mod)
     return mod
+
+def add_passthrough_variable(mod, func, output_node, var_name):
     
+    # add new param
+    new_params = list(mod[func].params)
+    func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+    new_var = None
+    existing_var = None
+    # Do not add param if it already exists, only need to pass it through as output as well
+    if output_node not in func_callnode.args:
+        new_var = tvm.relay.var(var_name, output_node.checked_type)
+        new_params.append(new_var)
+    else:
+        existing_var = mod[func].params[list(func_callnode.args).index(output_node)]
+        
+    output_op = None
+    if isinstance(output_node, tvm.relay.expr.TupleGetItem):
+        output_op = output_node.tuple_value.op
+    elif isinstance(output_node, tvm.relay.expr.Call):
+        output_op = output_node.op
+    elif isinstance(output_node, tvm.relay.expr.Var):
+        pass
+    else:
+        assert False, f"Cannot handle output node of type {type(output_node)}" 
+    
+    # add new output
+    orig_output = mod[func].body
+    new_num_outputs = 0
+    if not isinstance(orig_output, tvm.relay.expr.Tuple) and new_var:
+        output = [orig_output, new_var]
+        new_num_outputs = 2
+    elif isinstance(orig_output, tvm.relay.expr.Tuple) and new_var:
+        output = [*list(orig_output.fields), new_var]
+        new_num_outputs = len(output)
+    elif isinstance(orig_output, tvm.relay.expr.Tuple) and not new_var:
+        output = [*list(orig_output.fields), existing_var]
+        new_num_outputs = len(output)
+    else:
+        output = [orig_output, existing_var]
+        new_num_outputs = 2
+    
+    
+    new_body = tvm.relay.expr.Tuple(output)
+    new_return_type = []
+    if not isinstance(mod[func].ret_type, tvm.relay.ty.TupleType):
+        new_return_type = [mod[func].ret_type]
+    else:
+        new_return_type.extend(mod[func].ret_type.fields)
+    new_return_type.append(output_node.checked_type)
+    new_fn = tvm.relay.Function(new_params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=mod[func].attrs)
+
+    mod[func] = new_fn
+    
+    # Fix first output retrieval if func output was not originally a tuple
+    if not isinstance(orig_output, tvm.relay.expr.Tuple):
+        func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+        # Must clone or CallNodeReplacer will recurse infinitely
+        func_callnode_clone = tvm.relay.expr.Call(func_callnode.op, func_callnode.args, attrs=func_callnode.attrs)
+        tgi = tvm.relay.expr.TupleGetItem(func_callnode_clone, 0)
+        new_call = tvm.relay.expr.Call(tgi, [])
+        mod["main"] = CallNodeReplacer(func_callnode, tgi).visit(mod["main"])
+    
+    # Add output var to args in passthrough in main
+    func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+    
+    if new_var:
+        if isinstance(output_node, tvm.relay.expr.TupleGetItem):
+            originating_func_callnode = extract_function_callnodes(mod["main"], [output_op])[0]
+            passthrough_node = tvm.relay.expr.TupleGetItem(originating_func_callnode, output_node.index)
+        elif isinstance(output_node, tvm.relay.expr.Var):
+            passthrough_node = output_node
+        else:
+            originating_func_callnode = extract_function_callnodes(mod["main"], [output_op])[0]
+            passthrough_node = originating_func_callnode
+        
+        new_args = [*list(func_callnode.args), passthrough_node]
+        new_call = tvm.relay.expr.Call(func_callnode.op, new_args, attrs=func_callnode.attrs)
+        replacer = CallNodeReplacer(func_callnode, new_call)
+        mod["main"] = replacer.visit(mod["main"])
+        
+        # Replace output tuplegetitem with new tuplegetitem
+        new_output_tgi = tvm.relay.expr.TupleGetItem(replacer.replacement, new_num_outputs - 1)
+    else:
+        # Must add new tuplegetitem and replace output with that, rather than swapping out the existing one
+        new_output_tgi = tvm.relay.expr.TupleGetItem(func_callnode, new_num_outputs - 1)
+
+    return mod, new_output_tgi
+    
+def handle_output_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
+    
+    output = mod["main"].body
+    
+    func_order = [func for func in [cpu_pre_func, tt_func, cpu_post_func] if func is not None]
+    if not isinstance(output, tvm.relay.expr.Tuple):
+        # Single output must come from last function by this point.
+        assert trace_to_origin(output, [func_order[-1]]), "Expected output to come from last function"
+        return mod
+    
+    origins = [param for param in mod["main"].params] + [tt_func]
+    if cpu_pre_func:
+        origins.append(cpu_pre_func)
+    if cpu_post_func:
+        origins.append(cpu_post_func)
+        
+    outputs = list(output.fields)
+    
+    output_origins = [(output, trace_to_origin(output, origins)) for output in outputs]
+    passthrough_count = 0
+    for out_idx, (out, output_origin) in enumerate(output_origins):
+        if output_origin is not None:
+            if output_origin[0] != func_order[-1].name_hint:
+        
+                originating_func_idx = 0
+                for func in func_order:
+                    if func.name_hint == output_origin[0]:
+                        break
+                    originating_func_idx += 1
+                
+                originating_func = func_order[originating_func_idx]
+                passthrough_funcs = func_order[originating_func_idx+1:]
+                
+                
+                for passthrough_func in passthrough_funcs:
+                    # type is required for add_passthrough_variable
+                    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+                    output_node = mod["main"].body.fields[out_idx]
+                    mod, new_output_node = add_passthrough_variable(mod, passthrough_func, output_node, f"passthrough_{passthrough_count}")
+                    
+                    # Passthrough to output
+                    passthrough_func_callnode = extract_function_callnodes(mod["main"], [passthrough_func])[0]
+                    output_node = mod["main"].body.fields[out_idx]
+                    if output_node not in passthrough_func_callnode.args:
+                        # Re-retrieve output since its predecessors may have changed
+                        mod["main"] = TupleGetItemReplacer(output_node, new_output_node).visit(mod["main"])
+                    else:
+                        outputs = list(mod["main"].body.fields)
+                        outputs[out_idx] = new_output_node
+                        new_main_fn = tvm.relay.Function(mod["main"].params, tvm.relay.expr.Tuple(outputs), ret_type=mod["main"].ret_type, attrs=mod["main"].attrs)
+                        mod["main"] = new_main_fn
+                    
+                    passthrough_count += 1
+       
+    return mod
+                
+def handle_input_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func, input_names):
+    output = mod["main"].body
+    model_params = [param for param in mod["main"].params if param.name_hint in input_names]
+    func_order = [func for func in [cpu_pre_func, tt_func, cpu_post_func] if func is not None]
+    if len(func_order) == 1:
+        return mod
+    
+    for param in model_params:
+        funcs_that_use_param = []
+        for func in func_order:
+            func_callnode = extract_function_callnodes(mod["main"], [func])[0]
+            if param in func_callnode.args:
+                funcs_that_use_param.append(func)
+        
+        # Need to pass through all funcs that use param before funcs_that_use_param[-1]
+        
+        passthrough_funcs = func_order[:func_order.index(funcs_that_use_param[-1])]
+        
+        for passthrough_func in passthrough_funcs:
+            # type is required for add_passthrough_variable
+            mod = tvm.transform.Sequential([transform.InferType()])(mod)
+            mod, new_func_arg = add_passthrough_variable(mod, passthrough_func, param, param.name_hint)
+            
+            # convert all args that use param to use new_func_arg
+            funcs_to_change_arg = func_order[func_order.index(passthrough_func)+1:]
+            
+            for func_to_change_arg in funcs_to_change_arg:
+                func_callnode = extract_function_callnodes(mod["main"], [func_to_change_arg])[0]
+                if param in func_callnode.args:
+                    new_args = list(func_callnode.args)
+                    new_args[new_args.index(param)] = new_func_arg
+                    new_call = tvm.relay.Call(func_callnode.op, new_args, func_callnode.attrs)
+                    mod["main"] = FunctionArgPlacer(func_to_change_arg, new_args).visit(mod["main"])
+    return mod
 
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
@@ -1507,15 +1768,11 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         # now we have the pre/post functions figured out
         # merge the pre-functions, tt-functions, and post-functions into one each
         #     i.e we have one cpu pre function, one cpu post function, and one tt function
-
         mod = merge_functions(mod, partition_finder.cpu_pre_funcs, "tvmgen_default_pybuda_cpudevice_main_pre")
         mod = merge_functions(mod, partition_finder.tt_funcs, "tvmgen_default_pybuda_main")
         mod = merge_functions(mod, partition_finder.cpu_post_funcs, "tvmgen_default_pybuda_cpudevice_main_post")
         
-        # Since the tvm graph is valid, the order of the outputs/inputs to each function doesnt matter yet.
-        # However, if for example the 10th output of the tt function is the 2nd input of the cpu post function,
-        # the json graphs that get generated will not contain the information about the order of the inputs/outputs.
-        
+        # Assert that merge_functions merges cpu pre/post into at most one each, and that there is exactly one tt function
         func_finder = MainFunctionFinder()
         func_finder.visit(mod["main"])
 
@@ -1525,11 +1782,25 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         assert len(partition_finder.tt_funcs) == 1, "There should only be one tt function"
         assert len(partition_finder.cpu_post_funcs) <= 1, "There should only be one cpu post function"
         
+        # Handle passthrough
+        # All outputs of mod["main"] should come from the last function (tt_func or cpu_post_func if it exists)
+        # Any outputs that come before this should be passed through each descendant function in an f(x) = x manner
         cpu_pre_func = partition_finder.cpu_pre_funcs[0] if len(partition_finder.cpu_pre_funcs) > 0 else None
         tt_func = partition_finder.tt_funcs[0]
         cpu_post_func = partition_finder.cpu_post_funcs[0] if len(partition_finder.cpu_post_funcs) > 0 else None
         
+        # This handles the cases where a model input is directly consumed in the cpu post func (if it exists) or tt func (if the cpu pre exists)
+        mod = handle_input_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func, input_names)
+        
+        # Since the tvm graph is valid, the order of the outputs/inputs to each function doesnt matter yet.
+        # However, if for example the 10th output of the tt function is the 2nd input of the cpu post function,
+        # the json graphs that get generated will not contain the information about the order of the inputs/outputs.
         mod = align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func)
+        
+        # This handles the cases where the tt func or even cpu pre func produces a model output.
+        # We do this after aligning so that in the generated python code all of the unused passthrough 
+        # variables come after all of the variables consumed by the module.
+        mod = handle_output_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func)
         
         if not isinstance(mod["main"].body, tvm.relay.expr.Tuple):
             main_body_call_node = [mod["main"].body]

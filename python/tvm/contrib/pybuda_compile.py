@@ -58,28 +58,6 @@ def retrieve_graph(json_graph, t):
     json_graph["functions"][function_name] = t[1]
     json_graph["param_names"][function_name] = t[2]
 
-def join_graphs(json_graphs):
-    json_graphs = [json.loads(graph) for graph in json_graphs]
-    existing_graph = json_graphs[0]
-    for graph in json_graphs[1:]:        
-        num_new_nodes = len(existing_graph["nodes"])
-        for node in graph["nodes"]:
-            if "num_inputs" not in node["attrs"]:
-                continue
-
-            node["inputs"] = [[input_nid[0] + num_new_nodes, 0, 0] for input_nid in node["inputs"]]
-            
-        graph["heads"] = [[head[0] + num_new_nodes, 0, 0] for head in graph["heads"]]
-        graph["arg_nodes"] = [arg_node + num_new_nodes for arg_node in graph["arg_nodes"]]
-        num_node_rows = len(graph["node_row_ptr"])
-        graph["node_row_ptr"] = [node_row_ptr + num_node_rows for node_row_ptr in graph["node_row_ptr"]]
-
-        for key in graph.keys():
-            existing_graph[key] = existing_graph[key] + graph[key]
-
-    existing_graph = json.dumps(existing_graph)
-    return existing_graph
-
 @tvm.register_func
 def retrieve_pybuda_json_graph(*args):
     t = tuple(args)
@@ -204,197 +182,6 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
 
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
-
-def get_func_output_origins(func_body, origins):
-
-    model_output_origins = []
-    if isinstance(func_body, relay.expr.Tuple):
-        for output in func_body.fields:
-            model_output_origins.append(trace_to_origin(output, origins))
-    else:
-        model_output_origins.append(trace_to_origin(func_body, origins))
-    
-    return model_output_origins
-
-def add_node_as_passthrough(graph, node, index=None):
-    graph["nodes"].append(node)
-    graph["arg_nodes"].append(len(graph["nodes"])-1)
-    if index is None:
-        graph["heads"].append([len(graph["nodes"])-1, 0, 0])
-    else:
-        graph["heads"][index] = [len(graph["nodes"])-1, 0, 0]
-
-def classify_passthrough_inputs_as_heads(graph, input_idx_list, weight_names):
-    # for i in range(num_inputs):
-    #     # Find index of ith input
-    #     inp_count = -1
-    #     node_idx = -1
-    #     while i != inp_count:
-    #         node_idx += 1
-    #         node = graph["nodes"][node_idx]
-            
-    #         if node['op'] == 'input' and node['name'] not in weight_names:
-    #             inp_count += 1
-        
-    #     if [node_idx, 0, 0] not in graph["heads"]:
-    #         graph["heads"].append([node_idx, 0, 0])
-
-    for i in input_idx_list:
-        head_node_idx = graph["arg_nodes"][i]
-        if [head_node_idx, 0, 0] not in graph["heads"]:
-            graph["heads"].append([head_node_idx, 0, 0])
-
-def add_passthrough_if_needed(first_json, second_json, third_json, partitioned_mod, input_names, weight_names):
-    first, second, third = first_json["graph"], second_json["graph"], third_json["graph"]
-    first_exists, third_exists = first != "", third != ""
-
-    if first_exists:
-        first = json.loads(first)
-        first_name = list(first_json["functions"].keys())[0]
-
-
-    second = json.loads(second)
-    second_name = list(second_json["functions"].keys())[0]
-    
-    if third_exists:
-        third = json.loads(third)
-        third_name = list(third_json["functions"].keys())[0]
-
-    gvars = partitioned_mod.get_global_vars()
-    origins = [param for param in partitioned_mod["main"].params if param.name_hint in input_names]
-    funcs = []
-    for gvar in gvars:
-        if isinstance(gvar.checked_type, relay.FuncType):
-            funcs.append(gvar)
-
-    # The list of 'origins' we want to trace to is either the output of a function or an argument to 'main'.
-    # This is for the purpose of tracking which outputs of which functions to passthrough
-    origins = origins + funcs
-
-    # Determine which functions the outputs of the model originate from
-    main_output_origins = get_func_output_origins(partitioned_mod["main"].body, origins)
-
-    func_callnodes = extract_function_callnodes(partitioned_mod["main"], origins)
-    
-    for func in func_callnodes:
-        if first_exists and func.op.name_hint == first_name:
-            first_func = func
-
-        if func.op.name_hint == second_name:
-            second_func = func
-
-        if third_exists and func.op.name_hint == third_name:
-            third_func = func
-
-    # Determine where each functions inputs originated from
-    if first_exists:
-        first_input_origins = [trace_to_origin(arg, origins) for arg in first_func.args]
-        first_input_origins = list(filter(lambda item: item is not None, first_input_origins))
-
-    second_input_origins = [trace_to_origin(arg, origins) for arg in second_func.args]
-    second_input_origins = list(filter(lambda item: item is not None, second_input_origins))
-
-    if third_exists:
-        third_input_origins = [trace_to_origin(arg, origins) for arg in third_func.args]
-        third_input_origins = list(filter(lambda item: item is not None, third_input_origins))
-    
-    passthrough_count = 0
-    for output in main_output_origins:
-
-        # If the model output is an input variable
-        if isinstance(output, tvm.relay.Var):
-            new_arg_node = {'op': 'input', 'name': output.name_hint, 'attrs': {'dtype': [[output.checked_type.dtype]], 'shape': [[[int(j) for j in output.checked_type.shape]]]}}
-
-            # If the model output is not passed through the first module already
-            if first_exists: 
-                if output not in first_input_origins:
-                    # Add model input passthrough for first node
-                    add_node_as_passthrough(first, new_arg_node)
-                else:
-                    # Make sure this input is a head of the first module
-                    classify_passthrough_inputs_as_heads(first, list(range(len(first_input_origins))), weight_names)
-        
-            # Add passthrough to second module
-            if output not in second_input_origins:
-                add_node_as_passthrough(second, new_arg_node)
-
-            # add passthrough to third module
-            if third_exists and output not in third_input_origins:
-                add_node_as_passthrough(third, new_arg_node)
-        
-        # Otherwise the model output comes from either tt module or cpu module
-        else:
-            originating_function_name, origin_output_index = output
-            
-            # If the model output comes from the first module
-            if first_exists and originating_function_name == first_name:
-                head_node = copy.deepcopy(first["nodes"][first["heads"][origin_output_index][0]])
-                new_arg_node = {'op': 'input', 'name': f"passthrough_{passthrough_count}", 'attrs': {'dtype': head_node['attrs']['dtype'], 'shape': head_node['attrs']['shape']}}
-                passthrough_count += 1
-                
-                # If the output in question is not already passed into the second module
-                if output not in second_input_origins:
-                    add_node_as_passthrough(second, new_arg_node)
-                # Otherwise ensure that the model output which is also consumed in the second module is passed through
-                else:
-                    classify_passthrough_inputs_as_heads(second, list(range(len(second_input_origins))), weight_names)
-
-                if third_exists:
-                    # If the output in question is not already passed into the third module
-                    if output not in third_input_origins:
-                        add_node_as_passthrough(third, new_arg_node)
-                    # Otherwise ensure that the model output which is also consumed in the third module is passed through
-                    else:
-                        classify_passthrough_inputs_as_heads(third, list(range(len(third_input_origins))), weight_names)
-                    
-
-            elif originating_function_name == second_name:
-                
-                head_node = copy.deepcopy(second["nodes"][second["heads"][origin_output_index][0]])
-                new_arg_node = {'op': 'input', 'name': f"passthrough_{passthrough_count}", 'attrs': {'dtype': head_node['attrs']['dtype'], 'shape': head_node['attrs']['shape']}}
-                passthrough_count += 1
-                if third_exists:
-                    if output not in third_input_origins:
-                        add_node_as_passthrough(third, new_arg_node)
-                    else:
-                        classify_passthrough_inputs_as_heads(third, [third_input_origins.index(output)], weight_names)
-
-
-    if first_exists:
-        add_to_first = True
-
-        # Ensure input variables required in multiple modules are passed through
-        needed_first = [[input_name == node["name"] for node in second["nodes"]].index(True) if any([input_name == node["name"] for node in second["nodes"]]) else -1 for input_name in input_names]
-        second_input_names = [inp.name_hint if isinstance(inp, tvm.relay.expr.Var) else None for inp in second_input_origins]
-        if any([p >= 0 for p in needed_first]):
-            [first["heads"].insert(i, []) for i, name in enumerate(second_input_names) if name is not None]
-            for passthrough_node, name in zip(needed_first, input_names):
-                if passthrough_node >= 0:
-                    index = second_input_names.index(name)
-                    add_node_as_passthrough(first, second["nodes"][passthrough_node], index)
-        first = json.dumps(first)
-        
-    
-    if third_exists:
-        # Ensure input variables required in multiple modules are passed through
-        needed_first_and_second = [[input_name == node["name"] for node in third["nodes"]].index(True) if any([input_name == node["name"] for node in third["nodes"]]) else -1 for input_name in input_names]
-        third_input_names = [inp.name_hint if isinstance(inp, tvm.relay.expr.Var) else None for inp in third_input_origins]
-        if any([p >= 0 for p in needed_first_and_second]):
-            [second["heads"].insert(i, []) for i, name in enumerate(third_input_names) if name is not None]
-            for passthrough_node, name in zip(needed_first_and_second, input_names):
-                if passthrough_node >= 0:
-                    if first_exists and add_to_first:
-                        add_node_as_passthrough(first, third["nodes"][passthrough_node])
-
-                    index = third_input_names.index(name)
-                    add_node_as_passthrough(second, third["nodes"][passthrough_node], index)
-                    
-        third = json.dumps(third)
-        
-    second = json.dumps(second)
-    return first, second, third
-
-
 def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, param_name_lookup={}, graph_hash=""):
     mod = partitioned_mod["main"]
     main_graph = str(mod.astext())
@@ -475,10 +262,6 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
                 cpu_post_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_post_json_graph["param_names"][function_name])})
     else:
         cpu_post_json_graph = {"graph":""}
-    
-    cpu_pre_json_graph['graph'], dev_json_graph['graph'], cpu_post_json_graph['graph'] = add_passthrough_if_needed(
-        cpu_pre_json_graph, dev_json_graph, cpu_post_json_graph, partitioned_mod, input_names, weight_names
-    )
 
     json_graphs = []
     if cpu_pre_function is not None:
@@ -962,8 +745,7 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
         dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
     dev_functions = list(dev_json_graph["functions"].keys())
-    dev_graph = join_graphs([dev_json_graph["functions"][function] for function in dev_functions])
-    dev_json_graph["graph"] = dev_graph
+    dev_json_graph["graph"] = dev_json_graph["functions"][dev_functions[0]]
 
     json_graph = []
     json_graph.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
