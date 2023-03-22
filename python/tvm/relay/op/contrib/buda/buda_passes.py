@@ -11,6 +11,7 @@ from tvm.relay.dataflow_pattern import *
 
 from loguru import logger
 from .utils import *
+from tvm.relay.op import _make
 
 # NOTE: TVM crashes when groups != 1 or groups != input_channels
 class ConvertLayout(DFPatternCallback):
@@ -2116,6 +2117,56 @@ class ReconstructJaxGelu(DFPatternCallback):
         return tvm.relay.gelu(node_map[self.act][0])
 
 
+class SimplifyGroupNorm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape0 = is_op("reshape")(self.act)
+        self.mean = is_op("mean")(self.reshape0)
+        self.sub = is_op("subtract")(self.reshape0, self.mean)
+        self.var = is_op("variance")( self.reshape0, self.mean)
+        self.add = is_op("add")(self.var, wildcard())
+        self.sqrt = is_op("sqrt")(self.add)
+        self.div = is_op("divide")(self.sub, self.sqrt)
+        self.reshape1 = is_op("reshape")(self.div)
+        self.pattern = self.reshape1
+
+    def callback(self, pre, post, node_map):
+        if len(node_map[self.reshape0][0].attrs.newshape) <= 4:
+            # Dont need decomposition
+            return post
+
+        if len(node_map[self.reshape1][0].attrs.newshape) > 4:
+            # Cannot decompose
+            return post
+
+        old_mean = node_map[self.mean][0]
+        old_var = node_map[self.var][0]
+        # Handle 5D/6D between the 2 reshapes
+        arg = node_map[self.act][0]
+        new_shape = node_map[self.reshape0][0].attrs.newshape
+        new_shape = new_shape[:3] + [np.prod(new_shape[3:])]
+        new_reshape0 = tvm.relay.reshape(arg, newshape=new_shape)
+        new_mean = tvm.relay.mean(
+            new_reshape0, 
+            axis=[-2, -1], 
+            keepdims=old_mean.attrs.keepdims,
+            exclude=old_mean.attrs.exclude)
+        new_sub = tvm.relay.subtract(new_reshape0, new_mean)
+        new_var = _make._variance(
+            new_reshape0, 
+            new_mean,
+            [-2, -1],
+            old_var.attrs.keepdims,
+            old_var.attrs.exclude,
+            old_var.attrs.unbiased)
+        new_add = tvm.relay.add(new_var, node_map[self.add][0].args[1])
+        new_sqrt = tvm.relay.sqrt(new_add)
+        new_div = tvm.relay.divide(new_sub, new_sqrt)
+        new_reshape1 = tvm.relay.reshape(new_div, node_map[self.reshape1][0].attrs.newshape)
+
+        return new_reshape1
+
 class ReconstructPyTorchLayerNorm(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -2913,6 +2964,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             DecomposeDynamicResize2d(),
             # RemoveCast(),
             DecomposeStack(),
+            SimplifyGroupNorm(),
             transform.DecomposeVariance(),
             ArgmaxAndMaxReconstruct(),
             ConvertArgmaxTakeToReduceMax(),
