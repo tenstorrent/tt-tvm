@@ -700,6 +700,28 @@ def tm_fallback_traverse(graph, current_node, max_depth, ops_of_interest, ops_to
         
     logger.trace("Finishing traverse for given path on depth: {}".format(current_depth))
 
+class IndexChecker(ExprVisitor):
+    
+    def __init__(self):
+        super().__init__()
+        self.all_nodes_non_float = True
+        
+    def visit(self, node):
+        if hasattr(node, "checked_type"):
+            if "float" in node.checked_type.dtype:
+                self.all_nodes_non_float = False
+                return
+        super().visit(node)
+
+class HashGraph(ExprVisitor):
+    def __init__(self):
+        super().__init__()
+        self.calls_nodes = set()
+        
+    def visit_call(self, call):
+        self.calls_nodes.add((call, node_hash(call)))
+        super().visit_call(call)
+
 class ConstructDiGraph(ExprVisitor):
     
     def __init__(self):
@@ -737,8 +759,19 @@ class ConstructDiGraph(ExprVisitor):
         ):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.op} to fallback")
-
-
+            if node[1][0] == "pybuda.adv_index":
+                logger.debug("Special case: adv_index. If none of the ancestors of the indices are float, fallback all ancestors to indices")
+                index_checker = IndexChecker()
+                index_checker.visit(call.args[1])
+                if index_checker.all_nodes_non_float:
+                    logger.info("All ancestors of indices are non-float, fallback all ancestors to indices")
+                    hash_graph = HashGraph()
+                    hash_graph.visit(call.args[1])
+                    for pair in hash_graph.calls_nodes:
+                        logger.info(f"Adding: {pair[1][1][0].name} to fallback")
+                        self.fallback_nodes.add(pair[1])
+                        self.register_args(pair[0], pair[1])
+                
         self.register_args(call, node)
         # Make sure CPU output shape starts with 1
         if (
@@ -1678,30 +1711,41 @@ def handle_input_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func, input_na
     
     for param in model_params:
         funcs_that_use_param = []
+        param_idx_map ={}
         for func in func_order:
             func_callnode = extract_function_callnodes(mod["main"], [func])[0]
             if param in func_callnode.args:
                 funcs_that_use_param.append(func)
+                param_idx_map[func] = list(func_callnode.args).index(param)
         
         # Need to pass through all funcs that use param before funcs_that_use_param[-1]
         
         passthrough_funcs = func_order[:func_order.index(funcs_that_use_param[-1])]
-        
+
+        old_func_arg = param
         for passthrough_func in passthrough_funcs:
             # type is required for add_passthrough_variable
             mod = tvm.transform.Sequential([transform.InferType()])(mod)
-            mod, new_func_arg = add_passthrough_variable(mod, passthrough_func, param, param.name_hint)
+            mod, new_func_arg = add_passthrough_variable(mod, passthrough_func, old_func_arg, param.name_hint)
             
-            # convert all args that use param to use new_func_arg
+            # convert all args that use old_func_arg to use new_func_arg
             funcs_to_change_arg = func_order[func_order.index(passthrough_func)+1:]
             
             for func_to_change_arg in funcs_to_change_arg:
-                func_callnode = extract_function_callnodes(mod["main"], [func_to_change_arg])[0]
-                if param in func_callnode.args:
+                if func_to_change_arg in param_idx_map:
+                    func_callnode = extract_function_callnodes(mod["main"], [func_to_change_arg])[0]
+                    old_func_arg = func_callnode.args[param_idx_map[func_to_change_arg]]
                     new_args = list(func_callnode.args)
-                    new_args[new_args.index(param)] = new_func_arg
+                    new_args[param_idx_map[func_to_change_arg]] = new_func_arg
                     new_call = tvm.relay.Call(func_callnode.op, new_args, func_callnode.attrs)
                     mod["main"] = FunctionArgPlacer(func_to_change_arg, new_args).visit(mod["main"])
+                    
+                    # Retrieve new func_callnode
+                    mod = tvm.transform.Sequential([transform.InferType()])(mod)
+                    func_callnode = extract_function_callnodes(mod["main"], [func_to_change_arg])[0]
+                    new_func_arg = func_callnode.args[param_idx_map[func_to_change_arg]]
+                    
+            old_func_arg = new_func_arg
     return mod
 
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
@@ -1788,7 +1832,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         cpu_pre_func = partition_finder.cpu_pre_funcs[0] if len(partition_finder.cpu_pre_funcs) > 0 else None
         tt_func = partition_finder.tt_funcs[0]
         cpu_post_func = partition_finder.cpu_post_funcs[0] if len(partition_finder.cpu_post_funcs) > 0 else None
-        
+
         # This handles the cases where a model input is directly consumed in the cpu post func (if it exists) or tt func (if the cpu pre exists)
         mod = handle_input_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func, input_names)
         
