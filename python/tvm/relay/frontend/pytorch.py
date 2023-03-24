@@ -5384,6 +5384,8 @@ def _create_typed_const(data, dtype):
         typed_data = _expr.const(np.int8(data), dtype=dtype)
     elif dtype == "uint8":
         typed_data = _expr.const(np.uint8(data), dtype=dtype)
+    elif dtype == "bool":
+        typed_data = _expr.const(np.array(data, dtype=dtype), dtype=dtype)
     else:
         raise NotImplementedError(f"input_type {dtype} is not handled yet")
     return typed_data
