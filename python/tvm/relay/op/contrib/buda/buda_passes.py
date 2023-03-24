@@ -2838,7 +2838,28 @@ class BroadcastScatterValuesToMatchIndices(DFPatternCallback):
 
         return post
 
+class InverseMaskGen(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
 
+        self.zero = wildcard()
+        self.mask = wildcard()
+        self.mask_gen = is_op("equal")(self.mask, self.zero)
+        
+        self.pattern = self.mask_gen
+        
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        if not isinstance(pre_node_map[self.zero][0], tvm.relay.Constant) or pre_node_map[self.zero][0].data.numpy() != 0:
+            return post
+
+        casted = tvm.relay.cast(pre_node_map[self.mask][0], "bool")
+        casted = tvm.relay.cast(casted, "int32")
+        subtract =  tvm.relay.subtract(tvm.relay.const(1, "int32"), casted)
+        booled = tvm.relay.cast(subtract, "bool")
+        return booled
+                
+        
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2959,6 +2980,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             RemoveStopFusionAnnotationNodes(),
             Enforce1DOutputForArgwhereOp(),
             BroadcastScatterValuesToMatchIndices(),
+            InverseMaskGen(),
         ],
         params=params,
         inputs=inputs,
