@@ -970,6 +970,32 @@ def verify_tvm_compile(mod, params, inputs, target, framework_outputs, compile_l
         verify_outputs(framework_outputs, relay_outputs, compile_location)
 
 
+class CompareWarner(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True, rewrite_once=True)
+        
+        self.act1 = wildcard()
+        self.act2 = wildcard()
+        self.pattern = is_op("equal")(self.act1, self.act2) \
+                        | is_op("not_equal")(self.act1, self.act2) \
+                        | is_op("less")(self.act1, self.act2) \
+                        | is_op("less_equal")(self.act1, self.act2) \
+                        | is_op("greater")(self.act1, self.act2) \
+                        | is_op("greater_equal")(self.act1, self.act2)
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        op_name = pre_node_map[self.pattern][0].op.name
+        act1 = pre_node_map[self.act1][0]
+        act2 = pre_node_map[self.act2][0]
+        if "int" in act1.checked_type.dtype or "int" in act2.checked_type.dtype:
+            logger.warning(f"Integer input(s) detected in comparison op: {op_name}. This may cause data mismatch.")
+        return post
+    
+def warn_of_int_comparisons(mod):
+    warner = CompareWarner()
+    rewrite(warner, mod['main'])
+    
 def compile_for_buda(relay_module, graph_name, target='llvm', params=None, inputs=None, framework_outputs=None, verify_cfg=None):
 
     if not isinstance(relay_module, (IRModule, _function.Function)):
@@ -996,6 +1022,9 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None, input
         dump_graph(relay_module, graph_name, "after_relay_passes")
         compiled_relay_module = run_buda_compile_passes(relay_module, params, inputs, target, framework_outputs, verify_cfg)
         dump_graph(compiled_relay_module, graph_name, "after_buda_passes")
+        
+        # Integer comparisons may lead to incorrect results on HW
+        warn_of_int_comparisons(compiled_relay_module)
 
     return compiled_relay_module, params
 
