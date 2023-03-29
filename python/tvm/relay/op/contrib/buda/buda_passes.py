@@ -612,6 +612,10 @@ class LowerSplitToStridedSlice(DFPatternCallback):
         begin = 0 if post.index == 0 else ios[post.index - 1]
         end = ios[post.index]
 
+        # Check if this strided slice does nothing. If so just return act
+        if end - begin == act.checked_type.shape[axis]:
+            return act
+        
         sliced_act = tvm.relay.strided_slice(act, (begin,), (end,), axes=(axis,))
         return sliced_act
 
