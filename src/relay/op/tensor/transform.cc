@@ -443,6 +443,56 @@ RELAY_REGISTER_OP("stack")
     .set_attr<FTVMCompute>("FTVMCompute", StackCompute)
     .set_attr<TOpPattern>("TOpPattern", kInjective);
 
+/* relay.pixel_shuffle*/
+TVM_REGISTER_NODE_TYPE(PixelShuffleAttrs);
+
+bool PixelShuffleRel(const Array<Type>& types, int num_inputs, const Attrs& attrs, const TypeReporter& reporter) {
+    // types: [data, upscale_factor]
+    ICHECK_EQ(types.size(), 2) << "Expects two types, one for the input and another for the output";
+    const auto* data = types[0].as<TensorTypeNode>();
+    if (data == nullptr) {
+        ICHECK(types[0].as<IncompleteTypeNode>())
+        << "PixelShuffle: expect input type to be TensorType but get " << types[0];
+        return false;
+    }
+    const int ndim = static_cast<int>(data->shape.size());
+    auto *pixel_shuffle_attrs = attrs.as<PixelShuffleAttrs>();
+    int upscale_factor = pixel_shuffle_attrs->upscale_factor;
+
+    std::vector<IndexExpr> oshape;
+    oshape.reserve(ndim);
+    for (int i = 0; i < ndim - 3; i++) {
+        oshape.emplace_back(data->shape[i]);
+    }
+    int C = data->shape[ndim - 3].as<IntImmNode>()->value / (upscale_factor * upscale_factor);
+    int Hr = data->shape[ndim - 2].as<IntImmNode>()->value * upscale_factor;
+    int Wr = data->shape[ndim - 1].as<IntImmNode>()->value * upscale_factor;
+    oshape.emplace_back(C);
+    oshape.emplace_back(Hr);
+    oshape.emplace_back(Wr);
+
+    reporter->Assign(types[1], TensorType(oshape, data->dtype));
+    return true;
+}
+
+Expr MakePixelShuffle(Expr data, Integer upscale_factor) {
+    auto attrs = make_object<PixelShuffleAttrs>();
+    attrs->upscale_factor = upscale_factor;
+    static const Op& op = Op::Get("pixel_shuffle");
+    return Call(op, {data}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.pixel_shuffle").set_body_typed(MakePixelShuffle);
+
+RELAY_REGISTER_OP("pixel_shuffle")
+    .describe(
+        R"doc(For a tensor of shape (*, Cr^2, H, W), rearranges the tensor to a shape of (*, C, Hr, Wr), where r is the upscale factor)doc" TVM_ADD_FILELINE)
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .set_support_level(3)
+    .add_type_rel("PixelShuffle", PixelShuffleRel)
+    .set_attr<TOpPattern>("TOpPattern", kOpaque);
+
 /* relay.transpose */
 TVM_REGISTER_NODE_TYPE(TransposeAttrs);
 

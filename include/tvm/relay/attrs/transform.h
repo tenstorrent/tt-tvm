@@ -629,6 +629,15 @@ struct TriluAttrs : public tvm::AttrsNode<TriluAttrs> {
   }
 };  // struct TriluAttrs
 
+/*! \brief Attributes used in pixel_shuffle operator*/
+struct PixelShuffleAttrs : public tvm::AttrsNode<PixelShuffleAttrs> {
+  int upscale_factor;
+
+  TVM_DECLARE_ATTRS(PixelShuffleAttrs, "relay.attrs.PixelShuffleAttrs") {
+    TVM_ATTR_FIELD(upscale_factor).describe("The upscale factor");
+  }
+};  // struct PixelShuffleAttrs
+
 struct IdentityAttrs : public tvm::AttrsNode<IdentityAttrs> {
   TVM_DECLARE_ATTRS(IdentityAttrs, "relay.attrs.IdentityAttrs") {}
 }; // struct IdentityAttrs

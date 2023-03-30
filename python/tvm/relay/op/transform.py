@@ -2035,5 +2035,11 @@ def trilu(data, k, upper=True):
     if not isinstance(k, Expr):
         k = const(k, dtype="int32")
     return _make.trilu(data, k, upper)
+
+
+def pixel_shuffle(data, upscale_factor):
+    
+    return _make.pixel_shuffle(data, upscale_factor)
+
 def identity(data):
     return _make.identity(data)
