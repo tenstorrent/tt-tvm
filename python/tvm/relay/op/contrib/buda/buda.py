@@ -100,6 +100,10 @@ def decompose_adv_index_input_tuple():
 
     return is_op("adv_index")(input)
 
+def decompose_concatenate():
+    inputs = is_tuple(None)
+    return is_op("concatenate")(inputs)
+
 def dropout_tuple_get_item():
     act = wildcard()
     dropout = is_op("nn.dropout")(act)
@@ -154,6 +158,7 @@ def pattern_table():
     buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
     buda_conv2d_transpose_with_bias = ("pybuda.buda_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
     dropout = ("pybuda.dropout", dropout_tuple_get_item())
+    concatenate = ("pybuda.concatenate", decompose_concatenate())
 
     # channel_last_maxpool2d = ("pybuda.channel_last_maxpool", channel_last_maxpool())
     channel_last_resize2d = ("pybuda.channel_last_resize2d", channel_last_resize())
@@ -166,6 +171,7 @@ def pattern_table():
         buda_conv2d_transpose_with_bias, 
         adv_index, 
         dropout,
+        concatenate
     ]
 
     return buda_patterns
@@ -1352,7 +1358,9 @@ def merge_functions(mod, funcs_to_merge, new_name):
                 if new_idx == len(new_args):
                     arg = fn_callnode.args[old_idx]
                     if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.relay.expr.GlobalVar):
-                        arg = extract_function_callnodes(placed, [arg.op])[0]
+                        callnodes = extract_function_callnodes(placed, [arg.op])
+                        if len(callnodes):
+                            arg = callnodes[0]
                     new_args.append(arg)
                     
     placed = FunctionArgPlacer(gvar, new_args).visit(placed)
