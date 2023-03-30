@@ -1925,6 +1925,7 @@ class PyTorchOpConverter:
     def pixel_shuffle(self, inputs, input_types):
         data = inputs[0]
         upscale_factor = inputs[1]
+        return _op.transform.pixel_shuffle(data, upscale_factor)
         upscale_squared = upscale_factor * upscale_factor
         b, c, h, w = self.infer_shape(data)
         assert (
