@@ -4328,6 +4328,22 @@ class PyTorchOpConverter:
     def warn(self, inputs, inputs_types):
         return inputs[0]
 
+    def alias(self, inputs, inputs_types):
+        shape = inputs[0]
+
+        if not isinstance(shape, _expr.Constant):
+            raise AssertionError("Shape must be a constant")
+
+        # Get constant dtype
+        dtype = _convert_data_type(shape.data.dtype, default_dtype="float32")
+        
+        # Convert to numpy array
+        shape = shape.data.numpy()
+        if len(shape.shape) == 0:
+            shape = np.array([shape.item()])
+
+        return self.full_impl(shape, 0, dtype)
+
     # Operator mappings
     def create_convert_map(self):
         self.convert_map = {
@@ -4620,6 +4636,7 @@ class PyTorchOpConverter:
             "aten::warn": self.warn,
             "aten::baddbmm": self.baddbmm,
             "aten::__or__": self.__or__,
+            "aten::alias": self.alias,
         }
 
     def update_convert_map(self, custom_map):
