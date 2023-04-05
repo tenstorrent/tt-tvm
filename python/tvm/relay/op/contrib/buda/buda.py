@@ -82,7 +82,7 @@ def reshape_to_vslice():
     return is_op('reshape')(act)
 
 def stack_reshape_reshape_to_binary_stack():
-    act = is_tuple(None)
+    act = is_tuple([wildcard(), wildcard()])
     stack = is_op("stack")(act)
     return is_op("reshape")(stack)
 
@@ -166,10 +166,10 @@ def pattern_table():
         *hstack, 
         *binary_stack, 
         hslice, 
+        adv_index, 
         matmul, 
         buda_conv2d_with_bias,
-        buda_conv2d_transpose_with_bias, 
-        adv_index, 
+        buda_conv2d_transpose_with_bias,
         dropout,
         concatenate
     ]
