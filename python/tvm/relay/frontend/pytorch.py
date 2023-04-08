@@ -3379,6 +3379,27 @@ class PyTorchOpConverter:
             unique_sliced = _op.strided_slice(unique, begin=[0], end=num_uniq, slice_mode="size")
             return (unique_sliced, inverse_indices)
 
+    def l1_loss(self, inputs, input_types):
+        assert len(inputs) == 3
+        [input, targets, reduction] = inputs
+        if reduction == 0:
+            reduction = "none"
+        elif reduction == 1:
+            reduction = "mean"
+        else:
+            reduction = "sum"
+
+        from loguru import logger
+        logger.warning("Abs not supported yet, running L1Loss without it. It won't match 'real' values.")
+        diff = _op.subtract(input, targets)
+        # diff = _op.abs(_op.subtract(input, targets))
+        if reduction == "none":
+            return diff
+        elif reduction == "mean":
+            return _op.mean(diff, keepdims=True)
+        else:
+            return _op.sum(diff, keepdims=True)
+
     def nll_loss(self, inputs, input_types):
         assert len(inputs) == 5
         [predictions, targets, weights, reduction, ignore_index] = inputs
@@ -4593,6 +4614,7 @@ class PyTorchOpConverter:
             "aten::argsort": self.argsort,
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
+            "aten::l1_loss": self.l1_loss,
             "aten::nll_loss": self.nll_loss,
             "aten::nll_loss2d": self.nll_loss,
             "aten::nll_loss_nd": self.nll_loss,
