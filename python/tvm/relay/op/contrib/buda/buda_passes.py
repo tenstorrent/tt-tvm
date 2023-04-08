@@ -283,7 +283,10 @@ class DecomposeMultiAxisMean(DFPatternCallback):
         self.pattern = self.mean
 
     def callback(self, pre, post, node_map):
-        reduce_axes = list(post.attrs.axis)
+        if post.attrs.axis == None:
+            reduce_axes = [x for x in range(len(list(post.args[0].checked_type.shape)))]
+        else:
+            reduce_axes = list(post.attrs.axis)
         if len(reduce_axes) == 1:
             return post
 
