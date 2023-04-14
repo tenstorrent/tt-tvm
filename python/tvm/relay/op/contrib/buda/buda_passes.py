@@ -1625,8 +1625,9 @@ class TransposePad(DFPatternCallback):
         non_zero_dims = [idx for idx, pad in enumerate(pad_width) if pad != [0, 0]] 
         assert len(non_zero_dims) <= 2
 
+        pad_mode = post.attrs.pad_mode
         arg = post.args[0]
-        arg = tvm.relay.nn.pad(arg, pad_width=pad_width, pad_value=post.args[1])
+        arg = tvm.relay.nn.pad(arg, pad_width=pad_width, pad_value=post.args[1], pad_mode=pad_mode)
         return arg
 
 class PopulateStridedSliceAxes(DFPatternCallback):
