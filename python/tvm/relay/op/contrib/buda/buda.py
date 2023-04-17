@@ -446,7 +446,7 @@ def node_hash(node):
     else:
         node_descriptor = (type(node), False)
 
-    return (tvm.ir.structural_hash(node, map_free_vars=True), node_descriptor)
+    return (tvm.ir.structural_hash(node), node_descriptor)
 
 class NodeIndexer():
     def __init__(self):
@@ -480,6 +480,60 @@ class NodeReMapper(ExprVisitor):
             self.node_list.remove(self.node_map[index])
             self.node_list.add(node)
         return super().visit_call(call)
+
+class ArgFallbackFinder(ExprVisitor):
+    def __init__(self, graph, fallback_nodes, input_names):
+        super().__init__()
+        self.fallback_nodes = fallback_nodes
+        self.input_names = input_names
+        self.graph = graph
+        
+    def visit_call(self, call):
+        if node_hash(call) in self.fallback_nodes:
+            for arg in call.args:
+                if isinstance(arg, tvm.relay.Var) or node_hash(arg) in self.fallback_nodes:
+                    continue
+                activation_checker = ActivationChecker(self.input_names)
+                activation_checker.visit(arg)
+                
+                if not activation_checker.found_activation:
+                    self.fallback_nodes.add(node_hash(arg))
+                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, node_hash(arg))
+                    
+        return super().visit_call(call)
+    
+    def visit_tuple(self, tup):
+        if node_hash(tup) in self.fallback_nodes:
+            for arg in tup.fields:
+                if isinstance(arg, tvm.relay.Var) or node_hash(arg) in self.fallback_nodes:
+                    continue
+                activation_checker = ActivationChecker(self.input_names)
+                activation_checker.visit(arg)
+                
+                if not activation_checker.found_activation:
+                    self.fallback_nodes.add(node_hash(arg))
+                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, node_hash(arg))
+                    
+        return super().visit_tuple(tup)
+
+def complete_fallback_nodes(mod, graph, fallback_nodes, input_names, compiler_cfg):
+    new_fallback_nodes = set()
+    for node in fallback_nodes:
+        new_fallback_nodes.add(node)
+        ancestors = nx.ancestors(graph, node)
+        descendants = nx.descendants(graph, node)
+        if len(ancestors) > len(descendants):
+            new_fallback_nodes = new_fallback_nodes | descendants
+        else:
+            if compiler_cfg.enable_tm_cpu_fallback:
+                continue
+            new_fallback_nodes = new_fallback_nodes | ancestors
+
+    # Now check if we must fallback arg ancestors for fallback nodes
+    arg_fallback_finder = ArgFallbackFinder(graph, new_fallback_nodes, input_names)
+    arg_fallback_finder.visit(mod["main"])
+    return arg_fallback_finder.fallback_nodes
+    
     
 class DetermineTarget(ExprMutator):
     def __init__(self, graph, fallback_nodes, compiler_cfg):
@@ -491,15 +545,6 @@ class DetermineTarget(ExprMutator):
         self.graph_changed = True
         self.modify_graph = False
         self.compiler_cfg = compiler_cfg
-        for node in fallback_nodes:
-            ancestors = nx.ancestors(graph, node)
-            descendants = nx.descendants(graph, node)
-            if len(ancestors) > len(descendants):
-                self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | descendants
-            else:
-                if self.compiler_cfg.enable_tm_cpu_fallback:
-                    continue
-                self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | ancestors
 
     def visit_call(self, call):
         def _cpu_eval(expr):
@@ -718,6 +763,17 @@ class IndexChecker(ExprVisitor):
                 self.all_nodes_non_float = False
                 return
         super().visit(node)
+        
+class ActivationChecker(ExprVisitor):
+    def __init__(self, input_names):
+        super().__init__()
+        self.input_names = input_names
+        self.found_activation = False
+        
+    def visit_var(self, var):
+        if var.name_hint in self.input_names:
+            self.found_activation = True
+        super().visit_var(var)
 
 class HashGraph(ExprVisitor):
     def __init__(self):
@@ -1166,6 +1222,9 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         
         logger.debug(f"Done, took: {(time.time() - start):.2f} s")
         logger.debug(f"Determining target for ops...")
+        
+        fallback_nodes = complete_fallback_nodes(mod, graph_constructor.graph, fallback_nodes, input_names, compiler_cfg)
+        
         terget_determiner = DetermineTarget(graph_constructor.graph, fallback_nodes, compiler_cfg)
         new_mod = None
         start = time.time()
