@@ -489,31 +489,40 @@ class ArgFallbackFinder(ExprVisitor):
         self.graph = graph
         
     def visit_call(self, call):
-        if node_hash(call) in self.fallback_nodes:
+        call_hash = node_hash(call)
+        if call_hash in self.fallback_nodes:
             for arg in call.args:
-                if isinstance(arg, tvm.relay.Var) or node_hash(arg) in self.fallback_nodes:
+                arg_hash = node_hash(arg)
+                if isinstance(arg, tvm.relay.Var) or arg_hash in self.fallback_nodes:
                     continue
                 activation_checker = ActivationChecker(self.input_names)
                 activation_checker.visit(arg)
                 
                 if not activation_checker.found_activation:
-                    self.fallback_nodes.add(node_hash(arg))
-                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, node_hash(arg))
-                    
+                    self.fallback_nodes.add(arg_hash)
+                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, arg_hash )
+            
+            # Special case, cpu matmul with doubly-transposed weights
+            if call_hash[1][0] == "pybuda.matmul":
+                if hasattr(call.args[1], "op") and call.args[1].op.name == "transpose": # first transpose is implicit in pybuda.matmul
+                    self.fallback_nodes.add(node_hash(call.args[1]))
+            
+                 
         return super().visit_call(call)
     
     def visit_tuple(self, tup):
         if node_hash(tup) in self.fallback_nodes:
             for arg in tup.fields:
-                if isinstance(arg, tvm.relay.Var) or node_hash(arg) in self.fallback_nodes:
+                arg_hash = node_hash(arg)
+                if isinstance(arg, tvm.relay.Var) or arg_hash in self.fallback_nodes:
                     continue
                 activation_checker = ActivationChecker(self.input_names)
                 activation_checker.visit(arg)
                 
                 if not activation_checker.found_activation:
-                    self.fallback_nodes.add(node_hash(arg))
-                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, node_hash(arg))
-                    
+                    self.fallback_nodes.add(arg_hash)
+                    self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, arg_hash)
+                  
         return super().visit_tuple(tup)
 
 def complete_fallback_nodes(mod, graph, fallback_nodes, input_names, compiler_cfg):
@@ -564,6 +573,7 @@ class DetermineTarget(ExprMutator):
                     return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
         elif node_hash(call) in self.nodes_to_cpu_eval and not isinstance(call.op, tvm.relay.function.Function) :
             try:
+                
                 tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
             except:
                 pass
