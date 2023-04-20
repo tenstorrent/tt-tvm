@@ -4298,7 +4298,7 @@ class PyTorchOpConverter:
         x = inputs[0]
         x_shape = _infer_shape(x)
 
-        mask = np.triu(np.ones(x_shape)).astype(np.bool)
+        mask = np.triu(np.ones(x_shape), inputs[1]).astype(np.bool)
         mask = tvm.nd.array(mask)
         mask = tvm.relay.Constant(mask)
 
