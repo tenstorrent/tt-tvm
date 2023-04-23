@@ -2670,17 +2670,18 @@ class PyTorchOpConverter:
 
         offsets = inputs[2]
         #TODO: Support multiple bags
-        assert offsets.type_annotation.concrete_shape[0] == 1, "embedding_bag currently only supports a single bag"
+        num_bags = self.infer_shape(offsets)[0] if isinstance(offsets, tvm.relay.expr.Call) else offsets.type_annotation.concrete_shape[0]
+        assert num_bags == 1, "embedding_bag currently only supports a single bag"
 
         take = []
-        take.append(_op.take(weight, indices.astype("int32"), axis=0))
+        take.append(_op.embedding(weight, indices.astype("int32"), axis=0))
         
         if mode == "sum":
-            out = _op.sum(take[0], axis=0)
+            out = _op.sum(take[0], axis=0, keepdims=True)
         elif mode == "mean":
-            out = _op.mean(take[0], axis=0)
+            out = _op.mean(take[0], axis=0, keepdims=True)
         else:
-            out = _op.max(take[0], axis=0)
+            out = _op.max(take[0], axis=0, keepdims=True)
         return (out,)
 
     def one_hot(self, inputs, input_types):
