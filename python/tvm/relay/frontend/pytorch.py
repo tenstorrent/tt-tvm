@@ -4936,7 +4936,7 @@ class PyTorchOpConverter:
                     # At this point, the only possible ops that are not in convert_map are
                     # in-place variant of ops like aten::relu_
                     assert operator.endswith("_"), f"Found operator \'{operator}\'"
-                    logger.warning(
+                    logger.trace(
                         f"An in-place op {operator} found, the result will not be correct "
                         "if the model depends on side-effects by this op.",
                     )
@@ -5538,7 +5538,6 @@ def get_use_chains(root_node, terminate=lambda _: False):
     Track a chain of users of this node forward, returning a list of chains
     See get_attr_chains below for its usage
     """
-    logger.debug(f"GETING USE: {root_node}")
     def concat_lists(lists):
         return itertools.chain.from_iterable(lists)
 
