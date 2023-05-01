@@ -2920,6 +2920,25 @@ class InverseMaskGen(DFPatternCallback):
         return booled
                 
         
+
+class DecomposeVariance(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.variance = is_op("variance")(wildcard(), wildcard())
+        
+        self.pattern = self.variance
+
+    def callback(self, pre, post, node_map):
+        mean = post.args[1]
+        sub = tvm.relay.subtract(post.args[0], mean)
+        mul = tvm.relay.multiply(sub, sub)
+        var = tvm.relay.mean(mul, axis=post.attrs.axis, keepdims=post.attrs.keepdims, exclude=post.attrs.exclude)
+
+        return var
+
+    
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -2973,7 +2992,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             # RemoveCast(),
             DecomposeStack(),
             SimplifyGroupNorm(),
-            transform.DecomposeVariance(),
+            DecomposeVariance(),
             ArgmaxAndMaxReconstruct(),
             ConvertArgmaxTakeToReduceMax(),
             AddSqueezeForArgmax(),

@@ -1544,7 +1544,6 @@ class PyTorchOpConverter:
     def batch_norm(self, inputs, input_types):
         data = inputs[0]
         data_type = input_types[0]
-
         channels = self.infer_shape(data)
 
         scale = isinstance(inputs[1], _expr.Expr)
@@ -1561,11 +1560,14 @@ class PyTorchOpConverter:
 
         moving_mean = inputs[3]
         if moving_mean is None:
-            moving_mean = _create_typed_const(np.zeros([int(channels[1])]), data_type)
+            # moving_mean = _create_typed_const(np.zeros([int(channels[1])]), data_type)
+            moving_mean = _op.mean(data, axis=[0, 2 , 3,], keepdims=False)
 
         moving_var = inputs[4]
         if moving_var is None:
-            moving_var = _create_typed_const(np.zeros([int(channels[1])]), data_type)
+            # moving_var = _create_typed_const(np.zeros([int(channels[1])]), data_type)
+            moving_var = _op.variance(data, axis=[0, 2, 3], keepdims=False)
+
         epsilon = float(inputs[7])
 
         return _op.nn.batch_norm(
