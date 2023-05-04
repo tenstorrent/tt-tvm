@@ -268,6 +268,12 @@ class OperatorConverter(object):
             op = self.subgraph.Operators(op_idx)
             op_code_str = self.get_op_code_str(op)
             output_tensors = self.get_output_tensors(op)
+
+            for tensor in output_tensors:
+                if tensor.qnn_params:
+                    raise NotImplementedError(
+                        "Quantized models are not supported yet. "
+                    )
             try:
                 from tflite.Operator import Operator
             except ImportError:
