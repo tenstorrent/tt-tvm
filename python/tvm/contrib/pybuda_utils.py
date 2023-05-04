@@ -111,6 +111,14 @@ def extract_framework_model_outputs(
         ort_sess = ort.InferenceSession(path)
         framework_outputs = ort_sess.run(output_names, input_dict)
 
+    elif framework == "tflite":
+        input_details = model.get_input_details()
+        output_details = model.get_output_details()
+        model.allocate_tensors()
+        model.set_tensor(input_details[0]['index'], *inputs)
+        model.invoke()
+        framework_outputs = model.get_tensor(output_details[0]['index'])
+
     else:
         raise RuntimeError("Unsupported framework type: {}".format(framework))
 

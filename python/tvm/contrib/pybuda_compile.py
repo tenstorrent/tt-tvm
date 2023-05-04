@@ -162,6 +162,9 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, path=None, verif
     elif framework == "jax":
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
         json_graphs, inputs = compile_jax_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    elif framework == "tflite":
+        tf_inputs = to_tf_tensors(inputs, force_float32=True)
+        json_graphs, inputs = compile_tflite_for_buda(module, path, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -455,6 +458,70 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     return json_graphs, inputs
 
 
+
+def compile_tflite_for_buda(module, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+    
+    assert path != None, "TFLite compile needs path to .tflite file on disk."
+    tflite_model_buf = open(path, "rb").read()
+
+    input_details = module.get_input_details()
+
+    framework_outputs = extract_framework_model_outputs(
+        framework="tflite",
+        model=module,
+        inputs=inputs,
+        compiler_cfg=compiler_cfg,
+        path=path,
+    )
+
+    # Get TFLite model from buffer
+    try:
+        import tflite
+
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
+    except AttributeError:
+        import tflite.Model
+
+        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
+
+
+    input_shape_dict = {}
+    input_dict = {}
+    input_names = []
+
+    for i, details in enumerate(input_details):
+        input_names.append(details["name"])
+        input_shape_dict[details["name"]] = list(details["shape"])
+        input_dict[details["name"]] = inputs[i]
+
+
+    graph_string = str(module).encode('utf-8')
+    m = hashlib.sha256()
+    m.update(graph_string)
+    cached_graphs = load_serialized_tvm_graph(compiler_cfg, m.hexdigest(), framework="tflite")
+    if cached_graphs is not None:
+        return cached_graphs, inputs
+
+
+    mod, params = relay.frontend.from_tflite(
+        tflite_model, shape_dict=input_shape_dict,
+    )
+    import pdb; pdb.set_trace()
+    assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
+
+    if not compiler_cfg.enable_tvm_constant_prop:
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
+    else:
+        propped_params = {k: (v, True) for k, v in params.items()}
+        mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
+
+    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+
+    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, [], graph_hash=m.hexdigest())
+
+    return json_graphs, inputs
+
+
 from tf2onnx.tf_loader import convert_variables_to_constants_large_model
 def get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,):
         # This conversion path will perform the following steps:
@@ -572,7 +639,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
             model_params = jaxmodel.variables['params']._dict
     
     weight_names = list(flatten_params(model_params).keys())
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, weight_names, param_name_lookup, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names,weight_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
@@ -833,6 +900,9 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
 
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
             inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]
+
+    elif framework == "tflite":
+        weights = {}
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
