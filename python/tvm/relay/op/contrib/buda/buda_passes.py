@@ -2937,7 +2937,65 @@ class DecomposeVariance(DFPatternCallback):
 
         return var
 
+
+class DecomposePRelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.prelu = is_op("nn.prelu")(wildcard(), wildcard())
+        
+        self.pattern = self.prelu
+
+    def callback(self, pre, post, node_map):
+        relu_ = tvm.relay.nn.relu(post.args[0])
+        neg_one = tvm.relay.Constant(tvm.nd.array(np.array([-1,], dtype="float32")))
+        neg_ = tvm.relay.multiply(post.args[0], neg_one)
+        neg_relu_ = tvm.relay.nn.relu(neg_)
+        mul_ = tvm.relay.multiply(post.args[1], neg_relu_)
+        mul_2 = tvm.relay.multiply(mul_, neg_one)
+        out = tvm.relay.add(relu_, mul_2)
+        return out
+
+
+class DecomposeNonZeroPadtoConcat(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.pad = is_op("nn.pad")(wildcard(), wildcard())
+        
+        self.pattern = self.pad
+
+    def callback(self, pre, post, node_map):
+        act = post.args[0]
+        pad_width = post.attrs.pad_width
+        pad_value = post.args[1].data.numpy()
+        if pad_value == 0:
+            return post
+
+        pad_shape = list(act.checked_type.shape)
+        pad_shape = [int(x) for x in pad_shape]
+        for i, item in enumerate(pad_width):
+            before = int(item[0])
+            after = int(item[1])
+            if before == 0 and after == 0:
+                continue
     
+            if before != 0:
+                current_pad_shape = pad_shape.copy()
+                current_pad_shape[i] = before
+                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=act.checked_type.dtype)
+                act = tvm.relay.concatenate([const, act], axis=i)
+                pad_shape = [x + y for x, y in zip(pad_shape, current_pad_shape)]
+
+            if after != 0:
+                current_pad_shape = pad_shape.copy()
+                current_pad_shape[i] = after
+                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=act.checked_type.dtype)
+                act = tvm.relay.concatenate([act, const], axis=i)
+                pad_shape = [x + y for x, y in zip(pad_shape, current_pad_shape)]
+
+        return act
+
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
@@ -2989,6 +3047,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertLayout(),
             ResolveConvChannels(),
             DecomposeDynamicResize2d(),
+            DecomposePRelu(),
             # RemoveCast(),
             DecomposeStack(),
             SimplifyGroupNorm(),
@@ -3029,6 +3088,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             RemoveRedundantReshape(),
             LowerCopyToNOP(),
             TransposePad(),
+            DecomposeNonZeroPadtoConcat(),
             DecomposeMultiRangeTake(),
             LowerTakeToStridedSlice(),
             ConvertAddToBiasAddAfterConv2d(),
