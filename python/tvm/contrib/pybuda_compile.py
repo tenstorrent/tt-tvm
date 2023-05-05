@@ -506,7 +506,7 @@ def compile_tflite_for_buda(module, path, *inputs, graph_name, compiler_cfg, ver
     mod, params = relay.frontend.from_tflite(
         tflite_model, shape_dict=input_shape_dict,
     )
-    import pdb; pdb.set_trace()
+
     assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
 
     if not compiler_cfg.enable_tvm_constant_prop:
