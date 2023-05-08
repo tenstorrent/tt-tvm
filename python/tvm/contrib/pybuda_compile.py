@@ -340,7 +340,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         torchmod.train()
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, torchmod.state_dict().keys(), graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
