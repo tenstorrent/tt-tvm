@@ -1,5 +1,4 @@
 
-from tvm.relay.testing import run_infer_type
 import numpy as np
 import math
 import numpy as np
@@ -38,7 +37,6 @@ def is_squeeze(call):
 def is_superfluous_reshape(call):
     assert call.op.name == "reshape"
     input_shape = call.args[0].checked_type.shape
-    # call = run_infer_type(call)
     output_shape = call.checked_type.shape
 
     joint_size = min(len(input_shape), len(output_shape))
