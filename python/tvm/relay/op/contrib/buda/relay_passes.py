@@ -5,13 +5,14 @@ from tvm import relay
 from tvm.relay.expr_functor import ExprVisitor, ExprMutator
 from tvm._ffi.base import TVMError
 from tvm.ir.transform import PassContext
-from tvm.relay import transform
+from tvm.relay import transform, analysis
 from ....dataflow_pattern import wildcard, is_op
 
 import numpy as np
 import math
 import numpy as np
 from tvm.relay.dataflow_pattern import *
+import os
 
 from loguru import logger
 
@@ -27,6 +28,12 @@ def run_relay_compile_passes(relay_module, print_all=False):
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
     logger.trace("After InferType")
     logger.trace(relay_module.functions)
+
+    dump_flops = bool(int(os.environ.get("PYBUDA_SHOW_FLOPS_ESTIMATE", "0")))
+    if dump_flops:
+        total_macs = analysis.get_total_mac_number(relay_module["main"])
+        total_gflops = (total_macs * 2) / 1e9
+        logger.info(f"Initial flops estimate from TVM: {total_gflops}B")
 
     relay_module = tvm.transform.Sequential([transform.RemoveUnusedFunctions()])(relay_module)
     logger.trace("After RemoveUnusedFunctions")
