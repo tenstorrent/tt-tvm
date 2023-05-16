@@ -21,7 +21,6 @@ from .buda_passes import run_buda_compile_passes
 from .relay_passes import run_relay_compile_passes
 from .utils import *
 
-from tvm.relay.testing import run_infer_type
 
 import math
 import numpy as np
