@@ -5457,44 +5457,17 @@ def _run_jit_passes(graph, enable_lower_all_tuples=True):
         torch._C._jit_pass_lower_all_tuples(graph)
 
 
-def _redirect_inplace_output(graph):
-    """
-    This pass redirects the output node of the in-place op i.e. aten::copy_.
-    Before:
-      %1: ...
-      %2: ...
-      %3: Float(requires_grad=0, device=cpu) = aten::copy_(%input, %1, %2)
-      return (%input)
-    After:
-      %1: ...
-      %2: ...
-      %3: Float(requires_grad=0, device=cpu) = aten::copy_(%input, %1, %2)
-      return (%3)
-    """
-    for node in graph.nodes():
-        if node.kind() == "aten::copy_":
-            node_inputs = list(node.inputs())
-            src_node = node_inputs[0].node()
-            slice_and_select_nodes = []
-            while True:
-                if src_node.kind() in ["aten::slice", "aten::select", "aten::unsqueeze"]:
-                    src_node = list(src_node.inputs())[0].node()
-                    slice_and_select_nodes.append(src_node)
-                else:
-                    break
-            if src_node.kind() == "prim::Param":
-                # First one is "self"
-                src_value = list(src_node.outputs())[1]
-            else:
-                src_value = src_node.output()
-            src_value.replaceAllUsesAfterNodeWith(node, node.output())
-
-
-def _get_tensor_and_var(torch_tensor, name):
-    if str(torch_tensor.dtype) == 'torch.bfloat16':  # Use str` to avoid "import torch"
-        torch_tensor = torch_tensor.detach().float()
-    tensor = tvm.nd.array(torch_tensor.cpu().numpy())
-    var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype)
+def _get_tensor_and_var(torch_tensor, name, do_convert_params):
+    if do_convert_params:
+        if str(torch_tensor.dtype) == 'torch.bfloat16':  # Use str` to avoid "import torch"
+            torch_tensor = torch_tensor.detach().float()
+        tensor = tvm.nd.array(torch_tensor.cpu().numpy())
+        var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype)
+    else:
+        shape = tuple(torch_tensor.shape)
+        dtype = _convert_data_type(str(torch_tensor.dtype))
+        tensor = None
+        var = _expr.var(name, shape=shape, dtype=dtype)
     return tensor, var
 
 
@@ -5956,7 +5929,7 @@ def get_attr_chains(root_getattr_node):
     return get_use_chains(root_getattr_node, terminate)
 
 
-def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False):
+def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False, do_convert_params=True):
     """
     Return Relay vars and TVM NDArrays for input parameters
     A chain of prim::GetAttr nodes is processed one at a time
@@ -5998,7 +5971,7 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
                     var = vars_by_name[var_name]
                 else:
                     torch_tensor = state_dict[full_attr]
-                    tensor, var = _get_tensor_and_var(torch_tensor, var_name)
+                    tensor, var = _get_tensor_and_var(torch_tensor, var_name, do_convert_params)
                     param_tensors[var_name] = tensor
                     # for quantized parameters to be correctly located
                     param_debug_name_map[full_attr_node_name] = var_name
@@ -6062,6 +6035,7 @@ def from_pytorch(
     keep_quantized_weight=False,
     export_renamed_c_graph_path=None,
     preserve_pytorch_scopes=False,
+    do_convert_params=True, 
 ):
     """Load PyTorch model in the form of a scripted PyTorch model and convert into relay.
     The companion parameters will be handled automatically.
@@ -6163,16 +6137,17 @@ def from_pytorch(
     # by doing so, we could Use source_map as the reference to rename model parameters
     source_map = _debug_rename(graph, use_parser_friendly_name, preserve_pytorch_scopes)
     param_vars, tensors, packed_param_map, param_debug_name_map = convert_params(
-        graph, params, source_map, use_parser_friendly_name
+        graph, params, source_map, use_parser_friendly_name, do_convert_params
     )
 
-    tvm_params = {k: tvm.nd.array(v) for k, v in tensors.items()}
+    tvm_params = {k: tvm.nd.array(v) if v is not None else v for k, v in tensors.items()}
 
     outputs.update(param_vars)
 
     # For quantized models
     quantized_ops = set(["aten::quantize_per_tensor", "quantized::linear_dynamic"])
     if len(quantized_ops.intersection(set(op_names))) > 0:
+        assert do_convert_params, "Parameters need to be converted for quantized models"
         weight_quant_params = qnn_torch.get_weight_quant_params(
             script_module, packed_param_map.values()
         )
@@ -6231,6 +6206,8 @@ def from_pytorch(
     func_args = data_inputs + func_args
 
     mod["main"] = tvm.relay.Function(func_args, ret)
+    if not do_convert_params:
+        tvm_params = None
 
     if export_renamed_c_graph_path:
         export_c_graph(export_renamed_c_graph_path, graph)
