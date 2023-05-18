@@ -320,9 +320,9 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure)
+    convert_params = compiler_cfg.convert_framework_params_to_tvm
+    mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure, do_convert_params=convert_params)
     mod = tvm.relay.op.contrib.flatten_IO(mod, flattened_name_map)
-    
     # Construct TVM IR
     mod, _ = construct_tvm_ir(
         framework="pytorch",
@@ -354,6 +354,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
     if verify_cfg is not None and verify_cfg.verify_tvm_compile:
+        assert compiler_cfg.convert_framework_params_to_tvm, "Cannot verify TVM compile without converting framework params to relay"
         # If we have conv2d_transpose ops that are channel-last, tvm cannot execute the module, skip in this case
         skip_verify = has_op(mod['main'], "nn.conv2d_transpose", {"data_layout": "NHWC"})
         if skip_verify:
