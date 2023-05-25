@@ -516,73 +516,113 @@ class DenseWeightTranspose(DFPatternCallback):
         wt2 = tvm.relay.transpose(wt1)
         return tvm.relay.nn.dense(act, wt2)
 
+
 class LiftLinearSplit(DFPatternCallback):
+    """
+    Lifting head split of the KQV matmul above linear/dense layer.
+    
+    This is done by hoisting the split above the linear/dense layer, and then
+    doing the split on weights and bias of the linear/dense layer. 
+    """
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
-        act = wildcard()
-        self.dense_weight = wildcard()
-        self.add_bias = wildcard()
-        self.dense = is_op("nn.dense")(act, self.dense_weight)
+        # Linear layer
+        self.act = wildcard()
+        self.weight = wildcard()
+        self.bias = wildcard()
+        self.dense = is_op("nn.dense")(self.act, self.weight)
 
+        # I) Bias with reshape first variant
         self.reshape1 = is_op("reshape")(self.dense)
-        self.add1 = is_op("add")(self.reshape1, self.add_bias)
+        self.add1 = is_op("add")(self.reshape1, self.bias)
         self.split1 = is_op('split')(self.add1)
         self.pattern1 = self.split1
 
-        self.add2 = is_op("add")(self.dense, self.add_bias)
+        # II) Bias with add first variant
+        self.add2 = is_op("add")(self.dense, self.bias)
         self.reshape2 = is_op("reshape")(self.add2)
         self.split2 = is_op('split')(self.reshape2)
         self.pattern2 = self.split2
+        
+        # III) No bias variant
+        self.reshape3 = is_op("reshape")(self.dense)
+        self.split3 = is_op('split')(self.reshape3)
+        self.pattern3 = self.split3
 
-        self.pattern = self.pattern1 | self.pattern2
+        # Recognize any of the three patterns
+        self.pattern = self.pattern1 | self.pattern2 | self.pattern3
 
     def callback(self, pre, post, node_map):
         pre_node_map = construct_pre_node_map(self.pattern, pre)
-        if self.pattern1.match(post):
-            self.reshape = self.reshape1
-            self.add = self.add1
-            self.split = self.split1
-        elif self.pattern2.match(post):
-            self.reshape = self.reshape2
-            self.add = self.add2
-            self.split = self.split2
+
+        assert pre.op.name == "split", "Split should be last op in pattern matcher"
+
+        # Determine if bias is present or not based on pattern
+        if self.pattern1.match(post) or self.pattern2.match(post):
+            has_bias = True
+        elif self.pattern3.match(post):
+            has_bias = False
         else:
-            assert False, "Should not be here"
+            assert False, "Invalid pattern match case, shouldn't happen"
 
-        weight = node_map[self.dense_weight][0]
-        bias = node_map[self.add_bias][0]
+        # Linear/Dense attributes
+        weight_shape = pre_node_map[self.weight][0].checked_type.shape
+        
+        # Split attributes
+        split_op_axis = pre.attrs.axis
+        split_op_indices_or_sections = pre.attrs.indices_or_sections
 
-        if isinstance(post.attrs.indices_or_sections, tvm.tir.expr.IntImm):
-            total_len = int(pre.args[0].checked_type.shape[post.attrs.axis])
-            section_len = total_len // int(post.attrs.indices_or_sections)
-            indices_or_sections = list(range(section_len, total_len, section_len))
+        # Shape of split producer
+        pre_split_shape = pre.args[0].checked_type.shape
+
+        # If split is defined by number of sections, compute the indices
+        if isinstance(split_op_indices_or_sections, tvm.tir.expr.IntImm):
+            total_len = int(pre_split_shape[split_op_axis])
+            section_len = total_len // int(split_op_indices_or_sections)
+            split_op_indices_or_sections = list(range(section_len, total_len, section_len))
         else:
-            indices_or_sections = [int(ios) for ios in post.attrs.indices_or_sections]
-        axis = post.attrs.axis
+            split_op_indices_or_sections = [int(ios) for ios in split_op_indices_or_sections]
+        split_op_indices_or_sections_num = len(split_op_indices_or_sections) + 1
 
-        output_shape = pre.args[0].checked_type.shape
-        newshape = list(output_shape)
-        newshape[axis] = -1
+        # Define new reshape shape for fractured dense paths
+        newshape = list(pre_split_shape)
+        newshape[split_op_axis] = -1
 
-        # Weight should be transposed in nn.dense, so if splitting
-        # along the final output axis, split along the first weight
-        if axis == len(output_shape) - 1 or axis == -1:
-            assert output_shape[axis] == pre_node_map[self.dense_weight][0].checked_type.shape[0]
-            axis = 0
+        # Weight should be transposed in dense/linear layer. Therefore, if split
+        # is done along the last axis (C dim), we need to do the split over the
+        # first one (R dim) instead
+        if split_op_axis == len(pre_split_shape) - 1 or split_op_axis == -1:
+            head_split_reshape_before_split_is_valid = bool(pre_split_shape[split_op_axis] == weight_shape[0])
+            head_split_reshape_after_split_is_valid = bool(pre_split_shape[-1] * pre_split_shape[-2] == weight_shape[0])
+            split_op_axis = 0
 
-        act = node_map[self.dense][0].args[0]
+            assert head_split_reshape_before_split_is_valid or head_split_reshape_after_split_is_valid, "Invalid (not covered) split case for linear split uplift"
+            
+            # Use split op selection instead of indices for proper weights cut
+            if head_split_reshape_after_split_is_valid:
+                split_op_indices_or_sections = split_op_indices_or_sections_num
 
-        split_weights = tvm.relay.split(weight, indices_or_sections, axis)
-        split_biases = tvm.relay.split(bias, indices_or_sections, -1)
+        # Split weights and biases
+        weight = node_map[self.weight][0]
+        split_weights = tvm.relay.split(weight, split_op_indices_or_sections, split_op_axis)
+        bias = node_map[self.bias][0] if has_bias else None
+        split_biases = tvm.relay.split(bias, split_op_indices_or_sections, -1) if has_bias else None
 
+        # Defined by number of splits, create fractured dense paths with splitted
+        # weights and biases (if applied). For example, this means that instead of 
+        # having one dense layer, if there is a split of 3, we will have 3 new dense
+        # layers with 1/3 of the weights and biases (if applied) each. At the end,
+        # the outputs of these 3 dense layers will be concatenated to provide valid
+        # KQV split results
         outputs = []
-        for i in range(split_weights.size):
-            dense_out = tvm.relay.nn.dense(act, tvm.relay.TupleGetItem(split_weights.tuple_value, i))
-            add_out = tvm.relay.add(dense_out, tvm.relay.TupleGetItem(split_biases.tuple_value, i))
-            reshape_out = tvm.relay.reshape(add_out, newshape=newshape)
-            outputs.append(reshape_out)
-
+        act = node_map[self.act][0]
+        for i in range(split_op_indices_or_sections_num):
+            single_path_output = tvm.relay.nn.dense(act, tvm.relay.TupleGetItem(split_weights.tuple_value, i))
+            single_path_output = tvm.relay.add(single_path_output, tvm.relay.TupleGetItem(split_biases.tuple_value, i)) if has_bias else single_path_output
+            single_path_output = tvm.relay.reshape(single_path_output, newshape=newshape)
+            outputs.append(single_path_output)
         return tvm.relay.expr.Tuple(outputs)
+
 
 class LowerSplitToStridedSlice(DFPatternCallback):
     def __init__(self):
