@@ -11,6 +11,7 @@ from transformers.modeling_outputs import ModelOutput
 
 import tvm
 from tvm.relay import ExprVisitor
+from pybuda.verify.config import VerifyConfig
 from pybuda.config import CompilerConfig
 from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 from pybuda.tensor import to_pt_tensors
@@ -21,13 +22,13 @@ def extract_framework_model_outputs(
     framework: str, 
     model, 
     inputs, 
-    compiler_cfg: CompilerConfig, 
+    verify_cfg: VerifyConfig, 
     path=None,
     input_dict={},
 ):
     framework_outputs = []
 
-    if compiler_cfg is None or not compiler_cfg.varify_tvm_compile:
+    if verify_cfg is None or not verify_cfg.verify_tvm_compile:
         return framework_outputs
 
     if framework == "pytorch":

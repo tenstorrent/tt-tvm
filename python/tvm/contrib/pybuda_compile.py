@@ -291,7 +291,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         framework="pytorch",
         model=torchmod,
         inputs=inputs,
-        compiler_cfg=compiler_cfg,
+        verify_cfg=verify_cfg,
     )
 
     # (Temporary): Remove when buda supports dropout
@@ -353,7 +353,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
     verify_args = {'inputs': inputs, 'framework_outputs': golden_outputs, 'verify_cfg': verify_cfg}
     mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
-    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+    if verify_cfg is not None and verify_cfg.verify_tvm_compile:
         # If we have conv2d_transpose ops that are channel-last, tvm cannot execute the module, skip in this case
         skip_verify = has_op(mod['main'], "nn.conv2d_transpose", {"data_layout": "NHWC"})
         if skip_verify:
@@ -429,7 +429,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
         framework="onnx",
         model=onnx_mod,
         inputs=inputs,
-        compiler_cfg=compiler_cfg,
+        verify_cfg=verify_cfg,
         path=path,
         input_dict=input_dict,
     )
@@ -470,7 +470,7 @@ def compile_tflite_for_buda(module, path, *inputs, graph_name, compiler_cfg, ver
         framework="tflite",
         model=module,
         inputs=inputs,
-        compiler_cfg=compiler_cfg,
+        verify_cfg=verify_cfg,
         path=path,
     )
 
@@ -568,7 +568,7 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
         framework="jax",
         model=jaxmodel,
         inputs=inputs,
-        compiler_cfg=compiler_cfg,
+        verify_cfg=verify_cfg,
     )
 
     if compiler_cfg.enable_tvm_jax_freeze_large_model:
@@ -650,7 +650,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
         framework="tensorflow",
         model=tfmod,
         inputs=inputs,
-        compiler_cfg=compiler_cfg,
+        verify_cfg=verify_cfg,
     )
 
     # Trace module & get graph definition
@@ -767,7 +767,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
 
 def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     framework_outputs = []
-    if compiler_cfg is not None and compiler_cfg.varify_tvm_compile:
+    if verify_cfg is not None and verify_cfg.verify_tvm_compile:
         framework_outputs = module(*inputs)
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
@@ -903,6 +903,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
 
     elif framework == "tflite":
         weights = {}
+        if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
+            inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
