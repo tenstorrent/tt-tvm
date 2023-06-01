@@ -626,9 +626,9 @@ class LiftLinearSplit(DFPatternCallback):
 
 class LowerSplitToStridedSlice(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
-        act = wildcard()
-        self.split = is_op("split")(act)
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.split = is_op("split")(self.act)
 
         self.pattern = is_tuple_get_item(wildcard())
 
@@ -656,7 +656,7 @@ class LowerSplitToStridedSlice(DFPatternCallback):
         end = ios[post.index]
 
         # Check if this strided slice does nothing. If so just return act
-        if end - begin == act.checked_type.shape[axis]:
+        if end - begin == act_shape[axis]:
             return act
         
         sliced_act = tvm.relay.strided_slice(act, (begin,), (end,), axes=(axis,))
