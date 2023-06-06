@@ -558,22 +558,31 @@ class LiftLinearSplit(DFPatternCallback):
         assert pre.op.name == "split", "Split should be last op in pattern matcher"
 
         # Determine if bias is present or not based on pattern
-        if self.pattern1.match(post) or self.pattern2.match(post):
+        if self.pattern1.match(post):
             has_bias = True
+            reshape_node = pre_node_map[self.reshape1][0]
+        elif self.pattern2.match(post):
+            has_bias = True
+            reshape_node = pre_node_map[self.reshape2][0]
         elif self.pattern3.match(post):
             has_bias = False
+            reshape_node = pre_node_map[self.reshape3][0]
         else:
             assert False, "Invalid pattern match case, shouldn't happen"
 
         # Linear/Dense attributes
         weight_shape = pre_node_map[self.weight][0].checked_type.shape
-        
+
         # Split attributes
         split_op_axis = pre.attrs.axis
         split_op_indices_or_sections = pre.attrs.indices_or_sections
 
+        # Shape of Reshape producer
+        pre_reshape_shape = list(reshape_node.args[0].checked_type.shape)
+        pre_reshape_shape = [int(x) for x in pre_reshape_shape]
         # Shape of split producer
-        pre_split_shape = pre.args[0].checked_type.shape
+        pre_split_shape = list(pre.args[0].checked_type.shape)
+        pre_split_shape = [int(x) for x in pre_split_shape]
 
         # If split is defined by number of sections, compute the indices
         if isinstance(split_op_indices_or_sections, tvm.tir.expr.IntImm):
@@ -604,9 +613,45 @@ class LiftLinearSplit(DFPatternCallback):
 
         # Split weights and biases
         weight = node_map[self.weight][0]
-        split_weights = tvm.relay.split(weight, split_op_indices_or_sections, split_op_axis)
         bias = node_map[self.bias][0] if has_bias else None
-        split_biases = tvm.relay.split(bias, split_op_indices_or_sections, -1) if has_bias else None
+
+        split_weights = []
+        split_biases = []
+        if pre_reshape_shape[-1] == np.prod(pre_split_shape[-2:]) and np.prod(pre_reshape_shape[:-1]) == np.prod(pre_split_shape[:-2]):
+            # Weight dim is sliced, use strided slice to get the correct weight
+            size_per_y_dim = pre_split_shape[-1] // split_op_indices_or_sections_num
+
+            for i in range(split_op_indices_or_sections_num):
+                split_weights_i = []
+                for j in range(pre_split_shape[-2]):
+                    split_weights_i.append(
+                        tvm.relay.strided_slice(
+                            weight,
+                            begin=[j * pre_split_shape[-1] + i * size_per_y_dim,],
+                            end=[j * pre_split_shape[-1] + (i+1) * size_per_y_dim,],
+                            strides=[1,],
+                            axes=[split_op_axis,]
+                        ))
+
+                    if has_bias:
+                        split_biases.append(
+                            tvm.relay.strided_slice(
+                                bias,
+                                begin=[i * size_per_y_dim,],
+                                end=[pre_reshape_shape[-1],],
+                                strides=[pre_split_shape[-1],],
+                                axes=[split_op_axis,]
+                            )
+                        )
+
+                split_weights.append(tvm.relay.concatenate(split_weights_i, axis=split_op_axis))
+
+            split_weights = tvm.relay.expr.Tuple(split_weights)
+            split_biases = tvm.relay.expr.Tuple(split_biases) if has_bias else None
+
+        else:
+            split_weights = tvm.relay.split(weight, split_op_indices_or_sections, split_op_axis)
+            split_biases = tvm.relay.split(bias, split_op_indices_or_sections, -1) if has_bias else None
 
         # Defined by number of splits, create fractured dense paths with splitted
         # weights and biases (if applied). For example, this means that instead of 
@@ -617,8 +662,8 @@ class LiftLinearSplit(DFPatternCallback):
         outputs = []
         act = node_map[self.act][0]
         for i in range(split_op_indices_or_sections_num):
-            single_path_output = tvm.relay.nn.dense(act, tvm.relay.TupleGetItem(split_weights.tuple_value, i))
-            single_path_output = tvm.relay.add(single_path_output, tvm.relay.TupleGetItem(split_biases.tuple_value, i)) if has_bias else single_path_output
+            single_path_output = tvm.relay.nn.dense(act, split_weights[i])
+            single_path_output = tvm.relay.add(single_path_output, split_biases[i]) if has_bias else single_path_output
             single_path_output = tvm.relay.reshape(single_path_output, newshape=newshape)
             outputs.append(single_path_output)
         return tvm.relay.expr.Tuple(outputs)
