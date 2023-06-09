@@ -356,7 +356,7 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
                 else:
                     arg1 = call.args[1].args[0]
 
-                logger.info("Fixed linear")
+                logger.trace("CPU fallback on linear")
                 return super().visit(tvm.relay.nn.dense(arg0, arg1))
             
             if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.hslice":
@@ -380,7 +380,7 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
                 ops = tvm.relay.reshape(arg0, reshape_new_shape)
                 ops = tvm.relay.transpose(ops, transpose_axes)
 
-                logger.info("Fixed hslice")
+                logger.trace("CPU fallback on hslice")
                 return ops
             
             if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.binary_stack" and "PartitionedFromPattern" in call.op.attrs and call.op.attrs["PartitionedFromPattern"] == "Tuple_stack_reshape_":
@@ -568,7 +568,7 @@ class DetermineTarget(ExprMutator):
                     self.graph_changed = True
                     new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
                     new_fn = call.op.with_attr(new_attrs)
-                    logger.info(f"Changing graph")
+                    logger.debug(f"Changing {call.op.attrs['PartitionedFromPattern']}'s attr from {call.op.attrs['Composite']} to {new_fn.attrs['Composite']}")
                     return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
         elif node_hash(call) in self.nodes_to_cpu_eval and not isinstance(call.op, tvm.relay.function.Function) :
             try:
@@ -831,7 +831,7 @@ class ConstructDiGraph(ExprVisitor):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.op} to fallback")
             if node[1][0] == "pybuda.adv_index":
-                logger.debug("Special case: adv_index. If none of the ancestors of the indices are float, fallback all ancestors to indices")
+                logger.trace("Special case: adv_index. If none of the ancestors of the indices are float, fallback all ancestors to indices")
                 index_checker = IndexChecker()
                 index_checker.visit(call.args[1])
                 if index_checker.all_nodes_non_float:
@@ -950,6 +950,7 @@ class PartitionFinder(ExprVisitor):
             if gvar in self.cpu_funcs:
                 # determine if its pre or post
                 origin = trace_to_origin(call, self.tt_funcs)
+                logger.trace(f"{gvar} will be executed on CPU")
                 if origin and origin[0] in [func.name_hint for func in self.tt_funcs]:
                     self.cpu_post_funcs.append(gvar)
                     
@@ -962,7 +963,6 @@ class PartitionFinder(ExprVisitor):
                     
                 else:
                     self.cpu_pre_funcs.append(gvar)
-                
         super().visit_call(call)
                 
 
@@ -1197,19 +1197,19 @@ def flatten_IO(mod, flattened_name_map):
 def fallback_on_cpu(mod, compiler_cfg, input_names):
     import time
     
-    logger.debug(f"Running cpu fallback compilation")
-    logger.debug(f"Checking if the graph has any cpu-fallback ops...")
+    logger.trace(f"Running cpu fallback compilation")
+    logger.trace(f"Checking if the graph has any cpu-fallback ops...")
     start = time.time() 
     check_fallback_ops = CheckFallbackOps(compiler_cfg.cpu_fallback_ops)
     check_fallback_ops.visit(mod["main"])
-    logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+    logger.trace(f"Done, took: {(time.time() - start):.2f} s")
     
     if check_fallback_ops.has_fallback_ops or compiler_cfg.enable_tm_cpu_fallback:
-        logger.debug(f"Constructing digraph...")
+        logger.trace(f"Constructing digraph...")
         start = time.time()
         graph_constructor = ConstructDiGraph()
         graph_constructor.visit(mod["main"])
-        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        logger.trace(f"Done, took: {(time.time() - start):.2f} s")
         
         # Visualize DiGraph
         #
@@ -1217,7 +1217,7 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         # dot_graph = nx.nx_pydot.to_pydot(graph_constructor.graph)
         # print(dot_graph)
 
-        logger.debug(f"Finding and adding shared weights...")
+        logger.trace(f"Finding and adding shared weights...")
         start = time.time()
         fallback_nodes = add_shared_weights_to_fallback(graph_constructor.graph, graph_constructor.fallback_nodes, input_names)
         
@@ -1229,8 +1229,8 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
                 tm_cpu_fallback_ops_of_interest,
                 tm_cpu_fallback_ops_to_not_include)
         
-        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-        logger.debug(f"Determining target for ops...")
+        logger.trace(f"Done, took: {(time.time() - start):.2f} s")
+        logger.trace(f"Determining target for ops...")
         
         fallback_nodes = complete_fallback_nodes(mod, graph_constructor.graph, fallback_nodes, input_names, compiler_cfg)
         
@@ -1241,8 +1241,8 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         mod["main"] = terget_determiner.visit(mod["main"])
         terget_determiner.modify_graph = True
         mod["main"] = terget_determiner.visit(mod["main"])
-        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
-        logger.debug(f"Remapping nodes...")
+        logger.trace(f"Done, took: {(time.time() - start):.2f} s")
+        logger.trace(f"Remapping nodes...")
 
         start = time.time()
         node_remapper = NodeReMapper(terget_determiner.nodes_to_cpu_eval, graph_constructor.node_indexer.node_map)
@@ -1250,7 +1250,7 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         terget_determiner.nodes_to_cpu_eval = node_remapper.node_list
         logger.trace("After DetermineTarget")
         logger.trace(mod.functions)
-        logger.debug(f"Done, took: {(time.time() - start):.2f} s")
+        logger.trace(f"Done, took: {(time.time() - start):.2f} s")
 
 
 class VarConverter(ExprMutator):
@@ -2011,6 +2011,11 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
         partition_finder = PartitionFinder(mod, func_finder.tt_funcs, func_finder.cpu_funcs)
         partition_finder.visit(mod["main"])
+
+        if len(partition_finder.cpu_pre_funcs) > 0:
+            logger.info("A CPU pre-process device has been created")
+        if len(partition_finder.cpu_post_funcs) > 0:
+            logger.info("A CPU post-process device has been created")
 
         # now we have the pre/post functions figured out
         # merge the pre-functions, tt-functions, and post-functions into one each
