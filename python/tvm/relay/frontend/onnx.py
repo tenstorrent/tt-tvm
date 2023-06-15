@@ -26,7 +26,7 @@ import numpy as np
 import tvm
 from tvm import relay
 from tvm.ir import IRModule
-from tvm.relay.testing import run_infer_type
+from tvm.relay.frontend.common import run_infer_type
 from tvm.topi.utils import get_const_tuple
 
 from ... import nd as _nd
