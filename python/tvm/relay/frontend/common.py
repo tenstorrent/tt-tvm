@@ -32,7 +32,21 @@ from .. import op as _op
 from .. import ty as _ty
 from .. import analysis
 
+from tvm.relay.prelude import Prelude
 
+def run_opt_pass(expr, opt_pass, import_prelude=False):
+    assert isinstance(opt_pass, tvm.transform.Pass)
+    mod = tvm.IRModule.from_expr(expr)
+    if import_prelude:
+        Prelude(mod)
+    mod = tvm.relay.transform.InferType()(mod)
+    mod = opt_pass(mod)
+    entry = mod["main"]
+    return entry if isinstance(expr, tvm.relay.Function) else entry.body
+
+
+def run_infer_type(expr):
+    return run_opt_pass(expr, tvm.relay.transform.InferType())
 class DuplicateFilter:
     """A log filter that only prints the same message once."""
 
