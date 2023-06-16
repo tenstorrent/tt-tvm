@@ -623,6 +623,7 @@ class LiftLinearSplit(DFPatternCallback):
 
             for i in range(split_op_indices_or_sections_num):
                 split_weights_i = []
+                split_biases_i = []
                 for j in range(pre_split_shape[-2]):
                     split_weights_i.append(
                         tvm.relay.strided_slice(
@@ -632,23 +633,31 @@ class LiftLinearSplit(DFPatternCallback):
                             strides=[1,],
                             axes=[split_op_axis,]
                         ))
+                
+                if len(split_weights_i) > 1:
+                    split_weights.append(tvm.relay.concatenate(split_weights_i, axis=split_op_axis))
+                else:
+                    split_weights.append(split_weights_i[0])
 
-                    if has_bias:
-                        split_biases.append(
+                if has_bias:
+                    for j in range(pre_split_shape[-2]):
+                        split_biases_i.append(
                             tvm.relay.strided_slice(
                                 bias,
-                                begin=[i * size_per_y_dim,],
-                                end=[pre_reshape_shape[-1],],
-                                strides=[pre_split_shape[-1],],
+                                begin=[j * pre_split_shape[-1] + i * size_per_y_dim,],
+                                end=[j * pre_split_shape[-1] + (i+1) * size_per_y_dim,],
+                                strides=[1,],
                                 axes=[split_op_axis,]
                             )
                         )
 
-                split_weights.append(tvm.relay.concatenate(split_weights_i, axis=split_op_axis))
+                    if len(split_biases_i) > 1:
+                        split_biases.append(tvm.relay.concatenate(split_biases_i, axis=split_op_axis))
+                    else:
+                        split_biases.append(split_biases_i[0])
 
             split_weights = tvm.relay.expr.Tuple(split_weights)
             split_biases = tvm.relay.expr.Tuple(split_biases) if has_bias else None
-
         else:
             split_weights = tvm.relay.split(weight, split_op_indices_or_sections, split_op_axis)
             split_biases = tvm.relay.split(bias, split_op_indices_or_sections, -1) if has_bias else None
