@@ -114,6 +114,7 @@ class CreateJson(ExprVisitor):
             name = f"{op_type}_{self.node_idx}"
             op = self.get_default_op(name)
             if hasattr(t.checked_type, "shape"):
+                assert not any(isinstance(dim, tvm.tir.expr.Any) for dim in t.checked_type.shape), "Dynamic shapes not supported"
                 op["cache"] = {"shape": [int(dim) for dim in t.checked_type.shape]}
             else:
                 op["cache"] = {"shape": []}
