@@ -172,8 +172,9 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
   void serialize() {
     relay::Function func = Downcast<relay::Function>(func_);
     // First we convert all the parameters into input nodes.
-    for (const auto& param : func->params) {
+    for (const Var& param : func->params) {
       auto node_ptr = std::make_shared<JSONGraphNode>(param->name_hint(), "input" /* op_type_ */);
+      node_ptr->SetAttr("framework_dtype", param->framework_dtype);
       memo_[param] = AddNode(node_ptr, param);
     }
     heads_ = VisitExpr(func->body);
@@ -294,6 +295,7 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
     int is_param = 0;
     if (constant_node->is_param) {is_param = 1;}
     node->SetAttr("is_param", std::to_string(is_param));
+    node->SetAttr("framework_dtype", constant_node->framework_dtype);
     return AddNode(node, GetRef<Expr>(constant_node));
   }
 
@@ -397,7 +399,7 @@ class JSONSerializer : public MemoizedExprTranslator<std::vector<JSONGraphNodeEn
    * translation.
    */
   Array<String> const_names_;
-  
+
   /*! \brief The list of required constants. */
   Array<String> params_;
   /*! \brief A map that keeps track of the number of occurences of a unique constant name. Only used for const names != "_const_" */

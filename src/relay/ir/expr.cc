@@ -62,30 +62,32 @@ namespace relay {
 using tvm::ReprPrinter;
 using namespace tvm::runtime;
 
-Constant::Constant(runtime::NDArray data, bool is_param, std::string name, Span span) {
+Constant::Constant(runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span) {
   ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
   n->data = std::move(data);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
   n->is_param = std::move(is_param);
   n->name = std::move(name);
+  n->framework_dtype = std::move(framework_dtype);
   data_ = std::move(n);
 }
 
-Constant::Constant(runtime::NDArray data, Span span, std::string name) {
+Constant::Constant(runtime::NDArray data, Span span, std::string name, std::string framework_dtype) {
   ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
   n->data = std::move(data);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
   n->is_param = std::move(false);
   n->name = std::move(name);
+  n->framework_dtype = std::move(framework_dtype);
   data_ = std::move(n);
 }
 
 TVM_REGISTER_NODE_TYPE(ConstantNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, Span span, bool is_param, std::string name) {
-  return Constant(data, is_param, span, name);
+TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, Span span, bool is_param, std::string name, std::string framework_dtype) {
+  return Constant(data, is_param, span, name, framework_dtype);
 });
 TVM_REGISTER_GLOBAL("relay.ir.ConstantWithFields")
     .set_body_typed([](Constant constant, Optional<runtime::NDArray> opt_data,
@@ -115,18 +117,20 @@ TensorType ConstantNode::tensor_type() const {
 }
 
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
-                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Bool> opt_is_param, Optional<String> opt_name) {
+                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Bool> opt_is_param, Optional<String> opt_name, Optional<String> opt_framework_dtype) {
   runtime::NDArray data = opt_data.value_or(constant->data);
   VirtualDevice virtual_device = opt_virtual_device.value_or(constant->virtual_device());
   Span span = opt_span.value_or(constant->span);
   bool is_param = bool(opt_is_param.value_or(Bool(constant->is_param)));
   std::string name = opt_name.value_or("_const_").c_str();
+  std::string framework_dtype = opt_framework_dtype.value_or(String(constant->framework_dtype)).c_str();
 
   bool all_fields_unchanged = data.same_as(constant->data) &&
                               virtual_device.same_as(constant->virtual_device()) &&
                               span.same_as(constant->span) &&
                               is_param == constant->is_param &&
-                              name == constant->name;
+                              name == constant->name &&
+                              framework_dtype == constant->framework_dtype;
 
   if (!all_fields_unchanged) {
     ConstantNode* cow_constant_node = constant.CopyOnWrite();
@@ -135,6 +139,7 @@ Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
     cow_constant_node->span = span;
     cow_constant_node->is_param = is_param;
     cow_constant_node->name = name;
+    cow_constant_node->framework_dtype = framework_dtype;
   }
   return constant;
 }
@@ -190,31 +195,34 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
       p->stream << "Tuple(" << node->fields << ")";
     });
 
-Var::Var(Id vid, Type type_annotation, Span span) {
+Var::Var(Id vid, Type type_annotation, std::string framework_dtype, Span span) {
   ObjectPtr<VarNode> n = make_object<VarNode>();
   n->vid = std::move(vid);
   n->type_annotation = std::move(type_annotation);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->framework_dtype = std::move(framework_dtype);
   data_ = std::move(n);
 }
 
-/* static */ Var Var::GenSym(Type type_annotation, Span span) {
+/* static */ Var Var::GenSym(Type type_annotation, Span span, std::string framework_dtype) {
   static size_t next_id = std::atomic<size_t>(0);
   std::ostringstream os;
   os << "x_" << next_id++;
-  return Var(os.str(), std::move(type_annotation), std::move(span));
+  return Var(os.str(), std::move(type_annotation), std::move(framework_dtype), std::move(span));
 }
 
 Var WithFields(Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation,
-               Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
+               Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<String> opt_framework_dtype) {
   Id vid = opt_vid.value_or(var->vid);
   Type type_annotation = opt_type_annotation.value_or(var->type_annotation);
   VirtualDevice virtual_device = opt_virtual_device.value_or(var->virtual_device());
   Span span = opt_span.value_or(var->span);
+  std::string framework_dtype = opt_framework_dtype.value_or(var->framework_dtype).c_str();
 
   bool unchanged = vid.same_as(var->vid) && type_annotation.same_as(var->type_annotation) &&
-                   virtual_device.same_as(var->virtual_device()) && span.same_as(var->span);
+                   virtual_device.same_as(var->virtual_device()) && span.same_as(var->span) &&
+                   framework_dtype == var->framework_dtype;
 
   if (!unchanged) {
     VarNode* cow_var_node = var.CopyOnWrite();
@@ -222,14 +230,20 @@ Var WithFields(Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation
     cow_var_node->type_annotation = type_annotation;
     cow_var_node->virtual_device_ = virtual_device;
     cow_var_node->span = span;
+    cow_var_node->framework_dtype = framework_dtype;
   }
   return var;
 }
 
 TVM_REGISTER_NODE_TYPE(VarNode);
 
+<<<<<<< HEAD
 TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, Span span) {
   return Var(str, type_annotation, span);
+=======
+TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, std::string framework_dtype) {
+  return Var(str, type_annotation, framework_dtype);
+>>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
 });
 TVM_REGISTER_GLOBAL("relay.ir.VarWithFields")
     .set_body_typed([](Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation,

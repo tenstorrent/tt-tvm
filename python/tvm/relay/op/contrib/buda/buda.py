@@ -1086,7 +1086,6 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None, input
     with tophub_context, tvm.transform.PassContext(opt_level=5):
         logger.trace("Before Compiling")
         logger.trace(relay_module.functions)
-
         dump_graph(relay_module, graph_name, "before_compiling")
 
         relay_module = run_relay_compile_passes(relay_module)

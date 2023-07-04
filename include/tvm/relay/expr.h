@@ -78,6 +78,8 @@ class ConstantNode : public ExprNode {
 
   std::string name;
 
+  std::string framework_dtype;
+
   /*! \return The corresponding tensor type of the data */
   TensorType tensor_type() const;
 
@@ -91,6 +93,7 @@ class ConstantNode : public ExprNode {
     v->Visit("_checked_type_", &checked_type_);
     v->Visit("is_param", &is_param);
     v->Visit("name", &name);
+    v->Visit("framework_dtype", &framework_dtype);
   }
 
   bool SEqualReduce(const ConstantNode* other, SEqualReducer equal) const {
@@ -111,9 +114,10 @@ class Constant : public Expr {
    * \param span The source span of the expression.
    * \param is_param Whether or not this constant is a parameter of the model
    * \param name the name of the constant
+   * \param framework_dtype the originaly dtype from the framework this constant was taken from
    */
-  TVM_DLL explicit Constant(runtime::NDArray data, Span span, std::string name = "_const_");
-  TVM_DLL explicit Constant(runtime::NDArray data, bool is_param = false, std::string name = "_const_", Span span = Span());
+  TVM_DLL explicit Constant(runtime::NDArray data, Span span, std::string name = "_const_", std::string framework_dtype = "N/A");
+  TVM_DLL explicit Constant(runtime::NDArray data, bool is_param = false, std::string name = "_const_", std::string framework_dtype = "N/A", Span span = Span());
 
   TVM_DEFINE_OBJECT_REF_METHODS(Constant, RelayExpr, ConstantNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(ConstantNode);
@@ -125,7 +129,7 @@ class Constant : public Expr {
  * fields.
  */
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data = {},
-                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {}, Optional<Bool> opt_is_param = {}, Optional<String> opt_name = {});
+                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {}, Optional<Bool> opt_is_param = {}, Optional<String> opt_name = {}, Optional<String> opt_framework_dtype = {});
 
 /*! \brief Tuple of multiple Exprs */
 class Tuple;
@@ -214,6 +218,8 @@ class VarNode : public ExprNode {
    */
   Type type_annotation;
 
+  std::string framework_dtype;
+
   /*! \return The name hint of the variable */
   const String& name_hint() const { return vid->name_hint; }
 
@@ -223,11 +229,12 @@ class VarNode : public ExprNode {
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
     v->Visit("_checked_type_", &checked_type_);
+    v->Visit("framework_dtype", &framework_dtype);
   }
 
   bool SEqualReduce(const VarNode* other, SEqualReducer equal) const {
     equal->MarkGraphNode();
-    return equal(type_annotation, other->type_annotation) && equal(vid, other->vid) &&
+    return equal(type_annotation, other->type_annotation) && equal(vid, other->vid) && framework_dtype == other->framework_dtype &&
            equal(virtual_device_, other->virtual_device_);
   }
 
@@ -235,6 +242,7 @@ class VarNode : public ExprNode {
     hash_reduce->MarkGraphNode();
     hash_reduce(type_annotation);
     hash_reduce(vid);
+    hash_reduce(framework_dtype);
   }
 
   static constexpr const char* _type_key = "relay.Var";
@@ -250,15 +258,35 @@ class Var : public Expr {
    * \param span The source span of the expression.
    */
   TVM_DLL Var(String name_hint, Type type_annotation, Span span = Span())
-      : Var(Id(name_hint), type_annotation, span) {}
+      : Var(Id(name_hint), type_annotation, "N/A", span) {}
+
+  /*!
+   * \brief The constructor
+   * \param name_hint The name hint of a variable.
+   * \param type_annotation The type annotation of a variable.
+   * \param span The source span of the expression.
+   * \param framework_dtype The framework dtype of a variable.
+   */
+  TVM_DLL Var(String name_hint, Type type_annotation, std::string framework_dtype, Span span = Span())
+      : Var(Id(name_hint), type_annotation, framework_dtype, span) {}
+
+   /*!
+   * \brief The constructor
+   * \param vid The unique id of a variable.
+   * \param type_annotation The type annotation of a variable.
+   * \param span The source span of the expression.
+   */
+  TVM_DLL Var(Id vid, Type type_annotation, Span span = Span())
+    : Var(vid, type_annotation, "N/A", span) {}
 
   /*!
    * \brief The constructor
    * \param vid The unique id of a variable.
    * \param type_annotation The type annotation of a variable.
    * \param span The source span of the expression.
+   * \param framework_dtype The framework dtype of a variable.
    */
-  TVM_DLL Var(Id vid, Type type_annotation, Span span = Span());
+  TVM_DLL Var(Id vid, Type type_annotation, std::string framework_dtype, Span span = Span());
 
   /*!
    * \brief Return a globally fresh name. Helps with debugging to follow the same
@@ -267,7 +295,7 @@ class Var : public Expr {
    * TODO(mbs): Replace with name creation w.r.t. scopes once available as part of
    * name gen overhaul.
    */
-  static Var GenSym(Type type_annotation = {}, Span span = {});
+  static Var GenSym(Type type_annotation = {}, Span span = {}, std::string framework_dtype = "N/A");
 
   TVM_DEFINE_OBJECT_REF_METHODS(Var, RelayExpr, VarNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(VarNode);
@@ -281,7 +309,8 @@ class Var : public Expr {
 Var WithFields(Var var, Optional<Id> opt_vid = Optional<Id>(),
                Optional<Type> opt_type_annotation = Optional<Type>(),
                Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
-               Optional<Span> opt_span = Optional<Span>());
+               Optional<Span> opt_span = Optional<Span>(),
+               Optional<String> opt_framework_dtype = {});
 
 /*!
  * \brief Call corresponds to operator invocation.

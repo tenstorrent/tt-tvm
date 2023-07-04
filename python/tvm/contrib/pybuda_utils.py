@@ -141,12 +141,12 @@ def extract_flatten_inputs(framework: str, model, inputs):
                     elif isinstance(input, dict):
                         structure = (input_names[i], {k: v.shape for k, v in input.items()})
                     else:
-                        structure = (input_names[i], tuple(input.shape))
+                        structure = (input_names[i], (tuple(input.shape), str(input.dtype).replace("torch.", "")))
                     input_structure.append(tuple(structure))
             else:
                 input_structure = OrderedDict()
                 for k, v in inputs.items():
-                    input_structure[k] = v.shape
+                    input_structure[k] = (tuple(v.shape), str(input.dtype).replace("torch.", ""))
             return input_structure
         
         input_structure = get_input_structure(inputs, input_names)
