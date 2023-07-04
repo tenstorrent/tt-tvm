@@ -7259,6 +7259,7 @@ def export_model(location, graph):
     save(model, os.path.join(location, f"tvm_exported_model_{time_stamp}.onnx"))
 
 
+# TODO: @lpanos: Support for setting the 'framework_dtype' attribute on Var and Constant nodes is not complete
 def from_onnx(
     model,
     shape=None,

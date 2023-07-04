@@ -39,16 +39,18 @@ namespace tvm {
 namespace relay {
 namespace transform {
 
-class IsParamChecker : public ExprVisitor {
+class ConstAttrChecker : public ExprVisitor {
   public:
     bool is_param = false;
     std::string name;
+    std::string framework_dtype;
   private:
     void VisitExpr_(const ConstantNode* c) {
       name = c->name;
       if (c->is_param) {
         is_param = true;
       }
+      framework_dtype = c->framework_dtype;
     }
 };
 
@@ -179,7 +181,7 @@ class ConstantFolder : public MixedModeMutator {
       return std::move(post_call);
     }
 
-    auto checker = IsParamChecker();
+    auto checker = ConstAttrChecker();
     checker.VisitExpr(pre_call);
 
     Op op = GetRef<Op>(op_node);
@@ -217,7 +219,7 @@ class ConstantFolder : public MixedModeMutator {
     }
     // During evaluation we have obviously lost all on_device annotations. However any
     // on_device wrapping this call will be left in place.
-    return ConstEvaluate(post_call, checker.is_param, &checker.name);
+    return ConstEvaluate(post_call, checker.is_param, &checker.framework_dtype, &checker.name);
   }
 
   Expr VisitExpr_(const IfNode* if_node) final {
@@ -249,24 +251,19 @@ class ConstantFolder : public MixedModeMutator {
   }
 
   // Convert value to expression.
-  Expr ObjectToExpr(const ObjectRef& value, bool is_param = false, const std::string* name = nullptr) {
+  Expr ObjectToExpr(const ObjectRef& value, bool is_param = false, const std::string* framework_dtype = nullptr, const std::string* name = nullptr) {
+    std::string name_ = name == nullptr ? "_const_" : *name;
+    std::string framework_dtype_ = framework_dtype == nullptr ? "N/A" : *framework_dtype;
     if (value->IsInstance<runtime::NDArray::ContainerType>()) {
       auto nd_array = Downcast<runtime::NDArray>(value);
-      if(name != nullptr) {
-        return Constant(nd_array, is_param, *name);
-      } else {
-        return Constant(nd_array, is_param);
-      }
+      return Constant(nd_array, is_param, name_, framework_dtype_);
     } else if (auto opt = value.as<runtime::ADT>()) {
       runtime::ADT adt = opt.value();
       Array<Expr> fields;
       for (size_t i = 0; i < adt.size(); ++i) {
         Expr expr;
-        if (name != nullptr) {
-          expr = ObjectToExpr(adt[i], is_param, name);
-        } else {
-          expr = ObjectToExpr(adt[i], is_param);
-        }
+        expr = ObjectToExpr(adt[i], is_param, framework_dtype, name);
+        
         fields.push_back(expr);
       }
       return Tuple(fields);
@@ -276,7 +273,7 @@ class ConstantFolder : public MixedModeMutator {
   }
 
   // Constant evaluate an expression.
-  Expr ConstEvaluate(const Expr& expr, bool is_param = false, const std::string* name = nullptr) {
+  Expr ConstEvaluate(const Expr& expr, bool is_param = false, const std::string* framework_dtype = nullptr, const std::string* name = nullptr) {
     VLOG_CONTEXT << "ConstEvaluate";
     VLOG(1) << "Evaluating :" << std::endl << PrettyPrint(expr);
 
@@ -296,7 +293,7 @@ class ConstantFolder : public MixedModeMutator {
     dict.Set(tvm::attr::kExecutor,
              relay::Executor::Create("graph", {{"link-params", runtime::Bool(false)}}));
     Expr result = ObjectToExpr(Eval(expr, module_->type_definitions, module_->Imports(),
-                                    eval_cpu_dev_, eval_cpu_target_, dict), is_param, name);
+                                    eval_cpu_dev_, eval_cpu_target_, dict), is_param, framework_dtype, name);
     VLOG(1) << "Evaluated to constant:" << std::endl << PrettyPrint(result);
     return result;
   }

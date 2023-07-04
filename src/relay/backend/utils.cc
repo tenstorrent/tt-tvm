@@ -378,7 +378,8 @@ relay::Function BindParamsByName(relay::Function func,
     if (repeat_var.count(arg)) {
       LOG(FATAL) << "Multiple args in the function have name " << kv.first;
     }
-    bind_dict[arg] = kv.second;
+    Constant cloned_constant = WithFields(kv.second, kv.second->data, kv.second->virtual_device(), kv.second->span, Bool(kv.second->is_param), String(kv.second->name), String(arg->framework_dtype));
+    bind_dict[arg] = cloned_constant;
   }
   Expr bound_expr = relay::Bind(func, bind_dict);
   Function ret = Downcast<Function>(bound_expr);

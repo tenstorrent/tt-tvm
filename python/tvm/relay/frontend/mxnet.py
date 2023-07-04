@@ -2896,6 +2896,7 @@ def _update_shape_dtype(shape, dtype, params):
     return shape, dtype
 
 
+# TODO: @lpanos: Currentrly no support for setting 'framework_dtype' attribute on Var and Constant
 def from_mxnet(symbol, shape=None, dtype="float32", arg_params=None, aux_params=None):
     """Convert from MXNet"s model into compatible relay Function.
 

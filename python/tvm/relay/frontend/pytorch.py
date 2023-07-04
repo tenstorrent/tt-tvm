@@ -5378,9 +5378,9 @@ def _convert_data_type(input_type, default_dtype=None):
     input_type = input_type.lower()
     if input_type in ["double", "float64", "torch.float64"]:
         return "float64"
-    elif input_type in ["float", "float32", "torch.float32"]:
+    elif input_type in ["float", "float32", "torch.float32", "bfloat16"]:
         return "float32"
-    elif input_type in ["half", "float16", "torch.float16", "bfloat16"]:
+    elif input_type in ["half", "float16", "torch.float16"]:
         return "float16"
     elif input_type in ["long", "int64", "torch.int64"]:
         return "int64"
@@ -5459,15 +5459,17 @@ def _run_jit_passes(graph, enable_lower_all_tuples=True):
 
 def _get_tensor_and_var(torch_tensor, name, do_convert_params):
     if do_convert_params:
-        if str(torch_tensor.dtype) == 'torch.bfloat16':  # Use str` to avoid "import torch"
+        orig_dtype = str(torch_tensor.dtype).replace("torch.", "")
+        if orig_dtype == 'bfloat16':
             torch_tensor = torch_tensor.detach().float()
         tensor = tvm.nd.array(torch_tensor.cpu().numpy())
-        var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype)
+        var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype, framework_dtype=orig_dtype)
     else:
+        orig_dtype = str(torch_tensor.dtype).replace("torch.", "")
         shape = tuple(torch_tensor.shape)
         dtype = _convert_data_type(str(torch_tensor.dtype))
         tensor = None
-        var = _expr.var(name, shape=shape, dtype=dtype)
+        var = _expr.var(name, shape=shape, dtype=dtype, framework_dtype=orig_dtype)
     return tensor, var
 
 
@@ -5826,7 +5828,7 @@ def _get_relay_input_vars(graph, input_infos, prelude, is_module=True, default_d
                 new_graph_input_types = gi_type.elements()
                 input_types.append((name, get_input_types(info, new_graph_input_types)))
             else:
-                input_types.append((name, get_relay_ty(info[0], info[1], gi_type)))
+                input_types.append((name, get_relay_ty(info[0], info[1], gi_type), info[1])) # info[1] is the framework datatype, which may differ after being converted to relay
         return input_types
 
     
@@ -5835,7 +5837,9 @@ def _get_relay_input_vars(graph, input_infos, prelude, is_module=True, default_d
 
     def get_input_vars(input_types, graph_input_names, use_tuple_type=False, tuple_name=""):        
         input_vars = {} if not use_tuple_type else []
-        for gi_name, (name, itype) in zip(graph_input_names, input_types):
+        for gi_name, gi_type in zip(graph_input_names, input_types):
+            name, itype = gi_type[0], gi_type[1]
+            framework_dtype = gi_type[2] if len(gi_type) == 3 else None
             if isinstance(itype, (tuple, list)):
                 new_graph_input_names = [f"{gi_name}_{i}" for i in range(len(itype))]
                 if use_tuple_type:
@@ -5843,10 +5847,11 @@ def _get_relay_input_vars(graph, input_infos, prelude, is_module=True, default_d
                 else:
                     input_vars[gi_name] = get_input_vars(itype, new_graph_input_names, True, name)
             else:
+                assert framework_dtype is not None, "framework_dtype must be specified"
                 if use_tuple_type:
-                    input_vars.append(_expr.var(name, type_annotation=itype))
+                    input_vars.append(_expr.var(name, type_annotation=itype, framework_dtype=framework_dtype))
                 else:
-                    input_vars[gi_name] = _expr.var(name, type_annotation=itype)
+                    input_vars[gi_name] = _expr.var(name, type_annotation=itype, framework_dtype=framework_dtype)
         if use_tuple_type:
             input_vars = _expr.Tuple(input_vars)
         return input_vars

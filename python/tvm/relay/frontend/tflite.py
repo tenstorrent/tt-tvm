@@ -4151,6 +4151,7 @@ def _input_type(model):
     return shape_dict, dtype_dict
 
 
+# TODO: @lpanos: Currentrly no support for setting 'framework_dtype' attribute on Var and Constant
 def from_tflite(model, shape_dict=None, dtype_dict=None, op_converter=OperatorConverter):
     """Convert from tflite model into compatible relay Function.
 

@@ -208,8 +208,8 @@ class Constant(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, data, span=None, is_param=False, name="_const_"):
-        self.__init_handle_by_constructor__(_ffi_api.Constant, data, span, is_param, name)
+    def __init__(self, data, span=None, is_param=False, name="_const_", framework_dtype="N/A"):
+        self.__init_handle_by_constructor__(_ffi_api.Constant, data, span, is_param, name, framework_dtype)
 
 
 @tvm._ffi.register_func("relay.ConstantWithFields")
@@ -281,8 +281,8 @@ class Var(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, name_hint, type_annotation=None, span=None):
-        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, span)
+    def __init__(self, name_hint, type_annotation=None, span=None, framework_dtype="N/A"):
+        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, span, framework_dtype)
 
     @property
     def name_hint(self):
@@ -596,7 +596,7 @@ class TupleWrapper(object):
         raise TypeError("astype cannot be used on tuple")
 
 
-def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None):
+def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None, framework_dtype="N/A"):
     """Create a new tvm.relay.Var.
 
     This is a simple wrapper function that allows specify
@@ -642,6 +642,7 @@ def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None)
         type_annotation = _ty.TensorType(shape, dtype)
     elif isinstance(type_annotation, str):
         type_annotation = _ty.TensorType((), type_annotation)
+<<<<<<< HEAD
     return Var(name_hint, type_annotation, span)
 
 
@@ -654,6 +655,12 @@ def const(value, dtype=None, is_param=False):
 =======
 def const(value, dtype=None, is_param=False, name='_const_'):
 >>>>>>> 09d0adf48... propping const names
+=======
+    return Var(name_hint, type_annotation, framework_dtype)
+
+
+def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/A"):
+>>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
     """Create a constant value.
 
     Parameters
@@ -695,6 +702,7 @@ def const(value, dtype=None, is_param=False, name='_const_'):
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     return Constant(value, span)
 =======
     return Constant(value, is_param)
@@ -702,6 +710,9 @@ def const(value, dtype=None, is_param=False, name='_const_'):
 =======
     return Constant(value, is_param, name)
 >>>>>>> 09d0adf48... propping const names
+=======
+    return Constant(value, is_param, name, framework_dtype)
+>>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
 
 
 def bind(expr, binds):

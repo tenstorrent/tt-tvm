@@ -171,13 +171,14 @@ class Partitioner : public MixedModeMutator {
         auto calling_var = call->args[0].as<VarNode>();
         //std::cout << call->args[0].as<VarNode>()->name_hint() << std::endl;
         std::string varname;
+        Var var;
         if (calling_var != nullptr) {
           varname = calling_var->name_hint();
+          var = Var(varname, GetRef<Call>(call)->checked_type_, calling_var->framework_dtype);
         } else {
           varname = target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
+          var = Var(varname, GetRef<Call>(call)->checked_type_);
         }
-
-        auto var = Var(varname, GetRef<Call>(call)->checked_type_);
 
         std::pair<Var, Expr> cand = std::make_pair(var, input_expr);
 

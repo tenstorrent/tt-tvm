@@ -705,6 +705,7 @@ class GraphProto(object):
         if key == "value":
             unsuported_types = [dtypes.bfloat16, ]
             np_array = tensor_util.MakeNdarray(value.tensor)
+            orig_dtype = str(dtypes.as_dtype(value.tensor.dtype))[9:-2] # "i.e. <dtype: 'int32'> -> int32"
             if dtypes.as_dtype(value.tensor.dtype) in unsuported_types:
                 np_array = np_array.astype('float32')
 
@@ -722,13 +723,13 @@ class GraphProto(object):
 
             array_ndim = len(np_array.shape)
             if array_ndim == 0 or "int" in str(np_array.dtype):
-                self._nodes[name] = [tvm.relay.const(np_array, np_array.dtype)]
+                self._nodes[name] = [tvm.relay.const(np_array, np_array.dtype, framework_dtype=orig_dtype)]
             else:
                 self._params[name] = tvm.nd.array(np_array)
                 self._nodes[name] = [
                     set_span(
                         _expr.var(
-                            name, shape=self._params[name].shape, dtype=self._params[name].dtype
+                            name, shape=self._params[name].shape, dtype=self._params[name].dtype, framework_dtype=orig_dtype
                         ),
                         name,
                     )
@@ -1223,6 +1224,7 @@ class SubGraphProto(GraphProto):
         return func, self._params
 
 
+# TODO: @lpanos: Support for setting the 'framework_dtype' attribute on Var and Constant nodes is not complete
 def from_tensorflow(graph, layout="NHWC", shape=None, outputs=None, convert_config=None):
     """Load tensorflow graph which is a python tensorflow graph object into relay.
     The companion parameters will be handled automatically.

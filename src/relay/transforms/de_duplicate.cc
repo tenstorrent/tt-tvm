@@ -44,7 +44,7 @@ Expr DeDup(const Expr& e) {
     Var Fresh(const Var& v) {
       ICHECK_EQ(rename_.count(v), 0);
       ICHECK_EQ(memo_.count(v), 0) << v.as<VarNode>();
-      Var ret = Var(v->name_hint(), VisitType(v->type_annotation));
+      Var ret = Var(v->name_hint(), VisitType(v->type_annotation), v->framework_dtype);
       rename_[v] = ret;
       return ret;
     }
