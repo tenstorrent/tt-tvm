@@ -3091,6 +3091,112 @@ class DecomposeNonZeroPadtoConcat(DFPatternCallback):
         return act
 
 
+class ReplaceYolov5Perf(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.mul1_1_const = wildcard()
+        self.mul1_3_const = wildcard()
+        self.mul2_1_const = wildcard()
+        self.add2_2_const = wildcard()
+        self.mul2_3_const = wildcard()
+
+        self.act = wildcard()
+        self.reshape = is_op("reshape")(self.act)
+        transpose1 = is_op("transpose")(self.reshape)
+        transpose2 = is_op("transpose")(transpose1)
+        sigmoid = is_op("sigmoid")(transpose2)
+
+        self.slice1 = is_op("strided_slice")(sigmoid)
+        mul1_1 = is_op("multiply")(self.slice1, self.mul1_1_const)
+        mul1_2 = is_op("multiply")(mul1_1, mul1_1)
+        mul1_3 = is_op("multiply")(mul1_2, self.mul1_3_const)
+
+        self.slice2 = is_op("strided_slice")(sigmoid)
+        mul2_1 = is_op("multiply")(self.slice2, self.mul2_1_const)
+        add2_2 = is_op("add")(mul2_1, self.add2_2_const)
+        mul2_3 = is_op("multiply")(add2_2, self.mul2_3_const)
+
+        self.slice3 = is_op("strided_slice")(sigmoid)
+
+        tup = is_tuple([mul2_3, mul1_3, self.slice3])
+        self.pattern = is_op("concatenate")(tup)
+
+    def callback(self, pre, post, node_map):
+        reshaped_shape = list(node_map[self.reshape][0].checked_type.shape)
+        reshaped_shape = [int(x) for x in reshaped_shape]
+        shape1 = [1, 1, reshaped_shape[1]*reshaped_shape[2], reshaped_shape[3]*reshaped_shape[4]]
+        shape2 = [1, reshaped_shape[1], reshaped_shape[2], reshaped_shape[3]*reshaped_shape[4]]
+ 
+        def separate_slice_attr(slice_attrs):
+            return int(slice_attrs.begin[0]), int(slice_attrs.end[0]), int(slice_attrs.axes[0])
+        slice1_begin, slice1_end, slice1_axis = separate_slice_attr(node_map[self.slice1][0].attrs)
+        slice2_begin, slice2_end, slice2_axis = separate_slice_attr(node_map[self.slice2][0].attrs)
+        slice3_begin, slice3_end, slice3_axis = separate_slice_attr(node_map[self.slice3][0].attrs)
+        if slice1_axis != 4 or slice2_axis != 4 or slice3_axis != 4 or len(reshaped_shape) != 5:
+            return post
+
+        act = node_map[self.act][0]
+        mul1_1_const = node_map[self.mul1_1_const][0]
+        mul1_3_const = node_map[self.mul1_3_const][0]
+        mul2_1_const = node_map[self.mul2_1_const][0]
+        add2_2_const = node_map[self.add2_2_const][0]
+        mul2_3_const = node_map[self.mul2_3_const][0]
+
+        # pad add2_2
+        slice2_length = slice2_end - slice2_begin
+        pad2_shape = reshaped_shape.copy()
+        pad2_shape[2] -= slice2_length
+        pad2 = tvm.relay.Constant(tvm.nd.array(np.zeros(pad2_shape, dtype=act.checked_type.dtype)))
+        add2_2_const = tvm.relay.transpose(add2_2_const, axes=[0, 1, 4, 2, 3])
+        add2_2_const = tvm.relay.concatenate([add2_2_const, pad2], axis=2)
+        add2_2_const = tvm.relay.reshape(add2_2_const, newshape=[1, reshaped_shape[1]*reshaped_shape[2], reshaped_shape[3], reshaped_shape[4]])
+
+        # pad mul1_3
+        slice1_length = slice1_end - slice1_begin
+        pad1_1_shape = reshaped_shape.copy()
+        pad1_1_shape[2] = slice2_length
+        pad1_1 = tvm.relay.Constant(tvm.nd.array(np.zeros(pad1_1_shape, dtype=act.checked_type.dtype)))
+        pad1_3_shape = reshaped_shape.copy()
+        pad1_3_shape[2] -= (slice2_length + slice1_length)
+        pad1_3 = tvm.relay.Constant(tvm.nd.array(np.zeros(pad1_3_shape, dtype=act.checked_type.dtype)))
+        mul1_3_const = tvm.relay.transpose(mul1_3_const, axes=[0, 1, 4, 2, 3])
+        mul1_3_const = tvm.relay.concatenate([pad1_1, mul1_3_const, pad1_3], axis=2)
+        mul1_3_const = tvm.relay.reshape(mul1_3_const, newshape=[1, reshaped_shape[1]*reshaped_shape[2], reshaped_shape[3], reshaped_shape[4]])
+
+        # generate masks
+        def generate_slice_mask(begin, end):
+            slice_mask_index = np.zeros(reshaped_shape.copy(), dtype=act.checked_type.dtype)
+            slice_mask_index[:,:,begin:end,:,:] = 1.0
+            slice_mask = tvm.relay.Constant(tvm.nd.array(slice_mask_index))
+            slice_mask = tvm.relay.reshape(slice_mask, newshape=[1, reshaped_shape[1]*reshaped_shape[2], reshaped_shape[3], reshaped_shape[4]])
+            return slice_mask
+        slice1_mask = generate_slice_mask(slice1_begin, slice1_end)
+        slice2_mask = generate_slice_mask(slice2_begin, slice2_end)
+        slice3_mask = generate_slice_mask(slice3_begin, slice3_end)
+
+        # re-connect
+        sigmoid = tvm.relay.sigmoid(act)
+
+        mul1_1 = tvm.relay.multiply(sigmoid, mul1_1_const)
+        mul1_2 = tvm.relay.multiply(mul1_1, mul1_1)
+        mul1_3 = tvm.relay.multiply(mul1_2, mul1_3_const)
+        mul1_3_masked = tvm.relay.multiply(mul1_3, slice1_mask)
+
+        mul2_1 = tvm.relay.multiply(sigmoid, mul2_1_const)
+        add2_2 = tvm.relay.add(mul2_1, add2_2_const)
+        mul2_3 = tvm.relay.multiply(add2_2, mul2_3_const)
+        mul2_3_masked = tvm.relay.multiply(mul2_3, slice2_mask)
+
+        slice3_masked = tvm.relay.multiply(sigmoid, slice3_mask)
+
+        partial_sum = tvm.relay.add(mul1_3_masked, mul2_3_masked)
+        _sum = tvm.relay.add(partial_sum, slice3_masked)
+
+        reshape = tvm.relay.reshape(_sum, newshape=shape1)
+        reshape = tvm.relay.reshape(reshape, newshape=shape2)
+        transpose = tvm.relay.transpose(reshape, axes=[0, 1, 3, 2])
+        return transpose
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -3215,6 +3321,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             Enforce1DOutputForArgwhereOp(),
             BroadcastScatterValuesToMatchIndices(),
             InverseMaskGen(),
+            ReplaceYolov5Perf(),
         ],
         params=params,
         inputs=inputs,
