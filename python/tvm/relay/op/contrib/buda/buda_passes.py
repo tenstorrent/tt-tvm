@@ -3196,6 +3196,54 @@ class ReplaceYolov5Perf(DFPatternCallback):
         reshape = tvm.relay.reshape(reshape, newshape=shape2)
         transpose = tvm.relay.transpose(reshape, axes=[0, 1, 3, 2])
         return transpose
+    
+    
+class TransformDenseIntoBatchMM(DFPatternCallback):
+    """
+    This pass will transform dense into batch_matmul and therefore
+    remove redundant squeeze and unsqueeze ops.
+    """
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard()
+        self.weight = wildcard()
+        
+        self.reshape1 = is_op("reshape")(self.act)
+        self.transpose = is_op("transpose")(self.weight)
+        
+        self.lm_head = is_op("nn.dense")(self.reshape1, self.transpose)
+        self.reshape2 = is_op("reshape")(self.lm_head)
+
+        self.pattern = self.reshape2
+        
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        activations = node_map[self.act][0]
+        weight = node_map[self.weight][0]
+        squeeze = node_map[self.reshape1][0]
+        weight_transpose = node_map[self.transpose][0]
+        lm_head = node_map[self.lm_head][0]
+        unsqueeze = node_map[self.reshape2][0]
+
+        if not (len(weight.args) == 1 and isinstance(weight.args[0], tvm.relay.Var)):
+            return post
+        if len(list(activations.checked_type.shape)) != 3:
+            return post
+        if len(list(weight_transpose.checked_type.shape)) != 2:
+            return post
+        if len(list(lm_head.checked_type.shape)) != 2:
+            return post
+        if len(list(unsqueeze.checked_type.shape)) != 3:
+            return post
+        
+        new_weight_shape = [1] + list(weight.checked_type.shape)
+        weight_reshape = tvm.relay.reshape(weight, newshape=new_weight_shape)
+        lm_head = tvm.relay.nn.batch_matmul(activations, weight_reshape, transpose_a=False, transpose_b=False)
+
+        return lm_head
+
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
@@ -3322,6 +3370,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             BroadcastScatterValuesToMatchIndices(),
             InverseMaskGen(),
             ReplaceYolov5Perf(),
+            # TransformDenseIntoBatchMM(),
         ],
         params=params,
         inputs=inputs,
