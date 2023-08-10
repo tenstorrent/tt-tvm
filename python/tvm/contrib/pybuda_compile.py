@@ -282,28 +282,72 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
 
     return json_graphs
 
+class ConvertEmulatedDtypes:
+    '''
+    This class converts data formats which must be emulated by CPU into float32 within its context.
+    It is used when a model's parameters and inputs would be slow to compute on CPU and precision is not important.
+    '''
+    def __init__(self, model, inputs):
+        self.model = model
+        self.inputs = inputs
+        self.emulated_dfs = [torch.bfloat16]
+        self.fallback = torch.float32
+    
+    def flatten_object(self, obj):
+        if isinstance(obj, (list, tuple)):
+            return [item for sublist in obj for item in self.flatten_object(sublist)]
+        elif isinstance(obj, dict):
+            return [item for key, value in obj.items() for item in self.flatten_object(value)]
+        else:
+            return [obj]
+
+    def __enter__(self):
+        # Convert emulated model parameters to fallback
+        self.param_dfs = {}
+        for name, param in self.model.named_parameters():
+            if param.dtype in self.emulated_dfs:
+                self.param_dfs[name] = param.dtype
+                param.data = param.data.to(self.fallback)
+
+        # Convert emulated inputs to fallback
+        self.input_dfs = []
+        for inp in self.flatten_object(self.inputs):
+            self.input_dfs.append(inp.dtype)
+            if inp.dtype in self.emulated_dfs:
+                inp.data = inp.data.to(self.fallback)
+    
+    def __exit__(self, *args):
+        # Convert model parameters back to original dtype
+        for name, param in self.model.named_parameters():
+            if name in self.param_dfs:
+                param.data = param.data.to(self.param_dfs[name])
+
+        # Convert inputs back to original dtype
+        for inp, df in zip(self.flatten_object(self.inputs), self.input_dfs):
+            inp.data = inp.data.to(df)
 
 def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     training_mode = torchmod.training
 
-    # Extract framework model outputs
-    framework_outputs = extract_framework_model_outputs(
-        framework="pytorch",
-        model=torchmod,
-        inputs=inputs,
-        verify_cfg=verify_cfg,
-    )
+    with ConvertEmulatedDtypes(torchmod, inputs):
+        # Extract framework model outputs
+        framework_outputs = extract_framework_model_outputs(
+            framework="pytorch",
+            model=torchmod,
+            inputs=inputs,
+            verify_cfg=verify_cfg,
+        )
 
-    # (Temporary): Remove when buda supports dropout
-    if training_mode and compiler_cfg.enable_tvm_dropout == False:
-        torchmod.eval()
+        # (Temporary): Remove when buda supports dropout
+        if training_mode and compiler_cfg.enable_tvm_dropout == False:
+            torchmod.eval()
 
-    if isinstance(torchmod, torch.jit.ScriptModule):
-        torchmod.eval()
-        torchmod = torch.jit.freeze(torchmod)
+        if isinstance(torchmod, torch.jit.ScriptModule):
+            torchmod.eval()
+            torchmod = torch.jit.freeze(torchmod)
         
-    # Trace framework model
-    traced_model = torch.jit.trace(torchmod, inputs, strict=False)
+        # Trace framework model
+        traced_model = torch.jit.trace(torchmod, inputs, strict=False)
 
     # Extract flatten inputs
     flattened_inputs, flattened_input_names, flattened_name_map, input_structure = extract_flatten_inputs(
