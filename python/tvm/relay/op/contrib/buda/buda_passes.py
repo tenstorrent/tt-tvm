@@ -1,3 +1,5 @@
+import os
+import ast
 import tvm
 
 from tvm.relay import transform
@@ -3245,6 +3247,99 @@ class TransformDenseIntoBatchMM(DFPatternCallback):
         return lm_head
 
 
+class PadSpecificBatchMatmulShapes(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.lhs = wildcard()
+        self.rhs = wildcard()
+        
+        self.bmm = is_op("nn.batch_matmul")(self.lhs, self.rhs)
+
+        self.pattern = self.bmm
+
+    def callback(self, pre, post, node_map):
+        # Environment variable guard
+        if "PYBUDA_PAD_MM" not in os.environ:
+            return post
+        tile_r_padding = ast.literal_eval(os.environ.get('PYBUDA_PAD_MM', "{}"))
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+        lhs = node_map[self.lhs][0]
+        rhs = node_map[self.rhs][0]
+        bmm = node_map[self.bmm][0]
+        
+        bmm_shape = list(bmm.checked_type.shape)
+        if len(bmm_shape) != 3:
+            return post
+        if int(bmm_shape[-2]) <= int(bmm_shape[-1]):
+            return post
+        
+        # Pad ammount
+        tile_r = bmm_shape[-2] - 1
+        tile_r = (tile_r - (tile_r % 32) + 32) // 32
+        if tile_r not in tile_r_padding:
+            return post
+        pad_r = tile_r_padding[tile_r]
+        pad_r = tile_r_padding[tile_r] - tile_r
+        if pad_r == 0:
+            return post
+        pad_r_ammount = (tile_r + pad_r) * 32 - bmm_shape[-2]
+
+        # Pad LHS
+        padded_lhs = tvm.relay.nn.pad(lhs, pad_width=[[0, 0], [0, pad_r_ammount], [0, 0]], pad_value=0, pad_mode="constant")
+        padded_bmm = tvm.relay.nn.batch_matmul(padded_lhs, rhs, transpose_a=False, transpose_b=False)
+        
+        # Unpad BMM
+        unpadded_bmm = tvm.relay.strided_slice(padded_bmm, begin=(0,), end=(bmm_shape[-2],), strides=(1,), axes=(1,))
+
+        return unpadded_bmm
+
+# class SplitBatchMMIntoMM(DFPatternCallback):
+#     def __init__(self):
+#         super().__init__(rewrite_once=True, require_type=True)
+
+#         self.qk_states = wildcard()
+#         self.v_states = wildcard()
+        
+#         self.attn_bmm = is_op("nn.batch_matmul")(self.qk_states, self.v_states)
+
+#         self.pattern = self.attn_bmm
+        
+#     def callback(self, pre, post, node_map):
+#         pre_node_map = construct_pre_node_map(self.pattern, pre)
+        
+#         qk_states = node_map[self.qk_states][0]
+#         v_states = node_map[self.v_states][0]
+#         attn_bmm = node_map[self.attn_bmm][0]
+        
+#         from tvm.relay.frontend.common import infer_shape
+#         print("qk_states", infer_shape(qk_states))
+#         print("v_states", infer_shape(v_states))
+#         print("attn_bmm", infer_shape(attn_bmm))
+        
+#         split_size = 3
+        
+#         if list(infer_shape(qk_states)) != [12, 1500, 1500] and \
+#            list(infer_shape(v_states)) != [12, 1500, 64] and \
+#            list(infer_shape(attn_bmm)) != [12, 1500, 64]:
+#             return post
+        
+#         # Split attention states
+#         qk_states_split = tvm.relay.split(qk_states, split_size, 0)
+#         v_states_split = tvm.relay.split(v_states, split_size, 0)
+
+#         # Split single batch mamtul into batch multiple matmuls
+#         outputs = []
+#         for i in range(split_size):
+#             outputs.append(tvm.relay.nn.batch_matmul(qk_states_split[i], v_states_split[i], transpose_a=False, transpose_b=False))
+#             print(f"outputs[{i}]", infer_shape(outputs[i]))
+#         output = tvm.relay.concatenate(outputs, axis=0)
+#         print("output", infer_shape(output))
+
+#         return output
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -3371,6 +3466,9 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             InverseMaskGen(),
             ReplaceYolov5Perf(),
             # TransformDenseIntoBatchMM(),
+            # SplitBatchMMIntoMM(),
+            # LowerSplitToStridedSlice(),
+            PadSpecificBatchMatmulShapes(),
         ],
         params=params,
         inputs=inputs,
