@@ -456,7 +456,13 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     import onnxruntime as ort
     
     assert path != None, "Onnx compile needs path to onnx file on disk."
-    ort_sess = ort.InferenceSession(path)
+
+    # Set default num threads to 2, hangs on some hosts otherwise https://github.com/microsoft/onnxruntime/issues/10166
+    so = ort.SessionOptions()
+    so.inter_op_num_threads = 2
+    so.intra_op_num_threads = 2
+
+    ort_sess = ort.InferenceSession(path, sess_options=so)
 
     input_names = []
     for inp in ort_sess.get_inputs():

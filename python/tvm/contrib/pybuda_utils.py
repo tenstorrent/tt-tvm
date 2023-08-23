@@ -109,7 +109,10 @@ def extract_framework_model_outputs(
             output_names.append(out.name)
 
         assert path != None, "Onnx compile needs path to onnx file on disk."
-        ort_sess = ort.InferenceSession(path)
+        so = ort.SessionOptions()
+        so.inter_op_num_threads = 2
+        so.intra_op_num_threads = 2
+        ort_sess = ort.InferenceSession(path, sess_options=so)
         framework_outputs = ort_sess.run(output_names, input_dict)
 
     elif framework == "tflite":
