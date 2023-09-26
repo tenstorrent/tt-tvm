@@ -5378,7 +5378,7 @@ def _convert_data_type(input_type, default_dtype=None):
     input_type = input_type.lower()
     if input_type in ["double", "float64", "torch.float64"]:
         return "float64"
-    elif input_type in ["float", "float32", "torch.float32", "bfloat16"]:
+    elif input_type in ["float", "float32", "torch.float32", "torch.bfloat16", "bfloat16"]:
         return "float32"
     elif input_type in ["half", "float16", "torch.float16"]:
         return "float16"
