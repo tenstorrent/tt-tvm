@@ -3347,6 +3347,30 @@ def XLA_Gather():
 
     return _impl
 
+
+def _ensureshape():
+    def _impl(inputs, attr, params, mod):
+        from tensorflow.python.framework import tensor_util
+        input_shape = tensor_util.TensorShapeProtoToList(attr['shape'])
+        assert input_shape == attr['_output_shapes'][0], "Shape mismatch in EnsureShape"
+        return inputs
+
+    return _impl
+
+
+def XLA_DynamicSlice():
+    def _impl(inputs, attr, params, mod):
+        assert len(inputs) == 3
+        data = inputs[0]
+        start_indices = _infer_value(inputs[1], params, mod).numpy().tolist()
+        size_indices = _infer_value(inputs[2], params, mod).numpy().tolist()
+        strides = [1] * len(_infer_shape(data))
+
+        return _op.strided_slice(data, begin=start_indices, end=size_indices, strides=strides)
+
+    return _impl
+
+
 # def StatelessWhile():
 #     def _impl(inputs, attr, params, mod):
 
@@ -3404,6 +3428,7 @@ _convert_map = {
     "Dilation2D": _dilation2d(),
     "Einsum": _einsum(),
     "Elu": _elu(),
+    "EnsureShape": _ensureshape(),
     "Equal": _broadcast("equal"),
     "Erf": AttrCvt("erf"),
     "EuclideanNorm": _euclidean_norm(),
@@ -3539,6 +3564,7 @@ _convert_map = {
     "ZerosLike": AttrCvt("zeros_like"),
     "Cumsum": _cumsum(),
     "XlaConvV2": XLA_ConvV2(),
+    "XlaDynamicSlice":XLA_DynamicSlice(),
     "XlaDotV2": XLA_DotV2(),
     "XlaGather": XLA_Gather(),
     # "StatelessWhile": StatelessWhile(),

@@ -434,8 +434,9 @@ class AttrCvt(object):
             assert callable(self._op_name), "op_name can either be string or callable"
             op_name = self._op_name(attrs)
 
-        # ignore 'tvm_custom' always
+        # ignore 'tvm_custom' and '_has_manual_control_dependencies' always
         self._ignores.append("tvm_custom")
+        self._ignores.append("_has_manual_control_dependencies")
 
         # convert attributes
         new_attrs = {}
@@ -447,7 +448,7 @@ class AttrCvt(object):
             if k in self._disables:
                 logger.debug("Attribute %s is disabled in relay.sym.%s", k, op_name)
             elif k in self._ignores:
-                if k != "tvm_custom":
+                if k != "tvm_custom" or k!="_has_manual_control_dependencies":
                     logger.debug("Attribute %s is ignored in relay.sym.%s", k, op_name)
             elif k in self._transforms:
                 new_name, defaults, transform = self._parse_default(self._transforms[k])
