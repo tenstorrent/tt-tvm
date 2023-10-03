@@ -178,6 +178,9 @@ def convert_serialized_tvm_to_reportify_graph(mod):
 
 
 def dump_graph(mod, test_name, stage):
+    if bool(int(os.environ.get("PYBUDA_DISABLE_REPORTIFY_DUMP", "0"))):
+        return
+
     for global_var in mod.get_global_vars():
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
         mod_fn = mod[global_var.name_hint]
