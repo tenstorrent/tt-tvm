@@ -3450,6 +3450,24 @@ class PyTorchOpConverter:
         else:
             return _op.sum(diff, keepdims=True)
 
+    def mse_loss(self, inputs, input_types):
+        assert len(inputs) == 3
+        [input, targets, reduction] = inputs
+        if reduction == 0:
+            reduction = "none"
+        elif reduction == 1:
+            reduction = "mean"
+        else:
+            reduction = "sum"
+
+        diff = _op.power(_op.subtract(input, targets), _expr.const(2, input_types[0]))
+        if reduction == "none":
+            return diff
+        elif reduction == "mean":
+            return _op.mean(diff, keepdims=True)
+        else:
+            return _op.sum(diff, keepdims=True)
+
     def nll_loss(self, inputs, input_types):
         assert len(inputs) == 5
         [predictions, targets, weights, reduction, ignore_index] = inputs
@@ -4897,6 +4915,7 @@ class PyTorchOpConverter:
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
             "aten::l1_loss": self.l1_loss,
+            "aten::mse_loss": self.mse_loss,
             "aten::nll_loss": self.nll_loss,
             "aten::nll_loss2d": self.nll_loss,
             "aten::nll_loss_nd": self.nll_loss,
