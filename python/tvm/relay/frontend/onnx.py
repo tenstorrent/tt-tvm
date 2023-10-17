@@ -5265,24 +5265,26 @@ class QLinearConv(OnnxOpConverter):
                 "Only 2D kernels are supported for operator QLinearConv."
             )
 
-        out = _qnn.op.conv2d(
+        out = _op.nn.conv2d(
             data,
             weight,
-            x_zero_point,
-            w_zero_point,
-            x_scale,
-            w_scale,
+            # x_zero_point,
+            # w_zero_point,
+            # x_scale,
+            # w_scale,
             kernel_size=attr["kernel_shape"],
             channels=out_channels,
             strides=strides,
             padding=padding,
             dilation=dilation,
             groups=groups,
+            out_dtype="int32",
         )
         use_bias = len(inputs) == 9
         if use_bias:
             out = _op.nn.bias_add(out, inputs[8])
 
+        infer_type(out)
         out_dtype = infer_type(inputs[7]).checked_type.dtype
         requantize_scale = _op.multiply(x_scale, w_scale)
 
@@ -5450,7 +5452,20 @@ class QLinearMatMul(OnnxOpConverter):
             return x3
 
         # Unpack the inputs and obtain some type info...
-        a, a_scale, a_zp, b, b_scale, b_zp, y_scale, y_zp = inputs
+        if len(inputs) == 9:
+            a, a_scale, a_zp, b, b_scale, b_zp, bias, y_scale, y_zp = inputs
+        else:
+            assert len(inputs) == 8
+            a, a_scale, a_zp, b, b_scale, b_zp, y_scale, y_zp = inputs
+            bias = None
+
+        trans_a = attr.get("transA", False)
+        trans_b = attr.get("transB", False)
+
+        if trans_a:
+            a = _op.transpose(a, axes=[1,0])
+        if not trans_b:
+            b = _op.transpose(b, axes=[1,0])
 
         a_type = infer_type(a).checked_type  # 'T1' in ONNX doc for this op
         a_scale_type = infer_type(a_scale).checked_type
@@ -5511,17 +5526,21 @@ class QLinearMatMul(OnnxOpConverter):
         # if a_type.dtype == "uint8" and b_type.dtype == "uint8":
         #     matmul_result_dtype = "uint32"
 
-        matmul_result = qmatmul(
+        matmul_result = _op.nn.dense(
             a,
             b,
-            a_zp_scalar,
-            b_zp_scalar,
-            a_scale_scalar,
-            b_scale_scalar,
-            num_hidden_units,
-            matmul_result_dtype,
+            out_dtype=matmul_result_dtype,
+        #     a_zp_scalar,
+        #     b_zp_scalar,
+        #     a_scale_scalar,
+        #     b_scale_scalar,
+        #     num_hidden_units,
+        #     matmul_result_dtype,
         )
 
+
+        if bias is not None:
+            matmul_result = _op.nn.bias_add(matmul_result, bias)
         # This information might only be found in the C++ code-comments for the
         # dense.matmul op, but the quantized tensor returned by _qnn.op.dense
         # has scale==(a_scale_scalar * b_scale_scalar), and zero_point==0.
@@ -5529,7 +5548,14 @@ class QLinearMatMul(OnnxOpConverter):
         # 'matmul_result_zp_scalar' has type 'int32' to satisfy input requirements
         # of the [de/re]quantize ops below.
         matmul_result_scale_scalar = fold_constant(_op.multiply(a_scale_scalar, b_scale_scalar))
-        matmul_result_zp_scalar = _op.const(0, dtype="int32")
+
+        a_bcast = _op.broadcast_to(a_zp, a_shape)
+        a_cast = _op.cast(a_bcast, "float32")
+        b_cast = _op.cast(b, "float32")
+
+        matmul_result_zp_scalar = _op.nn.dense(a_cast, b_cast, out_dtype="float32")
+
+        matmul_result_zp_scalar = try_resolve_to_const(matmul_result_zp_scalar, "int32")
 
         if "int32" in expected_out_dtypes:
             # This is the adaptation of the QLinearMatMul converter for MatMulInteger,
@@ -6303,7 +6329,79 @@ class GridSample(OnnxOpConverter):
             padding_mode=str(attr.get("padding_mode")).split('\'')[1::2][0],
             align_corners=attr.get("align_corners", True),
         )
+
+def _get_numpy(relay_const_scalar):
+    if isinstance(relay_const_scalar,tvm.runtime.ndarray.NDArray):
+        return relay_const_scalar.numpy() 
+    return relay_const_scalar.data.numpy()
+def _get_scalar(relay_const_scalar):
+    return _get_numpy(relay_const_scalar).item(0)
+
+
+
+class QGemm(OnnxOpConverter):
     
+    @classmethod
+    def _impl_v18(cls, inputs, attr, params):
+
+        a = inputs[0]
+        a_scale = inputs[1]
+        a_zero_point = inputs[2]
+        b = inputs[3]
+        b_scale = inputs[4]
+        b_zero_point = inputs[5]
+
+        # # HACK TO GET AROUND ONEDNN TRICK
+        # if infer_type(a).checked_type.dtype == "int8":
+        #     a = _op.subtract(a, _expr.const(_get_numpy(a_zero_point).astype(np.int8)))
+
+
+        if len(inputs) > 6:
+            c = inputs[6]
+        if len(inputs) > 7:
+            y_scale = inputs[7]
+        if len(inputs) > 8:
+            y_zero_point = inputs[8]
+
+        alpha = attr.get("alpha")
+        trans_a = attr.get("transA", False)
+        trans_b = attr.get("transB", False)
+        if trans_a:
+            a = _op.transpose(a, axes=[1,0])
+        if not trans_b:
+            b = _op.transpose(b, axes=[1,0])
+
+        weight_shape = infer_shape(b)
+        dense = _op.nn.dense(
+            a,
+            b,
+            out_dtype="int32"
+        )
+        infer_type(dense)
+
+        assert alpha is None or alpha == 1.0
+        bias = c
+
+        requant_input_scale = _expr.const(_get_numpy(a_scale) * _get_numpy(params[b_scale.name_hint]))
+        requant_input_zp = _expr.const(_get_numpy(a_zero_point).astype(np.int32) + _get_numpy(params[b_zero_point.name_hint]).astype(np.int32))
+        if bias is not None:
+            requantize_input = _op.nn.bias_add(dense, bias)
+        else:
+            requantize_input = dense
+        # import pdb; pdb.set_trace()
+        requantized = relay.qnn.op.requantize(
+            requantize_input,
+            requant_input_scale,
+            relay.const(0, "int32"),
+            y_scale,
+            _op.cast(y_zero_point, dtype="int32"),
+            out_dtype=infer_type(a).checked_type.dtype,
+            axis=1,
+        )
+        infer_type(requantized)
+
+        return requantized
+
 
 class Adam(OnnxOpConverter):
     """Operator converter for Adam op."""
@@ -6924,6 +7022,7 @@ def _get_convert_map(opset):
         "SequenceAt": SequenceAt.get_converter(opset),
         "LayerNormalization": LayerNorm.get_converter(opset),
         "GridSample": GridSample.get_converter(opset),
+        "QGemm": QLinearMatMul.get_converter(opset),
     }
 
 

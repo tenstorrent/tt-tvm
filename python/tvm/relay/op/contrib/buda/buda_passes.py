@@ -520,7 +520,7 @@ class ReformatTFMaxpool(DFPatternCallback):
 
 class DecomposePower(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
         self.exponent = is_constant()
         power = is_op("power")(self.act, self.exponent)
@@ -561,7 +561,7 @@ class DecomposePower(DFPatternCallback):
 
 class DenseWeightTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.weight = wildcard()
         act = wildcard()
         self.pattern = is_op('nn.dense')(act, self.weight)
@@ -578,7 +578,8 @@ class DenseWeightTranspose(DFPatternCallback):
         weight = post.args[1]
         wt1 = tvm.relay.transpose(weight)
         wt2 = tvm.relay.transpose(wt1)
-        return tvm.relay.nn.dense(act, wt2)
+        dtype = post.checked_type.dtype
+        return tvm.relay.nn.dense(act, wt2, out_dtype=dtype)
 
 
 class LiftLinearSplit(DFPatternCallback):
@@ -1095,7 +1096,7 @@ class CastWhereConditionToBool(DFPatternCallback):
 
 class DecomposeNegative(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.in_a = wildcard()
 
         self.pattern = is_op('negative')(self.in_a)
@@ -1635,7 +1636,7 @@ class DecomposeEinsum(DFPatternCallback):
 
 class DecomposeRsqrt(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.in_a = wildcard()
 
         self.pattern = is_op('rsqrt')(self.in_a)
@@ -1647,7 +1648,7 @@ class DecomposeRsqrt(DFPatternCallback):
 
 class InvertDivide(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.in_a = wildcard()
         self.in_b = wildcard()
 
@@ -1681,7 +1682,7 @@ class DecomposeLayoutTransform(DFPatternCallback):
 
 class ExplicateTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__(require_type=True)
+        super().__init__(require_type=True, rewrite_once=True)
         self.input_tensor = wildcard()
 
         self.pattern = is_op('nn.batch_matmul')(wildcard(), wildcard())
