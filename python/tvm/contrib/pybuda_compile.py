@@ -463,7 +463,7 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
     so.inter_op_num_threads = 2
     so.intra_op_num_threads = 2
 
-    ort_sess = ort.InferenceSession(path, sess_options=so)
+    ort_sess = ort.InferenceSession(path, sess_options=so, providers=["CPUExecutionProvider"])
 
     input_names = []
     for inp in ort_sess.get_inputs():
@@ -911,7 +911,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         numpy_weights = [onnx.numpy_helper.to_array(weight) for weight in module.graph.initializer]
         names = [weight.name for weight in module.graph.initializer]
         weights = {
-            name : (torch.Tensor(weight), issubclass(weight.dtype.type, np.floating))
+            name : (torch.tensor(weight), issubclass(weight.dtype.type, np.floating))
             for name, weight in zip(names, numpy_weights)
         }
 
