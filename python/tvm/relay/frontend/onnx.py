@@ -6224,6 +6224,43 @@ class Adagrad(OnnxOpConverter):
         return _expr.TupleWrapper(_expr.Tuple(result), len(result))
 
 
+class LayerNorm(OnnxOpConverter):
+    
+    @classmethod
+    def _impl_v18(cls, inputs, attr, params):
+        assert len(inputs) == 3
+        data = inputs[0]
+        gamma = _op.const(params[inputs[1].name_hint].numpy(), "float32")
+        beta = _op.const(params[inputs[2].name_hint].numpy(), "float32")
+
+        axis = attr.get("axis")
+        assert axis is not None, "axis is required for LayerNorm"
+        epsilon = attr.get("epsilon", 1e-5)
+
+        return _op.layernorm(
+            data,
+            gamma=gamma,
+            beta=beta,
+            axis=axis,
+            eps=float(epsilon),
+        )
+
+class GridSample(OnnxOpConverter):
+    
+    @classmethod
+    def _impl_v18(cls, inputs, attr, params):
+        assert len(inputs) == 2
+        tranpose = _op.transpose(inputs[1], axes=(0, 3, 1, 2))
+
+        return _op.image.grid_sample(
+            data=inputs[0],
+            grid=tranpose,
+            method=str(attr.get("mode")).split('\'')[1::2][0],
+            padding_mode=str(attr.get("padding_mode")).split('\'')[1::2][0],
+            align_corners=attr.get("align_corners", True),
+        )
+    
+
 class Adam(OnnxOpConverter):
     """Operator converter for Adam op."""
 
@@ -6840,6 +6877,8 @@ def _get_convert_map(opset):
         "SplitToSequence": SplitToSequence.get_converter(opset),
         "SequenceEmpty": SequenceEmpty.get_converter(opset),
         "SequenceAt": SequenceAt.get_converter(opset),
+        "LayerNormalization": LayerNorm.get_converter(opset),
+        "GridSample": GridSample.get_converter(opset),
     }
 
 

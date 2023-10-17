@@ -336,9 +336,15 @@ class DecomposeMultiAxisBroadcast(DFPatternCallback):
         self.pattern = self.broadcast_to
 
     def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
         acts = node_map[self.act][0]
-        inp_shape = list(pre.args[0].checked_type.shape)
-        target_shape = list(pre.attrs.shape)
+        inp_shape = list(pre_node_map[self.act][0].checked_type.shape)
+        target_shape = list(post.attrs.shape)
+
+        while len(inp_shape) < len(target_shape):
+            inp_shape = [1] + inp_shape
+            acts = tvm.relay.reshape(acts, newshape=inp_shape)
 
         for i, (inp_dim, target_dim) in enumerate(zip(inp_shape, target_shape)):
             if inp_dim == target_dim:
@@ -744,7 +750,7 @@ class ExplicateHSliceTranspose(DFPatternCallback):
 
 class RemoveRedundantTake(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):
-        super().__init__(rewrite_once=rewrite_once)
+        super().__init__(rewrite_once=rewrite_once, require_type=require_type)
         self.input_tensor = wildcard()
         self.indices = is_constant()
         self.pattern = is_op("take")(self.input_tensor, self.indices)
@@ -804,8 +810,8 @@ class PopulateReduceAxes(DFPatternCallback):
         return tvm.relay.sum(post.args[0], axis=raxes, keepdims=pre.attrs.keepdims)
 
 class RemoveRedundantReshape(DFPatternCallback):
-    def __init__(self, rewrite_once=True):
-        super().__init__(rewrite_once=rewrite_once)
+    def __init__(self, rewrite_once=True, require_type=True):
+        super().__init__(rewrite_once=rewrite_once, require_type=require_type)
         self.input_tensor = wildcard()
         self.reshape = is_op("reshape")(self.input_tensor)
         self.pattern = self.reshape
@@ -1645,27 +1651,46 @@ class ExplicateTranspose(DFPatternCallback):
 
 class LowerAdaptiveAvgPool(DFPatternCallback):
     def __init__(self):
-        super().__init__()
+        super().__init__(rewrite_once=True, require_type=True)
         self.input_tensor = wildcard()
-        self.pattern = is_op('nn.adaptive_avg_pool2d')(wildcard())
+        self.pattern = is_op('nn.adaptive_avg_pool2d')(self.input_tensor) | is_op('nn.adaptive_avg_pool1d')(self.input_tensor)
 
     def callback(self, pre, post, node_map):
-        input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
-        output_shape = [int(dim) for dim in pre.checked_type.shape]
+        if node_map[self.pattern][0].op.name == "nn.adaptive_avg_pool2d":
+            input_shape = [int(dim) for dim in post.args[0].checked_type.shape]
+            output_shape = [int(dim) for dim in pre.checked_type.shape]
 
-        assert post.attrs.layout == "NCHW"
+            assert post.attrs.layout == "NCHW"
 
-        stride = [in_size // out_size for in_size, out_size in zip(input_shape[-2:], output_shape[-2:])]
-        kernel = [in_size - (out_size - 1) * stride for in_size, out_size, stride in zip(input_shape[-2:], output_shape[-2:], stride)]
-        padding = 0
+            stride = [in_size // out_size for in_size, out_size in zip(input_shape[-2:], output_shape[-2:])]
+            kernel = [in_size - (out_size - 1) * stride for in_size, out_size, stride in zip(input_shape[-2:], output_shape[-2:], stride)]
+            padding = 0
 
-        return tvm.relay.nn.avg_pool2d(
-            post.args[0],
-            pool_size=kernel,
-            strides=stride,
-            padding=padding,
-            count_include_pad=True,
-        )
+            return tvm.relay.nn.avg_pool2d(
+                post.args[0],
+                pool_size=kernel,
+                strides=stride,
+                padding=padding,
+                count_include_pad=True,
+            )
+        elif node_map[self.pattern][0].op.name == "nn.adaptive_avg_pool1d":
+            pre_node_map = construct_pre_node_map(self.pattern, pre)
+            input_shape = [int(dim) for dim in pre_node_map[self.input_tensor][0].checked_type.shape]
+            output_shape = [int(dim) for dim in pre_node_map[self.pattern][0].checked_type.shape]
+
+            assert post.attrs.layout == "NCW"
+
+            stride = [in_size // out_size for in_size, out_size in zip(input_shape[-1:], output_shape[-1:])]
+            kernel = [in_size - (out_size - 1) * stride for in_size, out_size, stride in zip(input_shape[-1:], output_shape[-1:], stride)]
+            padding = 0
+
+            return tvm.relay.nn.avg_pool1d(
+                post.args[0],
+                pool_size=kernel,
+                strides=stride,
+                padding=padding,
+                count_include_pad=True,
+            )
 
 
 class LowerAdaptiveMaxPool(DFPatternCallback):
@@ -1699,7 +1724,7 @@ class LowerAdaptiveMaxPool(DFPatternCallback):
 
 class LowerSqueezeToReshape(DFPatternCallback):
     def __init__(self):
-        super().__init__(require_type=True)
+        super().__init__(require_type=True, rewrite_once=True)
         self.input_tensor = wildcard()
 
         self.pattern = is_op('squeeze')(wildcard())
@@ -1728,7 +1753,7 @@ class TransposePad(DFPatternCallback):
 
 class PopulateStridedSliceAxes(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):
-        super().__init__()
+        super().__init__(rewrite_once=rewrite_once, require_type=require_type)
         self.input_tensor = wildcard()
 
         self.pattern = is_op('strided_slice')(wildcard())
@@ -3053,6 +3078,45 @@ class DecomposePRelu(DFPatternCallback):
         return out
 
 
+class SimplifyTransposeReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard()
+        self.transpose = is_op("transpose")(self.act)
+        self.reshape = is_op("reshape")(self.transpose)
+        
+        self.pattern = self.reshape
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        act_shape = list(pre_node_map[self.act][0].checked_type.shape)
+        target_shape = list(node_map[self.reshape][0].attrs.newshape)
+        transpose_axes = node_map[self.transpose][0].attrs.axes
+
+        dims = np.arange(len(act_shape))
+        # At this point, we should only have single axis transpose
+        count = 0
+        for (index, val) in enumerate(transpose_axes):
+            if index != val:
+                count += 1
+
+        assert (count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point")
+        is_transpose_yz = len(transpose_axes) >= 3 and len(dims) >= 3 and (transpose_axes[-2] == dims[-3] and transpose_axes[-3] == dims[-2])
+
+        if (
+            int(act_shape[0]) == 1 
+            and len(act_shape) - 1 == len(target_shape) 
+            and int(target_shape[0]) == -1
+            and is_transpose_yz
+            and act_shape[-2] == 1
+        ):
+            # this is equivalent to a squeeze
+            return tvm.relay.squeeze(node_map[self.act][0], axis=[2])
+
+        else:
+            return post    
+
 class DecomposeNonZeroPadtoConcat(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -3091,6 +3155,108 @@ class DecomposeNonZeroPadtoConcat(DFPatternCallback):
                 pad_shape = [x + y for x, y in zip(pad_shape, current_pad_shape)]
 
         return act
+
+
+class SimplifyVITOnnxAttention(DFPatternCallback):
+    def __init__(self, require_type=True, rewrite_once=True):
+        super().__init__(require_type, rewrite_once)
+        self.bias_const_0 = wildcard()
+        self.bias_const_1 = wildcard()
+        self.bias_const_2 = wildcard()
+        self.input = wildcard()
+
+        self.reshape_0 = is_op("reshape")(self.input)
+        self.add_1 = is_op("add")(self.reshape_0, self.bias_const_0)
+        self.reshape_2 = is_op("reshape")(self.add_1)
+        self.transpose_3 = is_op("transpose")(self.reshape_2).has_attr({"axes": [3, 1, 2, 0, 4]})
+        self.reshape_4 = is_op("reshape")(self.transpose_3)
+
+        # SPLIT QKV
+        self.index_0_0 = is_op("strided_slice")(self.reshape_4)
+        self.reshape_0_1 = is_op("reshape")(self.index_0_0)
+        self.transpose_0_2 = is_op("transpose")(self.reshape_0_1).has_attr({"axes": [1, 0, 2]})
+        self.reshape_0_3 = is_op("reshape")(self.transpose_0_2)
+        self.transpose_0_4 = is_op("transpose")(self.reshape_0_3).has_attr({"axes": [0, 2, 1]})
+        self.transpose_0_5 = is_op("transpose")(self.transpose_0_4).has_attr({"axes": [0, 2, 1]})
+
+        self.index_1_0 = is_op("strided_slice")(self.reshape_4)
+        self.reshape_1_1 = is_op("reshape")(self.index_1_0)
+        self.transpose_1_2 = is_op("transpose")(self.reshape_1_1).has_attr({"axes": [1, 0, 2]})
+        self.reshape_1_3 = is_op("reshape")(self.transpose_1_2)
+        self.mul_1_4 = is_op("multiply")(self.reshape_1_3, self.bias_const_1)
+        self.reshape_1_5 = is_op("reshape")(self.mul_1_4)
+
+        self.index_2_0 = is_op("strided_slice")(self.reshape_4)
+        self.reshape_2_1 = is_op("reshape")(self.index_2_0)
+        self.transpose_2_2 = is_op("transpose")(self.reshape_2_1).has_attr({"axes": [1, 0, 2]})
+        self.reshape_2_3 = is_op("reshape")(self.transpose_2_2)
+        self.transpose_2_4 = is_op("transpose")(self.reshape_2_3).has_attr({"axes": [0, 1, 3, 2]})
+        self.mul_2_5 = is_op("multiply")(self.transpose_2_4, self.bias_const_2)
+        self.reshape_2_6 = is_op("reshape")(self.mul_2_5)
+        self.transpose_2_7 = is_op("transpose")(self.reshape_2_6).has_attr({"axes": [0, 2, 1]})
+        self.transpose_2_8 = is_op("transpose")(self.transpose_2_7).has_attr({"axes": [0, 2, 1]})
+
+        # ATTENTION
+        self.bmm_5 = is_op("nn.batch_matmul")(self.reshape_1_5, self.transpose_2_8)
+        self.reshape_6 = is_op("reshape")(self.bmm_5)
+        self.softmax_7 = is_op("nn.softmax")(self.reshape_6)
+        self.reshape_8 = is_op("reshape")(self.softmax_7)
+        self.bmm_9 = is_op("nn.batch_matmul")(self.reshape_8, self.transpose_0_5)
+        self.reshape_10 = is_op("reshape")(self.bmm_9)
+        self.transpose_11 = is_op("transpose")(self.reshape_10).has_attr({"axes": [2, 1, 0, 3]})
+        self.transpose_12 = is_op("transpose")(self.transpose_11).has_attr({"axes": [0, 2, 1, 3]})
+        self.reshape_13 = is_op("reshape")(self.transpose_12)
+
+        self.pattern = self.reshape_13
+
+
+    def callback(self, pre, post, node_map):
+        bias_const_0 = node_map[self.bias_const_0][0]
+        bias_const_1 = node_map[self.bias_const_1][0]
+        bias_const_2 = node_map[self.bias_const_2][0]
+
+        # Reconstruct self attention
+        input_act = node_map[self.input][0]
+
+        bias_add_0 = tvm.relay.add(input_act, bias_const_0)
+        target_shape1 = list(node_map[self.reshape_2][0].attrs.newshape)
+        squeezed_shape = [int(x) for x in target_shape1 if (int(x) != 1)]
+        reshape_1 = tvm.relay.reshape(bias_add_0, newshape=squeezed_shape)
+        transpose_2 = tvm.relay.transpose(reshape_1, axes=[1, 0, 2])
+
+        # SPLIT QKV
+        index_0_attrs = node_map[self.index_0_0][0].attrs
+        index_0_0 = tvm.relay.strided_slice(
+            transpose_2, begin=index_0_attrs.begin, end=index_0_attrs.end, strides=index_0_attrs.strides,axes=(0,),)
+        reshape_0_1 = tvm.relay.reshape(index_0_0, newshape=node_map[self.reshape_0_1][0].attrs.newshape)
+        transpose_0_2 = tvm.relay.transpose(reshape_0_1, axes=[1, 0, 2])
+
+        index_1_attrs = node_map[self.index_1_0][0].attrs
+        index_1_0 = tvm.relay.strided_slice(
+            transpose_2, begin=index_1_attrs.begin, end=index_1_attrs.end, strides=index_1_attrs.strides,axes=(0,),)
+        reshape_1_1 = tvm.relay.reshape(index_1_0, newshape=node_map[self.reshape_1_1][0].attrs.newshape)
+        transpose_1_2 = tvm.relay.transpose(reshape_1_1, axes=[1, 0, 2])
+        mul_1_3 = tvm.relay.multiply(transpose_1_2, bias_const_1)
+
+        index_2_attrs = node_map[self.index_2_0][0].attrs
+        index_2_0 = tvm.relay.strided_slice(
+            transpose_2, begin=index_2_attrs.begin, end=index_2_attrs.end, strides=index_2_attrs.strides,axes=(0,),)
+        reshape_2_1 = tvm.relay.reshape(index_2_0, newshape=node_map[self.reshape_2_1][0].attrs.newshape)
+        transpose_2_2 = tvm.relay.transpose(reshape_2_1, axes=[1, 0, 2])
+        transpose_2_3 = tvm.relay.transpose(transpose_2_2, axes=[0, 2, 1])
+        mul_2_4 = tvm.relay.multiply(transpose_2_3, bias_const_2)
+
+        # ATTENTION
+        bmm_3 = tvm.relay.nn.batch_matmul(mul_1_3, mul_2_4, transpose_a=False, transpose_b=False)
+        softmax_4 = tvm.relay.nn.softmax(bmm_3)
+        bmm_5 = tvm.relay.nn.batch_matmul(softmax_4, transpose_0_2, transpose_a=False, transpose_b=False)
+
+        # HSTACK 
+        transpose_6 = tvm.relay.transpose(bmm_5, axes=[1, 0, 2])
+        reshape_7 = tvm.relay.reshape(transpose_6, newshape=node_map[self.reshape_13][0].attrs.newshape)
+        return reshape_7
+
+        
 
 
 class ReplaceYolov5Perf(DFPatternCallback):
@@ -3420,6 +3586,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             LowerAdaptiveAvgPool(),
             LowerAdaptiveMaxPool(),
             EnsureKeepdims(),
+            SimplifyTransposeReshape(),
             LowerSqueezeToReshape(),
             PopulateTransposeAxes(),
             PopulateStridedSliceAxes(),
@@ -3469,6 +3636,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             # SplitBatchMMIntoMM(),
             # LowerSplitToStridedSlice(),
             PadSpecificBatchMatmulShapes(),
+            SimplifyVITOnnxAttention(),
         ],
         params=params,
         inputs=inputs,
