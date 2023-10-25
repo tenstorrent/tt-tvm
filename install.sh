@@ -44,3 +44,5 @@ make -j$(nproc) || exit 1
 
 echo "TVM Built Successful"
 cd $PYBUDA_ROOT
+
+pip install -e third_party/tvm/python
