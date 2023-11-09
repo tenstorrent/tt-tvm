@@ -783,7 +783,7 @@ class LowerSplitToStridedSlice(DFPatternCallback):
 
 class ExplicateHSliceTranspose(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         act = wildcard()
         act_r = is_op('reshape')(act)
         self.pattern = is_op('transpose')(act_r)
@@ -1795,7 +1795,7 @@ class LowerSqueezeToReshape(DFPatternCallback):
 
 class TransposePad(DFPatternCallback):
     def __init__(self):
-        super().__init__(rewrite_once=True)
+        super().__init__(rewrite_once=True, require_type=True)
         self.pattern = is_op('nn.pad')(wildcard(), is_constant())
 
     def callback(self, pre, post, node_map): 
@@ -1856,7 +1856,6 @@ class ConvertAddToBiasAddAfterConv2d(DFPatternCallback):
         bias = node_map[self.bias][0]
         act = node_map[self.act][0]
         pre_node_map = construct_pre_node_map(self.pattern, pre)
-
         # Check if it's either a bias in form of var or a constant, or evan a reshape
         # which follows bias.
         if not (isinstance(bias, (tvm.relay.expr.Var, tvm.relay.expr.Constant)) \
@@ -3177,19 +3176,20 @@ class SimplifyTransposeReshape(DFPatternCallback):
 class DecomposeNonZeroPadtoConcat(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
-
-        self.pad = is_op("nn.pad")(wildcard(), wildcard())
+        self.act = wildcard()
+        self.pad = is_op("nn.pad")(self.act, wildcard())
         
         self.pattern = self.pad
 
     def callback(self, pre, post, node_map):
         act = post.args[0]
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
         pad_width = post.attrs.pad_width
         pad_value = post.args[1].data.numpy()
         if pad_value == 0:
             return post
 
-        pad_shape = list(act.checked_type.shape)
+        pad_shape = list(pre_node_map[self.act][0].checked_type.shape)
         pad_shape = [int(x) for x in pad_shape]
         for i, item in enumerate(pad_width):
             before = int(item[0])
@@ -3200,17 +3200,18 @@ class DecomposeNonZeroPadtoConcat(DFPatternCallback):
             if before != 0:
                 current_pad_shape = pad_shape.copy()
                 current_pad_shape[i] = before
-                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=act.checked_type.dtype)
+                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=pre_node_map[self.act][0].checked_type.dtype)
                 act = tvm.relay.concatenate([const, act], axis=i)
-                pad_shape = [x + y for x, y in zip(pad_shape, current_pad_shape)]
+                current_pad_shape[i] += pad_shape[i]
+                pad_shape = current_pad_shape
 
             if after != 0:
                 current_pad_shape = pad_shape.copy()
                 current_pad_shape[i] = after
-                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=act.checked_type.dtype)
+                const = tvm.relay.const(np.ones(current_pad_shape) * pad_value, dtype=pre_node_map[self.act][0].checked_type.dtype)
                 act = tvm.relay.concatenate([act, const], axis=i)
-                pad_shape = [x + y for x, y in zip(pad_shape, current_pad_shape)]
-
+                current_pad_shape[i] += pad_shape[i]
+                pad_shape = current_pad_shape
         return act
 
 

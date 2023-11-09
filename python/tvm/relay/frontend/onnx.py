@@ -5200,6 +5200,19 @@ class QLinearConv(OnnxOpConverter):
 
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
+        def try_resolve_to_const(x, dtype_override=None):
+            x2 = try_resolve_var_to_const(x, params)
+            num_elem = np.prod(infer_shape(x))
+            if num_elem == 1:
+                x2 = ensure_scalar_shape(x2)
+            x_dtype = infer_type(x).checked_type.dtype
+            if (dtype_override is not None) and (dtype_override != x_dtype):
+                x2 = _op.cast(x2, dtype_override)
+            x3 = fold_constant(x2)
+            return x3
+
+
+
         data = inputs[0]
         x_scale = get_scalar(inputs[1], params)
         x_zero_point = get_scalar(inputs[2], params, "int32")
@@ -5265,6 +5278,11 @@ class QLinearConv(OnnxOpConverter):
                 "Only 2D kernels are supported for operator QLinearConv."
             )
 
+        x_zp_value = fold_constant(x_zero_point).data.numpy().item()
+        if "pads" in attr  and any([x != 0 for x in padding]) and x_zp_value != 0:
+            data = _op.nn.pad(data, pad_width=((0,0),(0,0),(padding[0], padding[1]), (padding[2], padding[3])), pad_value=x_zp_value)
+            padding = [0 for x in padding]
+
         out = _op.nn.conv2d(
             data,
             weight,
@@ -5281,12 +5299,25 @@ class QLinearConv(OnnxOpConverter):
             out_dtype="int32",
         )
         use_bias = len(inputs) == 9
+
+        x_zp_bcast = _op.broadcast_to(x_zero_point, infer_shape(weight))
+        x_cast = _op.cast(x_zp_bcast, "float32")
+        w_cast = _op.cast(weight, "float32")
+        zp_requant = _op.sum(_op.multiply(x_cast, w_cast), axis=[1, 2, 3], keepdims=False)
+        
+        zp_requant = try_resolve_to_const(zp_requant, "int32")
+
         if use_bias:
-            out = _op.nn.bias_add(out, inputs[8])
+            bias = _op.subtract(inputs[8], zp_requant)
+            out = _op.nn.bias_add(out, bias)
+        else:
+            bias = _op.broadcast_to(_op.negative(zp_requant), infer_shape(out)[1:2])
+            out = _op.nn.bias_add(out, bias)
 
         infer_type(out)
         out_dtype = infer_type(inputs[7]).checked_type.dtype
         requantize_scale = _op.multiply(x_scale, w_scale)
+
 
         # requantize requires y_scale to be constant,
         # if y_scale is not constant, doing dequantize -> quantize
@@ -5538,15 +5569,6 @@ class QLinearMatMul(OnnxOpConverter):
         #     matmul_result_dtype,
         )
 
-
-        if bias is not None:
-            matmul_result = _op.nn.bias_add(matmul_result, bias)
-        # This information might only be found in the C++ code-comments for the
-        # dense.matmul op, but the quantized tensor returned by _qnn.op.dense
-        # has scale==(a_scale_scalar * b_scale_scalar), and zero_point==0.
-        #
-        # 'matmul_result_zp_scalar' has type 'int32' to satisfy input requirements
-        # of the [de/re]quantize ops below.
         matmul_result_scale_scalar = fold_constant(_op.multiply(a_scale_scalar, b_scale_scalar))
 
         a_bcast = _op.broadcast_to(a_zp, a_shape)
@@ -5556,6 +5578,22 @@ class QLinearMatMul(OnnxOpConverter):
         matmul_result_zp_scalar = _op.nn.dense(a_cast, b_cast, out_dtype="float32")
 
         matmul_result_zp_scalar = try_resolve_to_const(matmul_result_zp_scalar, "int32")
+
+        if bias is not None:
+            matmul_result_zp_scalar = _op.reshape(matmul_result_zp_scalar, infer_shape(bias))
+            bias = _op.subtract(bias, matmul_result_zp_scalar)
+            matmul_result = _op.nn.bias_add(matmul_result, bias)
+        else:
+            bias = _op.broadcast_to(_op.negative(matmul_result_zp_scalar), infer_shape(matmul_result)[1:])
+            matmul_result = _op.nn.bias_add(matmul_result, bias)
+
+        # This information might only be found in the C++ code-comments for the
+        # dense.matmul op, but the quantized tensor returned by _qnn.op.dense
+        # has scale==(a_scale_scalar * b_scale_scalar), and zero_point==0.
+        #
+        # 'matmul_result_zp_scalar' has type 'int32' to satisfy input requirements
+        # of the [de/re]quantize ops below.
+
 
         if "int32" in expected_out_dtypes:
             # This is the adaptation of the QLinearMatMul converter for MatMulInteger,
@@ -5568,7 +5606,7 @@ class QLinearMatMul(OnnxOpConverter):
             y = _qnn.op.requantize(
                 matmul_result,
                 matmul_result_scale_scalar,
-                matmul_result_zp_scalar,
+                _op.const(0, dtype="int32"),
                 y_scale_scalar,
                 y_zp_scalar,
                 axis=-1,
@@ -6388,7 +6426,7 @@ class QGemm(OnnxOpConverter):
             requantize_input = _op.nn.bias_add(dense, bias)
         else:
             requantize_input = dense
-        # import pdb; pdb.set_trace()
+
         requantized = relay.qnn.op.requantize(
             requantize_input,
             requant_input_scale,
