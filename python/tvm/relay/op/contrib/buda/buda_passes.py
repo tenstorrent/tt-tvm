@@ -132,6 +132,62 @@ class ResolveConvChannels(DFPatternCallback):
                 ceil_mode=conv.attrs.ceil_mode,
             )
 
+class DecomposeRoll(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+        self.indices = is_constant()
+        self.input = wildcard()
+        self.gather = is_op("gather")(self.input,self.indices)
+        self.pattern = self.gather
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+
+        gather_axis = int(post.attrs.axis)
+        indices = node_map[self.indices][0].data.numpy()
+        input_shape = pre_node_map[self.input][0].checked_type.shape
+        stop = input_shape[gather_axis]
+        postion_arr = np.arange(int(stop))
+        slicing_index = np.zeros((len(input_shape),), dtype=int).tolist()
+        slicing_index[int(gather_axis)] = postion_arr.tolist()
+        if len(slicing_index)==1:
+            indices_arr = indices[slicing_index[0]]
+        elif len(slicing_index)==2:
+            indices_arr = indices[slicing_index[0],slicing_index[1]]
+        elif len(slicing_index)==3:
+            indices_arr = indices[slicing_index[0],slicing_index[1],slicing_index[2]]
+        elif len(slicing_index)==4:
+            indices_arr = indices[slicing_index[0],slicing_index[1],slicing_index[2],slicing_index[3]]
+        else:
+            raise NotImplementedError
+        diff_arr = postion_arr-indices_arr
+        if len(set(diff_arr))==2:
+            shift_size = indices_arr[0]
+            slice1_start = slice2_start = 0
+            slice1_end = slice2_end = int(input_shape[int(gather_axis)])
+            if shift_size<0:
+                slice1_start=int(shift_size)*-1
+                slice2_end=int(shift_size)*-1
+            else:
+                slice1_start=int(shift_size)
+                slice2_end=int(shift_size)
+            act = post.args[0]
+            slice1 = tvm.relay.strided_slice(act,
+                                             begin=[slice1_start,],
+                                             end=[slice1_end,],
+                                             strides=[1,],
+                                             axes=[int(gather_axis),]
+                                             )
+            slice2 = tvm.relay.strided_slice(act,
+                                             begin=[slice2_start,],
+                                             end=[slice2_end,],
+                                             strides=[1,],
+                                             axes=[int(gather_axis),]
+                                             )
+            slice_concatenate = tvm.relay.concatenate([slice1,slice2], axis=int(gather_axis))
+            return slice_concatenate
+        return post
+
 class DecomposeDynamicResize2d(DFPatternCallback):
     def __init__(self):
         super().__init__(require_type=True)
@@ -3557,6 +3613,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ResolveConvChannels(),
             DecomposeDynamicResize2d(),
             DecomposePRelu(),
+            DecomposeRoll(),
             # RemoveCast(),
             DecomposeStack(),
             SimplifyGroupNorm(),
