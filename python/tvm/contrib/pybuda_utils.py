@@ -129,10 +129,16 @@ def extract_framework_model_outputs(
     return framework_outputs
 
 
-def extract_flatten_inputs(framework: str, model, inputs):
+def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
     if framework == "pytorch":
-        input_names = [i.debugName().replace(".", "_") for i in list(model.graph.inputs())[1:]]
-        
+        if len(input_names) == 0:
+            input_names = [i.debugName().replace(".", "_") for i in list(model.graph.inputs())[1:]]
+        else:
+            graph_input_names = [i.debugName() for i in list(model.graph.inputs())[1:]]
+            assert len(graph_input_names) == len(input_names), "Number of input names must match number of inputs."
+            for graph_name, input_name in zip(graph_input_names, input_names):
+                assert input_name in graph_name, "Input names must match graph input names."
+
         def get_input_structure(inputs, input_names):
             input_structure = []
             if isinstance(inputs, (list, tuple)):
