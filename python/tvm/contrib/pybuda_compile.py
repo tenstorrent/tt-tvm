@@ -71,7 +71,7 @@ def retrieve_pybuda_cpudevice_json_graph(*args):
     retrieve_graph(cpu_json_graph, t)
 
 
-def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=None, verify_cfg=None):
+def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=None, verify_cfg=None, input_names=[]):
     """
     Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process from specific framework to the PyBuda graph representation, or
@@ -100,7 +100,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
     if compiler_cfg.tvm_graph_store_path != "" and compiler_cfg.tvm_graph_load_path != "":
         logger.warning(f"TVM serialization logic will be skipped as both store and load paths are provided")
 
-    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, path=path, verify_cfg=verify_cfg, framework=framework)
+    json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, input_names=input_names, path=path, verify_cfg=verify_cfg, framework=framework)
     
     flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
 
@@ -109,7 +109,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
     return json_graphs, flattened_pytorch_inputs, weights
 
 
-def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, path=None, verify_cfg=None, framework=None):
+def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, input_names=[], path=None, verify_cfg=None, framework=None):
     """
     Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
@@ -140,7 +140,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, path=None, verif
     cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
   
     if framework == "pytorch":
-        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
     elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
@@ -326,7 +326,7 @@ class ConvertEmulatedDtypes:
         for inp, df in zip(self.flatten_object(self.inputs), self.input_dfs):
             inp.data = inp.data.to(df)
 
-def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
     training_mode = torchmod.training
 
     with ConvertEmulatedDtypes(torchmod, inputs):
@@ -354,6 +354,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
         framework="pytorch",
         model=traced_model,
         inputs=inputs,
+        input_names=input_names,
     )
 
     graph_string = traced_model.graph.str().encode('utf-8')
