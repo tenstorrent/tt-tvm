@@ -1885,6 +1885,14 @@ def uniform_strategy(attrs, inputs, out_type, target):
     )
     return strategy
 
+# multinomial
+def wrap_compute_multinomial(topi_compute):
+    """Wrap multinomial topi compute"""
+
+    def _compute_multinomial(attrs, inputs, _):
+        return list(topi_compute(inputs[0], inputs[1], attrs.num_samples))
+
+    return _compute_multinomial
 
 # multinomial
 def wrap_compute_multinomial(topi_compute):
@@ -1926,6 +1934,17 @@ def normal_strategy(attrs, inputs, out_type, target):
         wrap_compute_uniform(topi.random.normal),
         wrap_topi_schedule(topi.generic.schedule_extern),
         name="normal.generic",
+    )
+    return strategy
+
+@override_native_generic_func("multinomial_strategy")
+def multinomial_strategy(attrs, inputs, out_type, target):
+    """multinomial generic strategy"""
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_multinomial(topi.random.multinomial),
+        wrap_topi_schedule(topi.generic.schedule_extern),
+        name="multinomial.generic",
     )
     return strategy
 

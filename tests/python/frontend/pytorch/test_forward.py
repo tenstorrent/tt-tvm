@@ -5059,6 +5059,20 @@ def test_forward_mse_loss():
     verify_model(torch.nn.MSELoss().eval(), input_data=[predictions, targets])
     verify_model(torch.nn.MSELoss(reduction="sum").eval(), input_data=[predictions, targets])
     verify_model(torch.nn.MSELoss(reduction="none").eval(), input_data=[predictions, targets])
+def test_multinomial():
+    def _test_multinomial(num_samples):
+        return lambda inp: torch.multinomial(inp, num_samples=num_samples, replacement=True)
+
+    # Dont check output since it's random. Instead we'll just make sure shapes are right.
+    verify_model(
+        _test_multinomial(2), [torch.rand(size=[3]).float()], cpu_only=True, check_correctness=False
+    )
+    verify_model(
+        _test_multinomial(1),
+        [torch.rand(size=[4, 5]).float()],
+        cpu_only=True,
+        check_correctness=False,
+    )
 
 
 @tvm.testing.uses_gpu

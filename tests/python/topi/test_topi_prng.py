@@ -68,6 +68,24 @@ def uniform(target, dev, gen, low, high, size, dtype):
     )
     return out_gen.numpy(), rands.asnumpy()
 
+def multinomial(target, dev, gen, probs, num_samples):
+    gen_placeholder = tvm.te.placeholder(gen.shape, name="gen", dtype="uint64")
+    probs_placeholder = tvm.te.placeholder(probs.shape, name="probs", dtype="float32")
+    new_gen_placeholder, indices_placeholder = tvm.topi.random.multinomial(
+        gen_placeholder, probs_placeholder, num_samples
+    )
+    s = tvm.topi.generic.schedule_extern([new_gen_placeholder, indices_placeholder])
+    f = tvm.build(
+        s,
+        [gen_placeholder, probs_placeholder, new_gen_placeholder, indices_placeholder],
+        target=target,
+    )
+    out_gen = tvm.nd.array(np.zeros(gen.shape, dtype="uint64"), device=dev)
+    indices = tvm.nd.array(np.zeros((*probs.shape[:-1], num_samples), dtype="int32"), device=dev)
+    f(tvm.nd.array(gen), tvm.nd.array(probs), out_gen, indices)
+    return out_gen.numpy(), indices.asnumpy()
+
+
 
 def multinomial(target, dev, gen, probs, num_samples):
     gen_placeholder = tvm.te.placeholder(gen.shape, name="gen", dtype="uint64")
@@ -182,6 +200,53 @@ def test_uniform(target, dev):
         assert abs(np.mean(rands) - 7.5) < 1e-1
         assert np.min(rands) >= 5.0
         assert np.max(rands) <= 10.0
+
+@tvm.testing.parametrize_targets
+def test_multinomial(target, dev):
+    def _verify_multinomial(size, num_samples, test_statistics=False):
+        gen = tvm.relay.random.threefry_key(np.random.randint(0, 1e5)).data.numpy()
+        probs = np.random.randint(low=-50, high=1000, size=size).astype("float32")
+        new_gen, indices = multinomial(target, dev, gen, probs, num_samples)
+        assert (gen != new_gen).any()
+        assert np.min(indices) >= 0
+        assert np.max(indices) < probs.shape[-1]
+        # Note, only use test_statistics with sample size > 10,000.
+        if test_statistics:
+            # Clipped and normalized probabilities * number of samples
+            # represents expected frequency of each category.
+            # First upcast to float64 to remove numerical error.
+            probs = probs.astype("float64")
+            probs = np.reshape(probs, [-1, probs.shape[-1]])
+            probs = np.maximum(probs, 0)
+            probs = probs / np.expand_dims(np.sum(probs, axis=-1), axis=-1)
+            # Multiply by number of samples and add epsilon to get non-zero expected samples per index.
+            expected_frequency = probs * num_samples + np.finfo(float).eps
+            # Do a small adjustment to make sure each row of expected_frequencies sums to exactly num_samples.
+            expected_frequency = (
+                np.expand_dims((num_samples / np.sum(expected_frequency, axis=-1)), axis=-1)
+                * expected_frequency
+            )
+            # Reduce shape to a 2D matrix.
+            indices = np.reshape(indices, [-1, indices.shape[-1]])
+            # Split indendent rows of indices.
+            index_list = [np.squeeze(x, 0) for x in np.split(indices, indices.shape[0], axis=0)]
+            # Count frequency of selected indices in each row.
+            observed_freqs = [np.bincount(samples, minlength=size[-1]) for samples in index_list]
+            # Stack observed frequencies back into a matrix.
+            observed_freqs = np.stack(observed_freqs, axis=0)
+            # Test how closely observed samples match expectations.
+            _, p_value = scipy.stats.chisquare(observed_freqs, expected_frequency, axis=-1)
+            # If sampled correctly, p_value should be greater than 1e-6 almost all the time.
+            assert np.all(p_value > 1e-6)
+
+    # Test simple 1-D case.
+    _verify_multinomial([3], 2)
+    # Test 2-D case.
+    _verify_multinomial([2, 10], 1)
+    # Test 3-D case.
+    _verify_multinomial([2, 3, 10], 4)
+    # Test large sample size statistics.
+    _verify_multinomial([3, 10], 10000, test_statistics=True)
 
 
 @tvm.testing.parametrize_targets("llvm")
