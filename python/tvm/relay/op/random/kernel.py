@@ -232,7 +232,6 @@ def normal(key, shape, dtype="float32", mean=0.0, scale=1.0):
         scale = const(scale, dtype=dtype)
     return _make.normal(key, mean, scale, shape, dtype)
 
-
 def multinomial(key, probs, num_samples):
     """Draw samples from a multinomial distribution.
 
