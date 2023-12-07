@@ -302,4 +302,6 @@ if __name__ == "__main__":
     test_threefry_generate(tvm.target.Target("llvm"), tvm.device("cpu"))
     test_threefry_wrapping(tvm.target.Target("llvm"), tvm.device("cpu"))
     test_uniform(tvm.target.Target("llvm"), tvm.device("cpu"))
+
+    #multinomial op tests
     test_multinomial(tvm.target.Target("llvm"), tvm.device("cpu"))
