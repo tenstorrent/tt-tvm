@@ -129,12 +129,6 @@ TVM_REGISTER_GLOBAL("ir.DictType").set_body_typed([](Array<String> keys, Array<T
   return DictType(keys, values);
 });
 
-TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
-    .set_dispatch<TupleTypeNode>([](const ObjectRef& ref, ReprPrinter* p) {
-      auto* node = static_cast<const TupleTypeNode*>(ref.get());
-      p->stream << "TupleTypeNode(" << node->fields << ")";
-    });
-
 IncompleteType::IncompleteType(TypeKind kind, Span span) {
   auto n = make_object<IncompleteTypeNode>();
   n->kind = std::move(kind);

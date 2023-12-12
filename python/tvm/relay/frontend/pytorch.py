@@ -4883,7 +4883,6 @@ class PyTorchOpConverter:
 
     def convert_operators(self, operators, outputs, ret_names):
         """Convert each Torch IR operators to Relay equivalent"""
-        
         for node_name, op_node in operators:
 
             logger.trace(f"Converting: {op_node.kind()} : {node_name}")
@@ -4973,7 +4972,6 @@ class PyTorchOpConverter:
                     _get_input_types(op_node, outputs, default_dtype=self.default_dtype),
                 )
 
-                span_str, empty_counter = self._get_torch_span(op_node, empty_counter)
                 relay_out = set_span(relay_out, self.source_map[op_node])
 
                 self.record_output_type(relay_out)
@@ -5639,7 +5637,8 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
                     var = vars_by_name[var_name]
                 else:
                     torch_tensor = state_dict[full_attr]
-                    tensor, var = _get_tensor_and_var(torch_tensor, var_name, do_convert_params)
+                    tensor, var = _get_tensor_and_var(torch_tensor, full_attr, do_convert_params)
+                    # tensor, var = _get_tensor_and_var(torch_tensor, var_name, do_convert_params)  # TODO: Do we need this for scope names?
                     param_tensors[var_name] = tensor
                     # for quantized parameters to be correctly located
                     param_debug_name_map[full_attr_node_name] = var_name
@@ -5826,7 +5825,7 @@ def from_pytorch(
     operator_nodes = _get_operator_nodes(
         graph.nodes(), converter.source_map, converter.op_type_dict, use_parser_friendly_name
     )
-    outplace_inplace_ops(opnodes)
+    outplace_inplace_ops(operator_nodes)
     ret_name = _get_input_names(graph.return_node())
     outputs = converter.convert_operators(operator_nodes, outputs, ret_name)
 

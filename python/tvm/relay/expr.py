@@ -208,8 +208,8 @@ class Constant(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, data, span=None, is_param=False, name="_const_", framework_dtype="N/A"):
-        self.__init_handle_by_constructor__(_ffi_api.Constant, data, span, is_param, name, framework_dtype)
+    def __init__(self, data, is_param=False, name="_const_", framework_dtype="N/A", span=None):
+        self.__init_handle_by_constructor__(_ffi_api.Constant, data, is_param, name, framework_dtype, span)
 
 
 @tvm._ffi.register_func("relay.ConstantWithFields")
@@ -281,8 +281,8 @@ class Var(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, name_hint, type_annotation=None, span=None, framework_dtype="N/A"):
-        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, span, framework_dtype)
+    def __init__(self, name_hint, type_annotation=None, framework_dtype="N/A", span=None):
+        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, framework_dtype, span)
 
     @property
     def name_hint(self):
@@ -642,25 +642,10 @@ def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None,
         type_annotation = _ty.TensorType(shape, dtype)
     elif isinstance(type_annotation, str):
         type_annotation = _ty.TensorType((), type_annotation)
-<<<<<<< HEAD
-    return Var(name_hint, type_annotation, span)
+    return Var(name_hint, type_annotation, framework_dtype, span)
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-def const(value, dtype=None, span=None):
-=======
-def const(value, dtype=None, is_param=False):
->>>>>>> 2430124db... Adding is_param attribute to relay Constants so params may be bound to module and retain requires_grad status
-=======
-def const(value, dtype=None, is_param=False, name='_const_'):
->>>>>>> 09d0adf48... propping const names
-=======
-    return Var(name_hint, type_annotation, framework_dtype)
-
-
-def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/A"):
->>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
+def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/A", span=None):
     """Create a constant value.
 
     Parameters
@@ -700,19 +685,7 @@ def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/
     if not isinstance(value, _nd.NDArray):
         raise ValueError("value has to be scalar or NDArray")
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-    return Constant(value, span)
-=======
-    return Constant(value, is_param)
->>>>>>> 2430124db... Adding is_param attribute to relay Constants so params may be bound to module and retain requires_grad status
-=======
-    return Constant(value, is_param, name)
->>>>>>> 09d0adf48... propping const names
-=======
-    return Constant(value, is_param, name, framework_dtype)
->>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
+    return Constant(value, is_param, name, framework_dtype, span)
 
 
 def bind(expr, binds):

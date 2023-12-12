@@ -90,7 +90,7 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   BudaJSONSerializer serializer(func_name, func);
   serializer.serialize();
   std::string graph_json = serializer.GetJSON();
-  auto params = serializer.GetParams();
+  auto params = serializer.const_names();
 
   const auto* jgr = runtime::Registry::Get("retrieve_pybuda_json_graph");
   ICHECK(jgr != nullptr) << "Cannot find retrieve_pybuda_json_graph";
@@ -104,8 +104,6 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
 
 TVM_REGISTER_GLOBAL("relay.ext.pybuda").set_body_typed(BudaCompiler);
 
-
-
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module and
  * compile it into a runtime module.
@@ -117,7 +115,7 @@ runtime::Module BudaCPUCompiler(const ObjectRef& ref) {
   BudaJSONSerializer serializer(func_name, func);
   serializer.serialize();
   std::string graph_json = serializer.GetJSON();
-  auto params = serializer.GetParams();
+  auto params = serializer.const_names();
 
   const auto* jgr = runtime::Registry::Get("retrieve_pybuda_cpudevice_json_graph");
   ICHECK(jgr != nullptr) << "Cannot find retrieve_pybuda_cpudevice_json_graph";

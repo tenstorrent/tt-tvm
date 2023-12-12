@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.16)
 project(tvm C CXX)
 
 # Utility functions
@@ -582,6 +582,7 @@ add_library(tvm_objs OBJECT ${COMPILER_SRCS})
 add_library(tvm_runtime_objs OBJECT ${RUNTIME_SRCS})
 add_library(tvm_libinfo_objs OBJECT ${LIBINFO_FILE})
 
+include(GNUInstallDirs)
 if(NOT BUILD_DUMMY_LIBTVM)
   add_library(tvm SHARED $<TARGET_OBJECTS:tvm_objs> $<TARGET_OBJECTS:tvm_runtime_objs> $<TARGET_OBJECTS:tvm_libinfo_objs>)
 else()
@@ -799,7 +800,6 @@ else(INSTALL_DEV)
     )
 endif(INSTALL_DEV)
 
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 set(PROJECT_CONFIG_CONTENT "@PACKAGE_INIT@\n")
 string(APPEND PROJECT_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n")
@@ -894,9 +894,4 @@ endif()
 if(USE_ROCM AND USE_RCCL)
   target_link_libraries(tvm PRIVATE rccl)
   target_link_libraries(tvm_runtime PRIVATE rccl)
-
-find_program(CCACHE_PROGRAM ccache)
-if(CCACHE_PROGRAM)
-    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
-
 endif()

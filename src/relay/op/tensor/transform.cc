@@ -477,7 +477,7 @@ bool PixelShuffleRel(const Array<Type>& types, int num_inputs, const Attrs& attr
 
 Expr MakePixelShuffle(Expr data, Integer upscale_factor) {
     auto attrs = make_object<PixelShuffleAttrs>();
-    attrs->upscale_factor = upscale_factor;
+    attrs->upscale_factor = upscale_factor.IntValue();
     static const Op& op = Op::Get("pixel_shuffle");
     return Call(op, {data}, Attrs(attrs), {});
 }
@@ -1462,10 +1462,10 @@ Array<te::Tensor> EmbeddingCompute(const Attrs& attrs, const Array<te::Tensor>& 
   const auto* param = attrs.as<EmbeddingAttrs>();
   ICHECK(param != nullptr);
   if (!param->axis.defined()) {
-    return Array<te::Tensor>{topi::embedding(inputs[0], inputs[1], param->batch_dims, param->mode)};
+    return Array<te::Tensor>{topi::embedding(inputs[0], inputs[1], param->batch_dims.IntValue(), param->mode)};
   } else {
     return Array<te::Tensor>{
-        topi::embedding(inputs[0], inputs[1], param->batch_dims, param->axis, param->mode)};
+        topi::embedding(inputs[0], inputs[1], param->batch_dims.IntValue(), param->axis.IntValue(), param->mode)};
   }
 }
 
