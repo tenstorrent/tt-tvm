@@ -18,7 +18,8 @@ from ctypes import c_void_p
 import copy
 import json
 
-from collections import OrderedDict, MutableMapping
+from collections import OrderedDict
+from collections.abc import MutableMapping
 import pybuda
 
 from json import JSONEncoder
