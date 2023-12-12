@@ -86,8 +86,8 @@ Constant::Constant(runtime::NDArray data, Span span, std::string name, std::stri
 
 TVM_REGISTER_NODE_TYPE(ConstantNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, Span span, bool is_param, std::string name, std::string framework_dtype) {
-  return Constant(data, is_param, span, name, framework_dtype);
+TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span) {
+  return Constant(data, is_param, name, framework_dtype, span);
 });
 TVM_REGISTER_GLOBAL("relay.ir.ConstantWithFields")
     .set_body_typed([](Constant constant, Optional<runtime::NDArray> opt_data,
@@ -237,13 +237,8 @@ Var WithFields(Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation
 
 TVM_REGISTER_NODE_TYPE(VarNode);
 
-<<<<<<< HEAD
-TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, Span span) {
-  return Var(str, type_annotation, span);
-=======
-TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, std::string framework_dtype) {
-  return Var(str, type_annotation, framework_dtype);
->>>>>>> 1d5cc098c... Pass through original dtype even if it isnt supported by numpy (bfloat16)
+TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, std::string framework_dtype, Span span) {
+  return Var(str, type_annotation, framework_dtype, span);
 });
 TVM_REGISTER_GLOBAL("relay.ir.VarWithFields")
     .set_body_typed([](Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation,
