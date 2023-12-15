@@ -1154,6 +1154,31 @@ def _matmul():
     return _impl
 
 
+def _matrix_band_part():
+    def _impl(inputs, attr, params, mod):
+        from .tensorflow import TF_DEFAULT_CONFIGS
+
+        data = inputs[0]
+        lower = axis_input_value = [_get_num_param(params, inputs[1])][0]
+        upper = axis_input_value = [_get_num_param(params, inputs[2])][0]
+        num_dim = _infer_shape(inputs[0], mod)[-1]
+
+        if lower == 0 and upper == 0:
+            # diagonal
+            indices = _op.arange(_op.const(num_dim, dtype="float32"))
+            diagonal = _op.one_hot(indices, _op.const(1, dtype="float32"), _op.const(0, dtype="float32"), num_dim, -1, dtype="float32")
+            data = _op.multiply(diagonal, data)
+        elif lower == 0 and upper == -1:
+            # upper triangular matrix
+            data = get_relay_op("trilu")(data, True, 0)
+        elif lower == -1 and upper == 0:
+            # lower triangular matrix
+            data = get_relay_op("trilu")(data, False, 0)
+        return data
+
+    return _impl
+
+
 def _batch_matmul():
     def _impl(inputs, attr, params, mod):
         from .tensorflow import TF_DEFAULT_CONFIGS
@@ -3466,6 +3491,7 @@ _convert_map = {
     "LRN": _lrn(),
     "LSTMBlockCell": _LSTMBlockCell(),
     "MatMul": _matmul(),
+    "MatrixBandPart": _matrix_band_part(),
     "Max": _reduce("max"),
     "Maximum": _elemwise("maximum"),
     "MaxPool": _pooling("max_pool"),
