@@ -1027,6 +1027,45 @@ RELAY_REGISTER_OP("nn.layer_norm")
     .set_support_level(1)
     .add_type_rel("LayerNorm", LayerNormRel);
 
+// scaled_dot_product_attention
+TVM_REGISTER_NODE_TYPE(ScaledDotProductAttentionAttrs);
+
+bool ScaledDotProductAttentionRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+                  const TypeReporter& reporter) {
+  ICHECK_EQ(types.size(), 6); // query, key, value, attn_mask, scale_factor, output
+  const auto* data = types[0].as<TensorTypeNode>();
+  if (data == nullptr) return false;
+  const ScaledDotProductAttentionAttrs* param = attrs.as<ScaledDotProductAttentionAttrs>();
+  bool is_causal = param->is_causal;
+  ICHECK(!is_causal); // unsupported
+  reporter->Assign(types[5], TensorType(data->shape, data->dtype)); // Set output to same as Q
+
+  return true;
+}
+
+RELAY_REGISTER_OP("nn.scaled_dot_product_attention")
+    .describe(R"code(
+)code" TVM_ADD_FILELINE)
+    .set_attrs_type<ScaledDotProductAttentionAttrs>()
+    .set_num_inputs(5)
+    .add_argument("query", "Tensor", "Query tensor")
+    .add_argument("key", "Tensor", "Key tensor")
+    .add_argument("value", "Tensor", "Value tensor")
+    .add_argument("attn_mask", "Tensor", "Attention Mask")
+    .add_argument("scale", "Tensor", "Scale factor")
+    .set_attr<TOpPattern>("TOpPattern", kOpaque)
+    .set_support_level(10)
+    .add_type_rel("ScaledDotProductAttention", ScaledDotProductAttentionRel);
+
+Expr MakeScaledDotProductAttention(Expr query, Expr key, Expr value, Expr attn_mask, Expr scale, bool is_causal) {
+  auto attrs = make_object<ScaledDotProductAttentionAttrs>();
+  attrs->is_causal = is_causal;
+  static const Op& op = Op::Get("nn.scaled_dot_product_attention");
+  return Call(op, {query, key, value, attn_mask, scale}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op.nn._make.scaled_dot_product_attention").set_body_typed(MakeScaledDotProductAttention);
+
 // group_norm
 TVM_REGISTER_NODE_TYPE(GroupNormAttrs);
 

@@ -2160,6 +2160,9 @@ def layer_norm(data, gamma, beta, axis=-1, epsilon=1e-5, center=True, scale=True
     """
     return _make.layer_norm(data, gamma, beta, axis, epsilon, center, scale)
 
+def scaled_dot_product_attention(query, key, value, attn_mask, scale, is_causal=False):
+    return _make.scaled_dot_product_attention(query, key, value, attn_mask, scale, is_causal)
+
 
 def group_norm(data, gamma, beta, num_groups, axis=1, epsilon=1e-5, center=True, scale=True):
     r"""

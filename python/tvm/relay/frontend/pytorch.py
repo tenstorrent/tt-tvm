@@ -28,6 +28,7 @@ import re
 import sys
 import logging
 from typing import OrderedDict
+import os
 
 import numpy as np
 import tvm
@@ -4661,6 +4662,160 @@ class PyTorchOpConverter:
             shape = np.array([shape.item()])
 
         return self.full_impl(shape, 0, dtype)
+
+    def linalg_vector_norm(self, inputs, input_types):
+        data = inputs[0]
+        dtype = input_types[0]
+        ord = inputs[1]
+        dim = inputs[2]
+        keepdim = inputs[3]
+
+        assert dtype == "float32" or dtype == "float64"
+
+        if ord == 0:
+            return _op.reduce.sum(
+                _op.cast(_op.not_equal(data, _expr.const(0, dtype=dtype)), dtype=dtype),
+                axis=dim,
+                keepdims=keepdim,
+            )
+        elif ord == np.inf:
+            return _op.reduce.max(_op.abs(data), axis=dim, keepdims=keepdim)
+        elif ord == np.NINF:
+            return _op.reduce.min(_op.abs(data), axis=dim, keepdims=keepdim)
+        reci_ord = _expr.const(1.0 / ord, dtype=dtype)
+        ord = _expr.const(ord, dtype=dtype)
+        return _op.power(
+            _op.reduce.sum(_op.power(_op.abs(data), ord), axis=dim, keepdims=keepdim),
+            reci_ord,
+        )
+
+    def scaled_dot_product_attention(self, inputs, input_types):
+        query = inputs[0]
+        key = inputs[1]
+        value = inputs[2]
+        attn_mask = inputs[3]
+        dropout_p = inputs[4]
+        is_causal = inputs[5]
+
+        # Explicit scale can be used from torch>=2.1.0
+        if len(inputs) == 7:
+            scale = inputs[6]
+        else:
+            scale = None
+
+        assert (
+            input_types[0] == input_types[1] == input_types[2]
+        ), "Expected query, key, and value to have the same dtype"
+
+        dtype = input_types[0]
+        assert dtype == "float32" or dtype == "float64", "Data type can be float32 or float64"
+
+        query_shape = self.infer_shape_with_prelude(query)
+        key_shape = self.infer_shape_with_prelude(key)
+        value_shape = self.infer_shape_with_prelude(value)
+        assert 3 <= len(query_shape) <= 4, "Only 3D or 4D query supported"
+        assert 3 <= len(key_shape) <= 4, "Only 3D or 4D key supported"
+        assert 3 <= len(value_shape) <= 4, "Only 3D or 4D value supported"
+
+        assert dropout_p == 0.0, "Only dropout_p==0.0 supported"
+
+        L, S = query_shape[-2], key_shape[-2]
+
+        decompose_sdpa = bool(int(os.environ.get("PYBUDA_DECOMPOSE_FLASH_ATTENTION", 0)))
+
+        if not decompose_sdpa:
+            # Return a scaled_dot_product_attention op to PyBuda
+            assert scale is None, "Must not provide a scale factor"
+            assert attn_mask is not None, "Explicit attn_mask should be set when is_causal=False"
+            assert not is_causal, "Not supporting is_causal=True yet since we would need to generate causal mask."
+
+            scale_factor = _expr.const(1 / math.sqrt(query_shape[-1]), dtype=dtype)
+            scale_factor = _op.broadcast_to(scale_factor, shape=tuple(1 for _ in range(len(query_shape))))
+            
+            # Early out if not decomposing
+            return _op.nn.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask,
+            scale_factor,
+            is_causal=is_causal
+            )
+
+
+        if scale is None:
+            scale_factor = _expr.const(1 / math.sqrt(query_shape[-1]), dtype=dtype)
+        else:
+            scale_factor = _expr.const(scale, dtype=dtype)
+
+        attn_bias = _op.full(_expr.const(0.0, dtype=dtype), (L, S))
+
+        if is_causal:
+            assert attn_mask is None, "Explicit attn_mask shouldn't be set when is_causal=True"
+            temp_mask = _op.full(_expr.const(True), [L, S], dtype="bool")
+            temp_mask = _op.trilu(temp_mask, 0, upper=False)
+            temp_mask = _op.cast(temp_mask, dtype="bool")
+            temp_mask = _op.logical_not(temp_mask)
+            fill_value = _op.cast(_expr.const(float("-inf")), dtype=dtype)
+            attn_bias = _op.where(temp_mask, fill_value, attn_bias)
+            attn_bias = _op.cast(attn_bias, dtype)
+
+        if attn_mask is not None:
+            if input_types[3] == "bool":
+                attn_mask = _op.logical_not(attn_mask)
+                fill_value = _op.cast(_expr.const(float("-inf")), dtype=dtype)
+                attn_bias = _op.where(attn_mask, fill_value, attn_bias)
+            else:
+                attn_bias = _op.add(attn_bias, attn_mask)
+
+        if len(query_shape) < len(key_shape):
+            batch_size = key_shape[0]
+        else:
+            batch_size = query_shape[0]
+        
+        if len(query_shape) == 4 and len(key_shape) == 4:
+            query = _op.reshape(query, newshape=[-3, -2])
+            key = _op.reshape(key, newshape=[-3, -2])
+        if len(query_shape) == 3 and len(key_shape) == 4:
+            query = _op.broadcast_to(query, shape=(batch_size,) + query_shape)
+            query = _op.reshape(query, newshape=[-3, -2])
+            key = _op.reshape(key, newshape=[-3, -2])
+        if len(query_shape) == 4 and len(key_shape) == 3:
+            query = _op.reshape(query, newshape=[-3, -2])
+            key = _op.broadcast_to(key, shape=(batch_size,) + key_shape)
+            key = _op.reshape(key, newshape=[-3, -2])
+
+        attn_weight = _op.nn.batch_matmul(query, key)
+        if len(query_shape) == 4 or len(key_shape) == 4:
+            attn_weight = _op.reshape(attn_weight, newshape=[-4, batch_size, -1, -2])
+        attn_weight = _op.squeeze(attn_weight, axis=[])
+
+        attn_weight = _op.multiply(attn_weight, scale_factor)
+        attn_weight = _op.add(attn_weight, attn_bias)
+        attn_weight = _op.nn.softmax(attn_weight)
+        attn_weight = _op.nn.dropout(attn_weight, rate=dropout_p)
+
+        aw_shape = self.infer_shape_with_prelude(attn_weight)
+        if len(aw_shape) < len(value_shape):
+            batch_size = value_shape[0]
+        else:
+            batch_size = aw_shape[0]
+        if len(aw_shape) == 4 and len(value_shape) == 4:
+            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
+            value = _op.reshape(value, newshape=[-3, -2])
+        if len(aw_shape) == 3 and len(value_shape) == 4:
+            attn_weight = _op.broadcast_to(attn_weight, shape=(batch_size,) + aw_shape)
+            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
+            value = _op.reshape(value, newshape=[-3, -2])
+        if len(aw_shape) == 4 and len(value_shape) == 3:
+            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
+            value = _op.broadcast_to(value, shape=(batch_size,) + value_shape)
+            value = _op.reshape(value, newshape=[-3, -2])
+        attn_weight = _op.nn.batch_matmul(attn_weight, value, transpose_b=False)
+        if len(aw_shape) == 4 or len(value_shape) == 4:
+            attn_weight = _op.reshape(attn_weight, newshape=[-4, batch_size, -1, -2])
+
+        return attn_weight
 
     # Operator mappings
     def create_convert_map(self):
