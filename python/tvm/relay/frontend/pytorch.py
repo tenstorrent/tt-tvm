@@ -4446,9 +4446,9 @@ class PyTorchOpConverter:
 
         L, S = query_shape[-2], key_shape[-2]
 
-        decompose_sdpa = bool(int(os.environ.get("PYBUDA_DECOMPOSE_FLASH_ATTENTION", 0)))
+        enable_flash_attention = bool(int(os.environ.get("PYBUDA_ENABLE_FLASH_ATTENTION", 0)))
 
-        if not decompose_sdpa:
+        if enable_flash_attention:
             # Return a scaled_dot_product_attention op to PyBuda
             assert scale is None, "Must not provide a scale factor"
             assert attn_mask is not None, "Explicit attn_mask should be set when is_causal=False"
