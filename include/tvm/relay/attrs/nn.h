@@ -1367,6 +1367,15 @@ struct LayerNormAttrs : public tvm::AttrsNode<LayerNormAttrs> {
   }
 };  // struct LayerNormAttrs
 
+/*! \brief Attributes used in scaled_dot_product_attention operator */
+struct ScaledDotProductAttentionAttrs : public tvm::AttrsNode<ScaledDotProductAttentionAttrs> {
+  bool is_causal;
+
+  TVM_DECLARE_ATTRS(ScaledDotProductAttentionAttrs, "relay.attrs.ScaledDotProductAttentionAttrs") {
+    TVM_ATTR_FIELD(is_causal).set_default(false).describe("Whether the attention is causal");
+  }
+};  // struct ScaledDotProductAttentionAttrs
+
 /*! \brief Attributes used in Gelu operator */
 struct GeluAttrs : public tvm::AttrsNode<GeluAttrs> {
   std::string approximate;
