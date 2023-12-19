@@ -62,7 +62,7 @@ namespace relay {
 using tvm::ReprPrinter;
 using namespace tvm::runtime;
 
-Constant::Constant(runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span) {
+Constant::Constant(runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span, Integer id) {
   ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
   n->data = std::move(data);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
@@ -70,10 +70,11 @@ Constant::Constant(runtime::NDArray data, bool is_param, std::string name, std::
   n->is_param = std::move(is_param);
   n->name = std::move(name);
   n->framework_dtype = std::move(framework_dtype);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
-Constant::Constant(runtime::NDArray data, Span span, std::string name, std::string framework_dtype) {
+Constant::Constant(runtime::NDArray data, Span span, std::string name, std::string framework_dtype, Integer id) {
   ObjectPtr<ConstantNode> n = make_object<ConstantNode>();
   n->data = std::move(data);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
@@ -81,18 +82,21 @@ Constant::Constant(runtime::NDArray data, Span span, std::string name, std::stri
   n->is_param = std::move(false);
   n->name = std::move(name);
   n->framework_dtype = std::move(framework_dtype);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
 TVM_REGISTER_NODE_TYPE(ConstantNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span) {
-  return Constant(data, is_param, name, framework_dtype, span);
+TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data, bool is_param, std::string name, std::string framework_dtype, Span span, Integer id) {
+  return Constant(data, is_param, name, framework_dtype, span, id);
 });
 TVM_REGISTER_GLOBAL("relay.ir.ConstantWithFields")
     .set_body_typed([](Constant constant, Optional<runtime::NDArray> opt_data,
-                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
-      return WithFields(constant, opt_data, opt_virtual_device, opt_span);
+                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span,
+                       Optional<Bool> opt_is_param, Optional<String> opt_name, 
+                       Optional<String> opt_framework_dtype, Optional<Integer> opt_id) {
+      return WithFields(constant, opt_data, opt_virtual_device, opt_span, opt_is_param, opt_name, opt_framework_dtype, opt_id);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
@@ -117,13 +121,16 @@ TensorType ConstantNode::tensor_type() const {
 }
 
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
-                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Bool> opt_is_param, Optional<String> opt_name, Optional<String> opt_framework_dtype) {
+                    Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span,
+                    Optional<Bool> opt_is_param, Optional<String> opt_name, 
+                    Optional<String> opt_framework_dtype, Optional<Integer> opt_id) {
   runtime::NDArray data = opt_data.value_or(constant->data);
   VirtualDevice virtual_device = opt_virtual_device.value_or(constant->virtual_device());
   Span span = opt_span.value_or(constant->span);
   bool is_param = bool(opt_is_param.value_or(Bool(constant->is_param)));
   std::string name = opt_name.value_or("_const_").c_str();
   std::string framework_dtype = opt_framework_dtype.value_or(String(constant->framework_dtype)).c_str();
+  Integer id = opt_id.value_or(constant->id);
 
   bool all_fields_unchanged = data.same_as(constant->data) &&
                               virtual_device.same_as(constant->virtual_device()) &&
@@ -144,30 +151,32 @@ Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
   return constant;
 }
 
-Tuple::Tuple(tvm::Array<relay::Expr> fields, Span span) {
+Tuple::Tuple(tvm::Array<relay::Expr> fields, Span span, Integer id) {
   ObjectPtr<TupleNode> n = make_object<TupleNode>();
   n->fields = std::move(fields);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
 TVM_REGISTER_NODE_TYPE(TupleNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Tuple").set_body_typed([](tvm::Array<relay::Expr> fields, Span span) {
-  return Tuple(fields, span);
+TVM_REGISTER_GLOBAL("relay.ir.Tuple").set_body_typed([](tvm::Array<relay::Expr> fields, Span span, Integer id) {
+  return Tuple(fields, span, id);
 });
 TVM_REGISTER_GLOBAL("relay.ir.TupleWithFields")
     .set_body_typed([](Tuple tuple, Optional<Array<Expr>> opt_fields,
-                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
-      return WithFields(tuple, opt_fields, opt_virtual_device, opt_span);
+                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Integer> opt_id) {
+      return WithFields(tuple, opt_fields, opt_virtual_device, opt_span, opt_id);
     });
 
 Tuple WithFields(Tuple tuple, Optional<Array<Expr>> opt_fields,
-                 Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
+                 Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<Integer> opt_id) {
   Array<Expr> fields = opt_fields.value_or(tuple->fields);
   VirtualDevice virtual_device = opt_virtual_device.value_or(tuple->virtual_device());
   Span span = opt_span.value_or(tuple->span);
+  Integer id = opt_id.value_or(tuple->id);
 
   bool all_fields_unchanged = true;
   if (fields.size() == tuple->fields.size()) {
@@ -195,30 +204,33 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
       p->stream << "Tuple(" << node->fields << ")";
     });
 
-Var::Var(Id vid, Type type_annotation, std::string framework_dtype, Span span) {
+Var::Var(Id vid, Type type_annotation, std::string framework_dtype, Span span, Integer id) {
   ObjectPtr<VarNode> n = make_object<VarNode>();
   n->vid = std::move(vid);
   n->type_annotation = std::move(type_annotation);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
   n->framework_dtype = std::move(framework_dtype);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
-/* static */ Var Var::GenSym(Type type_annotation, Span span, std::string framework_dtype) {
+/* static */ Var Var::GenSym(Type type_annotation, Span span, std::string framework_dtype, Integer id) {
   static size_t next_id = std::atomic<size_t>(0);
   std::ostringstream os;
   os << "x_" << next_id++;
-  return Var(os.str(), std::move(type_annotation), std::move(framework_dtype), std::move(span));
+  return Var(os.str(), std::move(type_annotation), std::move(framework_dtype), std::move(span), std::move(id));
 }
 
 Var WithFields(Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation,
-               Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<String> opt_framework_dtype) {
+               Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, Optional<String> opt_framework_dtype,
+               Optional<Integer> opt_id) {
   Id vid = opt_vid.value_or(var->vid);
   Type type_annotation = opt_type_annotation.value_or(var->type_annotation);
   VirtualDevice virtual_device = opt_virtual_device.value_or(var->virtual_device());
   Span span = opt_span.value_or(var->span);
   std::string framework_dtype = opt_framework_dtype.value_or(var->framework_dtype).c_str();
+  Integer id = opt_id.value_or(var->id);
 
   bool unchanged = vid.same_as(var->vid) && type_annotation.same_as(var->type_annotation) &&
                    virtual_device.same_as(var->virtual_device()) && span.same_as(var->span) &&
@@ -237,13 +249,14 @@ Var WithFields(Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation
 
 TVM_REGISTER_NODE_TYPE(VarNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, std::string framework_dtype, Span span) {
-  return Var(str, type_annotation, framework_dtype, span);
+TVM_REGISTER_GLOBAL("relay.ir.Var").set_body_typed([](String str, Type type_annotation, std::string framework_dtype, Span span, Integer id) {
+  return Var(str, type_annotation, framework_dtype, span, id);
 });
 TVM_REGISTER_GLOBAL("relay.ir.VarWithFields")
     .set_body_typed([](Var var, Optional<Id> opt_vid, Optional<Type> opt_type_annotation,
-                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
-      return WithFields(var, opt_vid, opt_type_annotation, opt_virtual_device, opt_span);
+                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span,
+                       Optional<String> opt_framework_dtype, Optional<Integer> opt_id) {
+      return WithFields(var, opt_vid, opt_type_annotation, opt_virtual_device, opt_span, opt_framework_dtype, opt_id);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
@@ -257,7 +270,7 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
       p->stream << ")";
     });
 
-Call::Call(Expr op, Array<Expr> args, Attrs attrs, Array<Type> type_args, Span span) {
+Call::Call(Expr op, Array<Expr> args, Attrs attrs, Array<Type> type_args, Span span, Integer id) {
   ObjectPtr<CallNode> n = make_object<CallNode>();
   n->op = std::move(op);
   n->args = std::move(args);
@@ -265,12 +278,14 @@ Call::Call(Expr op, Array<Expr> args, Attrs attrs, Array<Type> type_args, Span s
   n->type_args = std::move(type_args);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
 Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args,
                 Optional<Attrs> opt_attrs, Optional<Array<Type>> opt_type_args,
-                Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
+                Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, 
+                Optional<Integer> opt_id) {
   // Collect new values for fields.
   Expr op = opt_op.value_or(call->op);
   Array<Expr> args = opt_args.value_or(call->args);
@@ -278,10 +293,12 @@ Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args
   Array<Type> type_args = opt_type_args.value_or(call->type_args);
   VirtualDevice virtual_device = opt_virtual_device.value_or(call->virtual_device());
   Span span = opt_span.value_or(call->span);
+  Integer id = opt_id.value_or(call->id);
 
   // Check if anything changed.
   bool unchanged = op.same_as(call->op) && attrs.same_as(call->attrs) &&
-                   virtual_device.same_as(call->virtual_device()) && span.same_as(call->span);
+                   virtual_device.same_as(call->virtual_device()) && span.same_as(call->span) &&
+                   id.same_as(call->id);
   if (unchanged) {
     if (args.size() == call->args.size()) {
       for (size_t i = 0; i < args.size(); i++) {
@@ -310,6 +327,7 @@ Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args
     cow_call_node->type_args = type_args;
     cow_call_node->virtual_device_ = virtual_device;
     cow_call_node->span = span;
+    cow_call_node->id = id;
   }
   return call;
 }
@@ -317,15 +335,16 @@ Call WithFields(Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args
 TVM_REGISTER_NODE_TYPE(CallNode);
 
 TVM_REGISTER_GLOBAL("relay.ir.Call")
-    .set_body_typed([](Expr op, Array<Expr> args, Attrs attrs, Array<Type> type_args, Span span) {
-      return Call(op, args, attrs, type_args, span);
+    .set_body_typed([](Expr op, Array<Expr> args, Attrs attrs, Array<Type> type_args, Span span, Integer id) {
+      return Call(op, args, attrs, type_args, span, id);
     });
 TVM_REGISTER_GLOBAL("relay.ir.CallWithFields")
     .set_body_typed([](Call call, Optional<Expr> opt_op, Optional<Array<Expr>> opt_args,
                        Optional<Attrs> opt_attrs, Optional<Array<Type>> opt_type_args,
-                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span) {
+                       Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span, 
+                       Optional<Integer> opt_id) {
       return WithFields(call, opt_op, opt_args, opt_attrs, opt_type_args, opt_virtual_device,
-                        opt_span);
+                        opt_span, opt_id);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
@@ -440,22 +459,24 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
                 << node->false_branch << ")";
     });
 
-TupleGetItem::TupleGetItem(Expr tuple, int index, Span span) {
+TupleGetItem::TupleGetItem(Expr tuple, int index, Span span, Integer id) {
   ObjectPtr<TupleGetItemNode> n = make_object<TupleGetItemNode>();
   n->tuple = std::move(tuple);
   n->index = index;
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
 TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
                         Optional<Integer> opt_index, Optional<VirtualDevice> opt_virtual_device,
-                        Optional<Span> opt_span) {
+                        Optional<Span> opt_span, Optional<Integer> opt_id) {
   Expr tuple = opt_tuple.value_or(tuple_get_item->tuple);
   Integer index = opt_index.value_or(tuple_get_item->index);
   VirtualDevice virtual_device = opt_virtual_device.value_or(tuple->virtual_device());
   Span span = opt_span.value_or(tuple_get_item->span);
+  Integer id = opt_id.value_or(tuple_get_item->id);
 
   bool unchanged = tuple.same_as(tuple_get_item->tuple) && (index == tuple_get_item->index) &&
                    virtual_device.same_as(tuple_get_item->virtual_device()) &&
@@ -465,6 +486,7 @@ TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
     cow_tuple_get_item_node->tuple = tuple;
     cow_tuple_get_item_node->index = index.IntValue();
     cow_tuple_get_item_node->span = span;
+    cow_tuple_get_item_node->id = id;
     cow_tuple_get_item_node->virtual_device_ = virtual_device;
   }
   return tuple_get_item;
@@ -472,14 +494,14 @@ TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
 
 TVM_REGISTER_NODE_TYPE(TupleGetItemNode);
 
-TVM_REGISTER_GLOBAL("relay.ir.TupleGetItem").set_body_typed([](Expr tuple, int index, Span span) {
-  return TupleGetItem(tuple, index, span);
+TVM_REGISTER_GLOBAL("relay.ir.TupleGetItem").set_body_typed([](Expr tuple, int index, Span span, Integer id) {
+  return TupleGetItem(tuple, index, span, id);
 });
 TVM_REGISTER_GLOBAL("relay.ir.TupleGetItemWithFields")
     .set_body_typed([](TupleGetItem tuple_get_item, Optional<Expr> opt_tuple,
                        Optional<Integer> opt_index, Optional<VirtualDevice> opt_virtual_device,
-                       Optional<Span> opt_span) {
-      return WithFields(tuple_get_item, opt_tuple, opt_index, opt_virtual_device, opt_span);
+                       Optional<Span> opt_span, Optional<Integer> opt_id) {
+      return WithFields(tuple_get_item, opt_tuple, opt_index, opt_virtual_device, opt_span, opt_id);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)

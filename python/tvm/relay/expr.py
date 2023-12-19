@@ -208,18 +208,18 @@ class Constant(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, data, is_param=False, name="_const_", framework_dtype="N/A", span=None):
-        self.__init_handle_by_constructor__(_ffi_api.Constant, data, is_param, name, framework_dtype, span)
+    def __init__(self, data, is_param=False, name="_const_", framework_dtype="N/A", span=None, id=-1):
+        self.__init_handle_by_constructor__(_ffi_api.Constant, data, is_param, name, framework_dtype, span, id)
 
 
 @tvm._ffi.register_func("relay.ConstantWithFields")
-def ConstantWithFields(constant, data=None, virtual_device=None, span=None):
+def ConstantWithFields(constant, data=None, virtual_device=None, span=None, is_param=False, name="_const_", framework_dtype="N/A", id=-1):
     """
     Returns constant with the given properties. A None property denotes 'no change'.
     Returns constant if all properties are unchanged. Otherwise, returns a copy with the new
     fields.
     """
-    return _ffi_api.ConstantWithFields(constant, data, virtual_device, span)
+    return _ffi_api.ConstantWithFields(constant, data, virtual_device, span, is_param, name, framework_dtype, id)
 
 
 @tvm._ffi.register_object("relay.Tuple")
@@ -235,8 +235,8 @@ class Tuple(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, fields, span=None):
-        self.__init_handle_by_constructor__(_ffi_api.Tuple, fields, span)
+    def __init__(self, fields, span=None, id=-1):
+        self.__init_handle_by_constructor__(_ffi_api.Tuple, fields, span, id)
 
     def __getitem__(self, index):
         if index >= len(self):
@@ -251,13 +251,13 @@ class Tuple(ExprWithOp):
 
 
 @tvm._ffi.register_func("relay.TupleWithFields")
-def TupleWithFields(tup, fields=None, virtual_device=None, span=None):
+def TupleWithFields(tup, fields=None, virtual_device=None, span=None, id=-1):
     """
     Returns tuple with the given properties. A None property denotes 'no change'.
     Returns tuple if all properties are unchanged. Otherwise, returns a copy with the new
     fields.
     """
-    return _ffi_api.TupleWithFields(tup, fields, virtual_device, span)
+    return _ffi_api.TupleWithFields(tup, fields, virtual_device, span, id)
 
 
 @tvm._ffi.register_object("relay.Var")
@@ -281,8 +281,8 @@ class Var(ExprWithOp):
         Span that points to original source code.
     """
 
-    def __init__(self, name_hint, type_annotation=None, framework_dtype="N/A", span=None):
-        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, framework_dtype, span)
+    def __init__(self, name_hint, type_annotation=None, framework_dtype="N/A", span=None, id=-1):
+        self.__init_handle_by_constructor__(_ffi_api.Var, name_hint, type_annotation, framework_dtype, span, id)
 
     @property
     def name_hint(self):
@@ -292,13 +292,13 @@ class Var(ExprWithOp):
 
 
 @tvm._ffi.register_func("relay.VarWithFields")
-def VarWithFields(variable, vid=None, type_annotation=None, virtual_device=None, span=None):
+def VarWithFields(variable, vid=None, type_annotation=None, virtual_device=None, span=None, framework_dtype="N/A", id=-1):
     """
     Returns var with the given properties. A None property denotes 'no change'.
     Returns var if all properties are unchanged. Otherwise, returns a copy with the new
     fields.
     """
-    return _ffi_api.VarWithFields(variable, vid, type_annotation, virtual_device, span)
+    return _ffi_api.VarWithFields(variable, vid, type_annotation, virtual_device, span, framework_dtype, id)
 
 
 @tvm._ffi.register_object("relay.Call")
@@ -325,24 +325,27 @@ class Call(ExprWithOp):
 
     span: Optional[tvm.relay.Span]
         Span that points to original source code.
+
+    id: Optional[int]
+        Node id of the expression
     """
 
-    def __init__(self, op, args, attrs=None, type_args=None, span=None):
+    def __init__(self, op, args, attrs=None, type_args=None, span=None, id=-1):
         if not type_args:
             type_args = []
-        self.__init_handle_by_constructor__(_ffi_api.Call, op, args, attrs, type_args, span)
+        self.__init_handle_by_constructor__(_ffi_api.Call, op, args, attrs, type_args, span, id)
 
 
 @tvm._ffi.register_func("relay.CallWithFields")
 def CallWithFields(
-    call, op=None, args=None, attrs=None, type_args=None, virtual_device=None, span=None
+    call, op=None, args=None, attrs=None, type_args=None, virtual_device=None, span=None, id=-1
 ):
     """
     Returns call with the given properties. A None property denotes 'no change'.
     Returns call if all properties are unchanged. Otherwise, returns a copy with the new
     fields.
     """
-    return _ffi_api.CallWithFields(call, op, args, attrs, type_args, virtual_device, span)
+    return _ffi_api.CallWithFields(call, op, args, attrs, type_args, virtual_device, span, id)
 
 
 @tvm._ffi.register_object("relay.Let")
@@ -429,20 +432,20 @@ class TupleGetItem(ExprWithOp):
         Span that points to original source code
     """
 
-    def __init__(self, tuple_value, index, span=None):
-        self.__init_handle_by_constructor__(_ffi_api.TupleGetItem, tuple_value, index, span)
+    def __init__(self, tuple_value, index, span=None, id=-1):
+        self.__init_handle_by_constructor__(_ffi_api.TupleGetItem, tuple_value, index, span, id)
 
 
 @tvm._ffi.register_func("relay.TupleGetItemWithFields")
 def TupleGetItemWithFields(
-    tuple_get_item, tuple_value=None, index=None, virtual_device=None, span=None
+    tuple_get_item, tuple_value=None, index=None, virtual_device=None, span=None, id=-1
 ):
     """
     Returns tuple_get_item with the given properties. A None property denotes 'no change'.
     Returns tuple_get_item if all properties are unchanged. Otherwise, returns a copy with the new
     fields.
     """
-    return _ffi_api.TupleGetItemWithFields(tuple_get_item, tuple_value, index, virtual_device, span)
+    return _ffi_api.TupleGetItemWithFields(tuple_get_item, tuple_value, index, virtual_device, span, id)
 
 
 @tvm._ffi.register_object("relay.RefCreate")
@@ -596,7 +599,7 @@ class TupleWrapper(object):
         raise TypeError("astype cannot be used on tuple")
 
 
-def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None, framework_dtype="N/A"):
+def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None, framework_dtype="N/A", id=-1):
     """Create a new tvm.relay.Var.
 
     This is a simple wrapper function that allows specify
@@ -642,10 +645,10 @@ def var(name_hint, type_annotation=None, shape=None, dtype="float32", span=None,
         type_annotation = _ty.TensorType(shape, dtype)
     elif isinstance(type_annotation, str):
         type_annotation = _ty.TensorType((), type_annotation)
-    return Var(name_hint, type_annotation, framework_dtype, span)
+    return Var(name_hint, type_annotation, framework_dtype, span, id)
 
 
-def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/A", span=None):
+def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/A", span=None, id=-1):
     """Create a constant value.
 
     Parameters
@@ -685,7 +688,7 @@ def const(value, dtype=None, is_param=False, name='_const_', framework_dtype="N/
     if not isinstance(value, _nd.NDArray):
         raise ValueError("value has to be scalar or NDArray")
 
-    return Constant(value, is_param, name, framework_dtype, span)
+    return Constant(value, is_param, name, framework_dtype, span, id)
 
 
 def bind(expr, binds):
