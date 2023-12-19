@@ -445,7 +445,12 @@ def node_hash(node):
     else:
         node_descriptor = (type(node), False)
 
-    return (tvm.ir.structural_hash(node), node_descriptor)
+    if isinstance(node, tvm.relay.expr.Var):
+        # Due to the addition of scope, params used in multiple places will have
+        # different structural hashes, so for now, just use name.
+        return (node.name_hint, node_descriptor)
+    else:
+        return (tvm.ir.structural_hash(node), node_descriptor)
 
 class NodeIndexer():
     def __init__(self):
@@ -783,6 +788,48 @@ class ActivationChecker(ExprVisitor):
         if var.name_hint in self.input_names:
             self.found_activation = True
         super().visit_var(var)
+
+class EnumerateNodes(ExprMutator):
+    def __init__(self):
+        super().__init__()
+        self.index = 0
+        self.var_to_index = {}
+
+    def unique_index(self):
+        self.index +=1
+        return self.index
+    
+    # def visit_function(self, fn):
+    #     breakpoint()
+    #     new_params = [self.visit(x) for x in fn.params]
+    #     new_body = self.visit(fn.body)
+    #     return tvm.relay.function.FunctionWithFields(fn, list(new_params), new_body)
+
+    def visit_call(self, call):
+        new_op =self.visit(call.op)
+        new_args = [self.visit(arg) for arg in call.args]
+        return tvm.relay.Call(new_op, new_args, call.attrs, call.type_args, call.span, id=self.unique_index())
+        
+    def visit_var(self, var):
+        if var.name_hint in self.var_to_index:
+            id = self.var_to_index[var.name_hint]
+        else:
+            id = self.unique_index()
+            self.var_to_index[var.name_hint] = id
+
+        return tvm.relay.Var(var.name_hint, type_annotation=var.type_annotation, framework_dtype=var.framework_dtype, span=var.span, id=id)
+
+    def visit_tuple_getitem(self, op):
+        new_tuple_value = self.visit(op.tuple_value)
+        return tvm.relay.TupleGetItem(new_tuple_value, op.index, id=self.unique_index())
+
+    def visit_tuple(self, tup):
+        new_fields = [self.visit(field) for field in tup.fields]
+
+        return tvm.relay.Tuple(new_fields, tup.span, id=self.unique_index())
+
+    def visit_constant(self, const):
+        return tvm.relay.Constant(const.data, const.is_param, const.name, const.framework_dtype, const.span, id=self.unique_index())
 
 class HashGraph(ExprVisitor):
     def __init__(self):

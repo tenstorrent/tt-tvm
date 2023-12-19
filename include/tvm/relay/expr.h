@@ -80,6 +80,8 @@ class ConstantNode : public ExprNode {
 
   std::string framework_dtype;
 
+  Integer id;
+
   /*! \return The corresponding tensor type of the data */
   TensorType tensor_type() const;
 
@@ -94,6 +96,7 @@ class ConstantNode : public ExprNode {
     v->Visit("is_param", &is_param);
     v->Visit("name", &name);
     v->Visit("framework_dtype", &framework_dtype);
+    v->Visit("id", &id);
   }
 
   bool SEqualReduce(const ConstantNode* other, SEqualReducer equal) const {
@@ -115,9 +118,10 @@ class Constant : public Expr {
    * \param is_param Whether or not this constant is a parameter of the model
    * \param name the name of the constant
    * \param framework_dtype the originaly dtype from the framework this constant was taken from
+   * \param id node id of the expression.
    */
-  TVM_DLL explicit Constant(runtime::NDArray data, Span span, std::string name = "_const_", std::string framework_dtype = "N/A");
-  TVM_DLL explicit Constant(runtime::NDArray data, bool is_param = false, std::string name = "_const_", std::string framework_dtype = "N/A", Span span = Span());
+  TVM_DLL explicit Constant(runtime::NDArray data, Span span, std::string name = "_const_", std::string framework_dtype = "N/A", Integer id = -1);
+  TVM_DLL explicit Constant(runtime::NDArray data, bool is_param = false, std::string name = "_const_", std::string framework_dtype = "N/A", Span span = Span(), Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Constant, RelayExpr, ConstantNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(ConstantNode);
@@ -129,7 +133,9 @@ class Constant : public Expr {
  * fields.
  */
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data = {},
-                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {}, Optional<Bool> opt_is_param = {}, Optional<String> opt_name = {}, Optional<String> opt_framework_dtype = {});
+                    Optional<VirtualDevice> opt_virtual_device = {}, Optional<Span> opt_span = {}, 
+                    Optional<Bool> opt_is_param = {}, Optional<String> opt_name = {}, 
+                    Optional<String> opt_framework_dtype = {}, Optional<Integer> opt_id = {});
 
 /*! \brief Tuple of multiple Exprs */
 class Tuple;
@@ -139,10 +145,13 @@ class TupleNode : public ExprNode {
   /*! \brief the fields of the tuple */
   tvm::Array<relay::Expr> fields;
 
+  Integer id;
+
   void VisitAttrs(tvm::AttrVisitor* v) {
     v->Visit("fields", &fields);
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
+    v->Visit("id", &id);
     v->Visit("_checked_type_", &checked_type_);
   }
 
@@ -174,7 +183,7 @@ class Tuple : public Expr {
    * \param fields The fields of a tuple.
    * \param span The source span of the expression.
    */
-  TVM_DLL explicit Tuple(tvm::Array<relay::Expr> fields, Span span = Span());
+  TVM_DLL explicit Tuple(tvm::Array<relay::Expr> fields, Span span = Span(), Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Tuple, RelayExpr, TupleNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(TupleNode);
@@ -187,7 +196,7 @@ class Tuple : public Expr {
  */
 Tuple WithFields(Tuple tuple, Optional<Array<Expr>> opt_fields = Optional<Array<Expr>>(),
                  Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
-                 Optional<Span> opt_span = Optional<Span>());
+                 Optional<Span> opt_span = Optional<Span>(), Optional<Integer> opt_id = Optional<Integer>());
 
 /*!
  * \brief Local variables used in the let expression.
@@ -220,6 +229,8 @@ class VarNode : public ExprNode {
 
   std::string framework_dtype;
 
+  Integer id;
+
   /*! \return The name hint of the variable */
   const String& name_hint() const { return vid->name_hint; }
 
@@ -230,6 +241,7 @@ class VarNode : public ExprNode {
     v->Visit("span", &span);
     v->Visit("_checked_type_", &checked_type_);
     v->Visit("framework_dtype", &framework_dtype);
+    v->Visit("id", &id);
   }
 
   bool SEqualReduce(const VarNode* other, SEqualReducer equal) const {
@@ -257,8 +269,8 @@ class Var : public Expr {
    * \param type_annotation The type annotation of a variable.
    * \param span The source span of the expression.
    */
-  TVM_DLL Var(String name_hint, Type type_annotation, Span span = Span())
-      : Var(Id(name_hint), type_annotation, "N/A", span) {}
+  TVM_DLL Var(String name_hint, Type type_annotation, Span span = Span(), Integer id = -1)
+      : Var(Id(name_hint), type_annotation, "N/A", span, id) {}
 
   /*!
    * \brief The constructor
@@ -267,8 +279,8 @@ class Var : public Expr {
    * \param span The source span of the expression.
    * \param framework_dtype The framework dtype of a variable.
    */
-  TVM_DLL Var(String name_hint, Type type_annotation, std::string framework_dtype, Span span = Span())
-      : Var(Id(name_hint), type_annotation, framework_dtype, span) {}
+  TVM_DLL Var(String name_hint, Type type_annotation, std::string framework_dtype, Span span = Span(), Integer id = -1)
+      : Var(Id(name_hint), type_annotation, framework_dtype, span, id) {}
 
    /*!
    * \brief The constructor
@@ -286,7 +298,7 @@ class Var : public Expr {
    * \param span The source span of the expression.
    * \param framework_dtype The framework dtype of a variable.
    */
-  TVM_DLL Var(Id vid, Type type_annotation, std::string framework_dtype, Span span = Span());
+  TVM_DLL Var(Id vid, Type type_annotation, std::string framework_dtype, Span span = Span(), Integer id = -1);
 
   /*!
    * \brief Return a globally fresh name. Helps with debugging to follow the same
@@ -295,7 +307,7 @@ class Var : public Expr {
    * TODO(mbs): Replace with name creation w.r.t. scopes once available as part of
    * name gen overhaul.
    */
-  static Var GenSym(Type type_annotation = {}, Span span = {}, std::string framework_dtype = "N/A");
+  static Var GenSym(Type type_annotation = {}, Span span = {}, std::string framework_dtype = "N/A", Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Var, RelayExpr, VarNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(VarNode);
@@ -310,7 +322,8 @@ Var WithFields(Var var, Optional<Id> opt_vid = Optional<Id>(),
                Optional<Type> opt_type_annotation = Optional<Type>(),
                Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
                Optional<Span> opt_span = Optional<Span>(),
-               Optional<String> opt_framework_dtype = {});
+               Optional<String> opt_framework_dtype = {},
+               Optional <Integer> opt_id = Optional<Integer>());
 
 /*!
  * \brief Call corresponds to operator invocation.
@@ -339,6 +352,8 @@ class CallNode : public ExprNode {
   /*! \brief The additional attributes */
   Attrs attrs;
 
+  /*! \brief Node id of the expression. */
+  Integer id;
   /*!
    * \brief The type arguments passed to polymorphic(template) function.
    *
@@ -366,6 +381,7 @@ class CallNode : public ExprNode {
     v->Visit("type_args", &type_args);
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
+    v->Visit("id", &id);
     v->Visit("_checked_type_", &checked_type_);
   }
 
@@ -407,9 +423,10 @@ class Call : public Expr {
    * \param attrs The attributes of the call node.
    * \param type_args The type arguments passed to a polymorphic function.
    * \param span The source span of the expression.
+   * \param id Node id of the expression.
    */
   TVM_DLL Call(Expr op, Array<Expr> args, Attrs attrs = Attrs(),
-               Array<Type> type_args = Array<Type>(), Span span = Span());
+               Array<Type> type_args = Array<Type>(), Span span = Span(), Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Call, RelayExpr, CallNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(CallNode);
@@ -425,7 +442,8 @@ Call WithFields(Call call, Optional<Expr> opt_op = Optional<Expr>(),
                 Optional<Attrs> opt_attrs = Optional<Attrs>(),
                 Optional<Array<Type>> opt_type_args = Optional<Array<Type>>(),
                 Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
-                Optional<Span> opt_span = Optional<Span>());
+                Optional<Span> opt_span = Optional<Span>(),
+                Optional<Integer> opt_id = Optional<Integer>());
 
 /*!
  * \brief Let binding that binds a local var and optionally a type annotation.
@@ -597,11 +615,14 @@ class TupleGetItemNode : public ExprNode {
   /*! \brief which value to get */
   int index;
 
+  Integer id;
+
   void VisitAttrs(tvm::AttrVisitor* v) {
     v->Visit("tuple_value", &tuple);
     v->Visit("index", &index);
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
+    v->Visit("id", &id);
     v->Visit("_checked_type_", &checked_type_);
   }
 
@@ -626,7 +647,7 @@ class TupleGetItem : public Expr {
    * \param index The index for extracting a value in the tuple.
    * \param span The source span of the expression.
    */
-  TVM_DLL TupleGetItem(Expr tuple, int index, Span span = Span());
+  TVM_DLL TupleGetItem(Expr tuple, int index, Span span = Span(), Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(TupleGetItem, RelayExpr, TupleGetItemNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(TupleGetItemNode);
@@ -640,7 +661,7 @@ class TupleGetItem : public Expr {
 TupleGetItem WithFields(TupleGetItem tuple_get_item, Optional<Expr> opt_tuple = Optional<Expr>(),
                         Optional<Integer> opt_index = Optional<Integer>(),
                         Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
-                        Optional<Span> opt_span = Optional<Span>());
+                        Optional<Span> opt_span = Optional<Span>(), Optional<Integer> opt_id = Optional<Integer>());
 
 /*! \brief Create a new Reference out of initial value. */
 class RefCreate;

@@ -221,7 +221,7 @@ class ExprMutator(ExprFunctor):
         new_args = [self.visit(arg) for arg in call.args]
         if new_fn == call.op and new_args == list(call.args):
             return call
-        return Call(new_fn, new_args, call.attrs, call.type_args, call.span)
+        return Call(new_fn, new_args, call.attrs, call.type_args, call.span, call.id)
 
     def visit_var(self, var):
         return var
@@ -245,7 +245,7 @@ class ExprMutator(ExprFunctor):
         new_fields = [self.visit(field) for field in tup.fields]
         if new_fields == list(tup.fields):
             return tup
-        return Tuple(new_fields, tup.span)
+        return Tuple(new_fields, tup.span, tup.id)
 
     def visit_tuple_getitem(self, op):
         new_tuple_value = self.visit(op.tuple_value)
