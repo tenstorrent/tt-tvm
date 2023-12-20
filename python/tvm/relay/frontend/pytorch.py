@@ -4837,6 +4837,8 @@ class PyTorchOpConverter:
             "aten::baddbmm": self.baddbmm,
             "aten::__or__": self.__or__,
             "aten::alias": self.alias,
+            "aten::linalg_vector_norm": self.linalg_vector_norm,
+            "aten::scaled_dot_product_attention": self.scaled_dot_product_attention,
         }
 
     def update_convert_map(self, custom_map):
