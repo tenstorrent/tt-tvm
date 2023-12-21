@@ -446,9 +446,7 @@ def node_hash(node):
         node_descriptor = (type(node), False)
 
     if isinstance(node, tvm.relay.expr.Var):
-        # Due to the addition of scope, params used in multiple places will have
-        # different structural hashes, so for now, just use name.
-        return (node.name_hint, node_descriptor)
+        return (node.id, node_descriptor)
     else:
         return (tvm.ir.structural_hash(node), node_descriptor)
 
