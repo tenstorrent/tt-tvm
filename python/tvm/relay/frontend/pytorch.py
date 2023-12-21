@@ -2704,6 +2704,7 @@ class PyTorchOpConverter:
         data = inputs[0]
         data_shape = self.infer_type(data).shape
 
+        indices = inputs[1]
         # Cover case when first row is selected as whole in Python style using ':' (e.g. x[:, mask])
         # while second is selected using a boolean mask
         if indices[0] == None:
@@ -4882,7 +4883,7 @@ class PyTorchOpConverter:
         ops = _get_operator_nodes(
             block.nodes(), self.source_map, self.op_type_dict, self.use_parser_friendly_name
         )
-        ret_names = _get_input_names(block.returnNode())
+        ret_names = _get_input_names(block.returnNode(), self.input_remap)
         return self.convert_operators(ops, outputs, ret_names)
 
     def convert_if(self, if_node, outputs):
@@ -4944,7 +4945,7 @@ class PyTorchOpConverter:
             init_loop_iter_val = _expr.const(0, dtype="int32")
 
         body_block = list(loop_node.blocks())[0]
-        block_input_names = _get_input_names(body_block)
+        block_input_names = _get_input_names(body_block, self.input_remap)
         num_block_inputs = len(block_input_names)
         name_val_pairs = list(zip(block_input_names, [init_loop_iter_val] + init_vals))
         outputs.update(name_val_pairs)
@@ -4984,7 +4985,7 @@ class PyTorchOpConverter:
         # loop body.
         free_vars = [
             var
-            for var in _get_free_vars_from_block(body_block)
+            for var in _get_free_vars_from_block(body_block, self.input_remap)
             if var in outputs
             and not isinstance(outputs[var], (_expr.Constant, int, float, str))
             and outputs[var]
@@ -5038,16 +5039,17 @@ class PyTorchOpConverter:
         # The first element is a loop counter or boolean condition, ignore it
         return [_expr.TupleGetItem(loop_val, i + 1) for i in range(num_loop_var)]
 
-    def convert_operators(self, operators, outputs, ret_names):
+    def convert_operators(self, operators, outputs, ret_names, input_remap={}):
         """Convert each Torch IR operators to Relay equivalent"""
         # an op node might not belong to any of scope in trace info natively
         # use a cunter to prevent from messing up its scope in span
         empty_counter = 0
+        self.input_remap = input_remap
         for node_name, op_node in operators:
 
             logger.trace(f"Converting: {op_node.kind()} : {node_name}")
             operator = op_node.kind()
-            inputs = _get_op_inputs(op_node, outputs)
+            inputs = _get_op_inputs(op_node, outputs, self.input_remap)
             # we need to record what current operator is to provide correct source name
             # for operators needed to be taken care with (e.g. nms / arange ...)
             self.current_op.append(op_node)
@@ -5124,12 +5126,12 @@ class PyTorchOpConverter:
                 else:
                     relay_op = self.convert_map[operator]
 
-                self._set_parameter_source_name(op_node, outputs)
+                self._set_parameter_source_name(op_node, outputs, self.input_remap)
                 relay_out = relay_op(
                     # since the elements in "outputs" may change due to span-filling process
                     # we have to call "_get_op_inputs" again rather than use "inputs" directly
-                    _get_op_inputs(op_node, outputs),
-                    _get_input_types(op_node, outputs, default_dtype=self.default_dtype),
+                    _get_op_inputs(op_node, outputs, self.input_remap),
+                    _get_input_types(op_node, outputs, self.input_remap, default_dtype=self.default_dtype),
                 )
                 span_str, empty_counter = self._get_torch_span(op_node, empty_counter)
                 relay_out = set_span(relay_out, span_str)
@@ -5157,9 +5159,9 @@ class PyTorchOpConverter:
             if ret_name != "aten::adaptive_max_pool1d_0_1"
         ]
 
-    def _set_parameter_source_name(self, op_node, outputs):
+    def _set_parameter_source_name(self, op_node, outputs, input_remap):
         """A helper function to rewrite source_name of parameter."""
-        for name in _get_input_names(op_node):
+        for name in _get_input_names(op_node, input_remap):
             expr = outputs[name]
             if isinstance(expr, (_expr.Var, _expr.Constant)):
                 name_sep = "_" if self.use_parser_friendly_name else "."
@@ -5358,19 +5360,19 @@ def _run_jit_passes(graph, enable_lower_all_tuples=True):
         torch._C._jit_pass_lower_all_tuples(graph)
 
 
-def _get_tensor_and_var(torch_tensor, name, do_convert_params):
+def _get_tensor_and_var(torch_tensor, name, do_convert_params, id):
     if do_convert_params:
         orig_dtype = str(torch_tensor.dtype).replace("torch.", "")
         if orig_dtype == 'bfloat16':
             torch_tensor = torch_tensor.detach().float()
         tensor = tvm.nd.array(torch_tensor.cpu().numpy())
-        var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype, framework_dtype=orig_dtype)
+        var = _expr.var(name, shape=tensor.shape, dtype=tensor.dtype, framework_dtype=orig_dtype, id=id)
     else:
         orig_dtype = str(torch_tensor.dtype).replace("torch.", "")
         shape = tuple(torch_tensor.shape)
         dtype = _convert_data_type(str(torch_tensor.dtype))
         tensor = None
-        var = _expr.var(name, shape=shape, dtype=dtype, framework_dtype=orig_dtype)
+        var = _expr.var(name, shape=shape, dtype=dtype, framework_dtype=orig_dtype, id=id)
     return tensor, var
 
 
@@ -5384,12 +5386,14 @@ def _get_output_names(node):
     return [output.debugName() for output in node.outputs()]
 
 
-def _get_input_names(node_or_graph):
-    return [inp.debugName() for inp in node_or_graph.inputs()]
+def _get_input_names(node_or_graph, input_remap):
+    input_names = [inp.debugName() for inp in node_or_graph.inputs()]
+    input_names = [input_remap[name] if name in input_remap else name for name in input_names]
+    return input_names
 
 
-def _get_op_inputs(op_node, outputs):
-    return [outputs[name] for name in _get_input_names(op_node)]
+def _get_op_inputs(op_node, outputs, input_remap={}):
+    return [outputs[name] for name in _get_input_names(op_node, input_remap)]
 
 
 def _get_node_type(node):
@@ -5435,13 +5439,14 @@ def _get_pytorch_value_type(typ, default_dtype="float32"):
         return "UnsupportedType"
 
 
-def _get_input_types(op_node, outputs, default_dtype="float32"):
+def _get_input_types(op_node, outputs, input_remap, default_dtype="float32"):
     """Returns a TVM dtype for each input nodes derived from the torch type"""
     in_types = []
     for inp in op_node.inputs():
         if inp.node().kind() == "prim::GetAttr":
             # GetAttr nodes always return None when we call scalarType() on it
             name = inp.debugName()
+            name = input_remap[name] if name in input_remap else name
 
             assert name in outputs, f"\'{name}\' is not a key in outputs"
             if isinstance(outputs[name], _expr.Var):
@@ -5721,13 +5726,13 @@ def _unpack_tuple(tup):
     assert False
 
 
-def _get_free_vars_from_block(block):
-    block_inp_names = _get_input_names(block)
+def _get_free_vars_from_block(block, input_remap):
+    block_inp_names = _get_input_names(block, input_remap)
     bound_names = block_inp_names
     free_vars = set()
 
     for node in block.nodes():
-        inp_names = _get_input_names(node)
+        inp_names = _get_input_names(node, input_remap)
         list_diff = [name for name in inp_names if name not in bound_names]
         free_vars.update(list_diff)
         bound_names += _get_output_names(node)
@@ -5787,6 +5792,10 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
     vars_by_name = {}
     seen = set()
     attr_name_sep = "_" if use_parser_friendly_name else "."
+    param_to_id = {}
+    next_param_id = 1
+    input_remap = {}
+    outputs_by_var_name = {}
     for node in getattr_nodes:
         if _get_output_name(node) in seen:
             continue
@@ -5798,26 +5807,37 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
             full_attr_node_name = _get_output_name(getattrs[-1])
             # set variable name by concatenating first consumer's name with full attribute
             # e.g. "aten::batch_norm_5.running_mean"
-            var_name = attr_name_sep.join(
-                [source_map[_get_users(getattrs[-1])[0]], full_attr.split(attr_name_sep)[-1]]
-            )
 
+            # We don't want to do this, we want to use the param name, since we don't want
+            # duplicated vars for a param, so we use "full_attr" which is the framework name
+            # var_name = attr_name_sep.join(
+            #     [source_map[_get_users(getattrs[-1])[0]], full_attr.split(attr_name_sep)[-1]]
+            # )
+            var_name = full_attr
             if full_attr.endswith("_packed_params"):  # for quantized models
                 packed_param_map[full_attr_node_name] = full_attr
             elif full_attr in state_dict:
                 if var_name in vars_by_name:
+                    breakpoint()
                     var = vars_by_name[var_name]
+                    # we need to remap inputs that pointed to the old 
+                    input_remap[full_attr_node_name] = outputs_by_var_name[var_name]
                 else:
                     torch_tensor = state_dict[full_attr]
-                    tensor, var = _get_tensor_and_var(torch_tensor, full_attr, do_convert_params)
-                    # tensor, var = _get_tensor_and_var(torch_tensor, var_name, do_convert_params)  # TODO: Do we need this for scope names?
+                    if torch_tensor in param_to_id:
+                        id = param_to_id[torch_tensor]
+                    else:
+                        id = next_param_id
+                        param_to_id[torch_tensor] = id
+                        next_param_id += 1
+                    tensor, var = _get_tensor_and_var(torch_tensor, var_name, do_convert_params, id)
                     param_tensors[var_name] = tensor
                     # for quantized parameters to be correctly located
                     param_debug_name_map[full_attr_node_name] = var_name
                     vars_by_name[var_name] = var
-                params[full_attr_node_name] = var
-
-    return params, param_tensors, packed_param_map, param_debug_name_map
+                    params[full_attr_node_name] = var
+                    outputs_by_var_name[var_name] = full_attr_node_name
+    return params, param_tensors, packed_param_map, param_debug_name_map, input_remap
 
 
 def get_all_op_names(graph):
@@ -5967,7 +5987,7 @@ def from_pytorch(
     # rename _C.Graph here for constructing meaningful source name of graph nodes
     # by doing so, we could Use source_map as the reference to rename model parameters
     source_map = _debug_rename(graph, use_parser_friendly_name)
-    param_vars, tensors, packed_param_map, param_debug_name_map = convert_params(
+    param_vars, tensors, packed_param_map, param_debug_name_map, input_remap = convert_params(
         graph, params, source_map, use_parser_friendly_name, do_convert_params
     )
 
@@ -5998,8 +6018,8 @@ def from_pytorch(
         graph.nodes(), converter.source_map, converter.op_type_dict, use_parser_friendly_name
     )
     outplace_inplace_ops(operator_nodes)
-    ret_name = _get_input_names(graph.return_node())
-    outputs = converter.convert_operators(operator_nodes, outputs, ret_name)
+    ret_name = _get_input_names(graph.return_node(), input_remap)
+    outputs = converter.convert_operators(operator_nodes, outputs, ret_name, input_remap)
 
     # ListConstruct kept original python list. Convert to tuple.
     outputs = [_expr.Tuple(output) if isinstance(output, list) else output for output in outputs]
