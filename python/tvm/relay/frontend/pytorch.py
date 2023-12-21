@@ -5818,7 +5818,6 @@ def convert_params(graph, state_dict, source_map, use_parser_friendly_name=False
                 packed_param_map[full_attr_node_name] = full_attr
             elif full_attr in state_dict:
                 if var_name in vars_by_name:
-                    breakpoint()
                     var = vars_by_name[var_name]
                     # we need to remap inputs that pointed to the old 
                     input_remap[full_attr_node_name] = outputs_by_var_name[var_name]
