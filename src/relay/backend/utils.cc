@@ -343,9 +343,10 @@ relay::Function BindParamsByName(relay::Function func,
       continue;
     }
     auto arg = name_dict.at(kv.first);
-    if (repeat_var.count(arg)) {
-      LOG(FATAL) << "Multiple args in the function have name " << kv.first;
-    }
+    // we want to use framework arg names, so we need to allow repeating args
+    // if (repeat_var.count(arg)) {
+    //   LOG(FATAL) << "Multiple args in the function have name " << kv.first;
+    // }
     bind_dict[arg] = Constant(kv.second);
   }
   Expr bound_expr = relay::Bind(func, bind_dict);
