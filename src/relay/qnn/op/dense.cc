@@ -245,8 +245,7 @@ RELAY_REGISTER_OP("qnn.dense")
     .set_attr<FInferCorrectLayout>("FInferCorrectLayout", QnnDenseInferCorrectLayout)
     .set_attr<TOpPattern>("TOpPattern", kOpaque)
     .set_attr<TNonComputational>("TNonComputational", true)
-    .set_attr<FTVMLegalize>("FTVMQnnCanonicalize", QnnDenseCanonicalize)
-    .set_attr<TOpPattern>("TOpPattern", kOutEWiseFusable);
+    .set_attr<FTVMLegalize>("FTVMQnnCanonicalize", QnnDenseCanonicalize);
 
 TVM_REGISTER_GLOBAL("relay.qnn.op._make.dense").set_body_typed(MakeQuantizedDense);
 
