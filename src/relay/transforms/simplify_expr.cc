@@ -1116,9 +1116,9 @@ Expr SimplifyExpr(const Expr& expr, const IRModule& mod) {
   composer.AddRewrite<ConcretizeReshapeLikeRewrite>();
   composer.AddRewrite<ConcretizeCollapseSumLikeRewrite>();
   composer.AddRewrite<ConcretizeBroadcastToLikeRewrite>();
-  composer.AddRewrite<ConcretizeCastLikeRewrite>();
-  composer.AddRewrite<SimplifyAdd>();
-  composer.AddRewrite<SimplifyRSqrt>();
+  // composer.AddRewrite<ConcretizeCastLikeRewrite>();
+  // composer.AddRewrite<SimplifyAdd>();
+  // composer.AddRewrite<SimplifyRSqrt>();
   composer.AddRewrite<EliminateIdentityRewrite>();
   composer.AddRewrite<SimplifyReshape>();
   composer.AddRewrite<SimplifyTranspose>();
@@ -1126,14 +1126,14 @@ Expr SimplifyExpr(const Expr& expr, const IRModule& mod) {
   composer.AddRewrite<SimplifySameCast>();
   composer.AddRewrite<SimplifyConsecutiveCast>();
   composer.AddRewrite<FullElementwise>();
-  composer.AddRewrite<SwitchAddMultiply>();
-  composer.AddRewrite<SimplifyAdjacentMultiplyOrAdd>();
-  composer.AddRewrite<SimplifyDQArgMax>();
-  composer.AddRewrite<SimplifyDQArgMin>();
-  composer.AddRewrite<SimplifyDQArgSort>();
-  composer.AddRewrite<SimplifyClipAndConsecutiveCast>();
-  composer.AddRewrite<SimplifyClip>();
-  composer.AddRewrite<SimplifyBinomial>();
+  // composer.AddRewrite<SwitchAddMultiply>();
+  // composer.AddRewrite<SimplifyAdjacentMultiplyOrAdd>();
+  // composer.AddRewrite<SimplifyDQArgMax>();
+  // composer.AddRewrite<SimplifyDQArgMin>();
+  // composer.AddRewrite<SimplifyDQArgSort>();
+  // composer.AddRewrite<SimplifyClipAndConsecutiveCast>();
+  // composer.AddRewrite<SimplifyClip>();
+  // composer.AddRewrite<SimplifyBinomial>();
   return RewritePatterns(composer.MakeCallbacks(), expr, mod);
 }
 
