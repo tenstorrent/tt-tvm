@@ -3215,7 +3215,7 @@ class PyTorchOpConverter:
         ), f"scatter_add takes 4 inputs (data, dim, index, src), but {len(inputs)} given"
         data = inputs[0]
         axis = inputs[1]
-        index = inputs[2]
+        index = _op.cast(inputs[2], "int64")
         src = inputs[3]
 
         data_shape = self.infer_shape(inputs[0])
@@ -3239,11 +3239,7 @@ class PyTorchOpConverter:
                     index_shape[i] <= data_shape[i]
                 ), "Index dim size should be less than data one"
 
-        # PyTorch scatter_add requires dtype to be int64
-        if index.data.dtype == 'int32':
-             index = _op.cast(index, "int64")
-        
-        return _op.scatter_add(data, index, src, axis=axis)
+        return _op.scatter_elements(data, index, src, axis=axis, reduction="add")
 
     def scatter_reduce(self, inputs, input_types):
         assert len(inputs) == 5 or len(inputs) == 6, (
@@ -4855,6 +4851,7 @@ class PyTorchOpConverter:
             "aten::alias": self.alias,
             "aten::linalg_vector_norm": self.linalg_vector_norm,
             "aten::scaled_dot_product_attention": self.scaled_dot_product_attention,
+            "aten::lift_fresh": self.identity,
         }
 
     def update_convert_map(self, custom_map):
