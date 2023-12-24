@@ -44,7 +44,7 @@ def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
     ResetOpAttributes().visit(mod["main"])
     for op in compiler_cfg.cpu_fallback_ops:
         _register_external_op_helper_pytorch(op, compiler_cfg)
-    # _register_external_op_helper_pytorch("scatter_add", compiler_cfg)
+    _register_external_op_helper_pytorch("scatter_elements", compiler_cfg)
 
 def nn_layernorm_to_buda_layernorm():
     act = wildcard()
@@ -438,6 +438,8 @@ def node_hash(node):
     if hasattr(node, "op"):
         if isinstance(node.op, tvm.relay.function.Function):
             node_descriptor = (node.op.attrs["Composite"], False)
+        elif hasattr(node.op, "name"):
+            node_descriptor = (node.op.name, False)
         else:
             node_descriptor = (node.op, False)
     elif isinstance(node, tvm.relay.expr.Var):
@@ -445,7 +447,7 @@ def node_hash(node):
     else:
         node_descriptor = (type(node), False)
 
-    if isinstance(node, tvm.relay.expr.Var):
+    if isinstance(node, tvm.relay.expr.Var) and node.id != -1:
         return (node.id, node_descriptor)
     else:
         return (tvm.ir.structural_hash(node), node_descriptor)

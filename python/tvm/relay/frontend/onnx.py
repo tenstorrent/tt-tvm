@@ -5509,6 +5509,9 @@ class QLinearMatMul(OnnxOpConverter):
         y_scale_type = infer_type(y_scale).checked_type
         y_zp_type = infer_type(y_zp).checked_type  # 'T3' in ONNX doc for this op
 
+        a_shape = infer_shape(a)
+        b_shape = infer_shape(b)
+
         # Verify type assumptions, based on the ONNX doc for this op...
         assert a_type.dtype in ["int8", "uint8"]
         assert a_scale_type.dtype == "float32"
