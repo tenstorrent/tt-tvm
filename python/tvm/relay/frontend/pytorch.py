@@ -3122,7 +3122,7 @@ class PyTorchOpConverter:
             # Reduce data to 1D vector if possible
             in_tensor = _op.reshape(in_tensor, newshape=(-1,))
             
-            res = _op.scatter(in_tensor, indices, values, 0)
+            res = _op.scatter_elements(in_tensor, indices, values, 0, "add")
 
             return res
 

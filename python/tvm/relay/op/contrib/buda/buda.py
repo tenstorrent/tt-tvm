@@ -447,6 +447,9 @@ def node_hash(node):
     else:
         node_descriptor = (type(node), False)
 
+    if hasattr(node, "op") and isinstance(node.op, tvm.relay.function.Function) and node.op.id != -1:
+            return (node.op.id, node_descriptor)
+
     if isinstance(node, tvm.relay.expr.Var) and node.id != -1:
         return (node.id, node_descriptor)
     else:
@@ -573,7 +576,7 @@ class DetermineTarget(ExprMutator):
                     self.graph_changed = True
                     new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
                     new_fn = call.op.with_attr(new_attrs)
-                    logger.debug(f"Changing {call.op.attrs['PartitionedFromPattern']}'s attr from {call.op.attrs['Composite']} to {new_fn.attrs['Composite']}")
+                    logger.info(f"Changing {call.op.attrs['PartitionedFromPattern']}'s attr from {call.op.attrs['Composite']} to {new_fn.attrs['Composite']}")
                     return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
         elif node_hash(call) in self.nodes_to_cpu_eval and not isinstance(call.op, tvm.relay.function.Function) :
             try:
@@ -799,11 +802,10 @@ class EnumerateNodes(ExprMutator):
         self.index +=1
         return self.index
     
-    # def visit_function(self, fn):
-    #     breakpoint()
-    #     new_params = [self.visit(x) for x in fn.params]
-    #     new_body = self.visit(fn.body)
-    #     return tvm.relay.function.FunctionWithFields(fn, list(new_params), new_body)
+    def visit_function(self, fn):
+        new_params = [self.visit(x) for x in fn.params]
+        new_body = self.visit(fn.body)
+        return tvm.relay.function.FunctionWithFields(fn, list(new_params), new_body, fn.ret_type, fn.type_params, fn.attrs, id=self.unique_index())
 
     def visit_call(self, call):
         new_op =self.visit(call.op)
@@ -1285,6 +1287,7 @@ def fallback_on_cpu(mod, compiler_cfg, input_names):
         start = time.time()
         terget_determiner.modify_graph = False
         mod["main"] = terget_determiner.visit(mod["main"])
+        terget_determiner.memo_map = {}
         terget_determiner.modify_graph = True
         mod["main"] = terget_determiner.visit(mod["main"])
         logger.trace(f"Done, took: {(time.time() - start):.2f} s")
@@ -2022,6 +2025,14 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
         mod = tvm.transform.Sequential([transform.FoldConstant()])(mod)
         logger.trace("After FoldConstant")
+        logger.trace(mod.functions)
+
+        mod["main"] = EnumerateNodes().visit(mod["main"])
+        logger.trace("After EnumerateNodes")
+        logger.trace(mod.functions)
+        
+        mod = tvm.transform.Sequential([transform.InferType()])(mod)
+        logger.trace("After InferType")
         logger.trace(mod.functions)
 
         if compiler_cfg.enable_tvm_cpu_fallback:

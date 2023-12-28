@@ -31,7 +31,7 @@ namespace tvm {
 namespace relay {
 
 Function::Function(tvm::Array<Var> params, Expr body, Type ret_type,
-                   tvm::Array<TypeVar> type_params, DictAttrs attrs, Span span) {
+                   tvm::Array<TypeVar> type_params, DictAttrs attrs, Span span, Integer id) {
   CHECK(attrs.defined());
 
   ObjectPtr<FunctionNode> n = make_object<FunctionNode>();
@@ -44,13 +44,14 @@ Function::Function(tvm::Array<Var> params, Expr body, Type ret_type,
   n->attrs = std::move(attrs);
   n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
+  n->id = std::move(id);
   data_ = std::move(n);
 }
 
 Function WithFields(Function function, Optional<Array<Var>> opt_params, Optional<Expr> opt_body,
                     Optional<Type> opt_ret_type, Optional<Array<TypeVar>> opt_ty_params,
                     Optional<DictAttrs> opt_attrs, Optional<VirtualDevice> opt_virtual_device,
-                    Optional<Span> opt_span) {
+                    Optional<Span> opt_span, Optional<Integer> opt_id) {
   Array<Var> params = opt_params.value_or(function->params);
   Expr body = opt_body.value_or(function->body);
   Type ret_type = opt_ret_type.value_or(function->ret_type);
@@ -58,6 +59,7 @@ Function WithFields(Function function, Optional<Array<Var>> opt_params, Optional
   DictAttrs attrs = opt_attrs.value_or(function->attrs);
   VirtualDevice virtual_device = opt_virtual_device.value_or(function->virtual_device());
   Span span = opt_span.value_or(function->span);
+  Integer id = opt_id.value_or(function->id);
 
   bool unchanged = body.same_as(function->body) && ret_type.same_as(function->ret_type) &&
                    attrs.same_as(function->attrs) &&
@@ -99,6 +101,7 @@ Function WithFields(Function function, Optional<Array<Var>> opt_params, Optional
     cow_function_node->attrs = attrs;
     cow_function_node->virtual_device_ = virtual_device;
     cow_function_node->span = span;
+    cow_function_node->id = id;
   }
   return function;
 }
@@ -276,16 +279,16 @@ TVM_REGISTER_NODE_TYPE(FunctionNode);
 
 TVM_REGISTER_GLOBAL("relay.ir.Function")
     .set_body_typed([](tvm::Array<Var> params, Expr body, Type ret_type,
-                       tvm::Array<TypeVar> ty_params, tvm::DictAttrs attrs, Span span) {
-      return Function(params, body, ret_type, ty_params, attrs, span);
+                       tvm::Array<TypeVar> ty_params, tvm::DictAttrs attrs, Span span, Integer id) {
+      return Function(params, body, ret_type, ty_params, attrs, span, id);
     });
 TVM_REGISTER_GLOBAL("relay.ir.FunctionWithFields")
     .set_body_typed([](Function function, Optional<Array<Var>> opt_params, Optional<Expr> opt_body,
                        Optional<Type> opt_ret_type, Optional<Array<TypeVar>> opt_ty_params,
                        Optional<DictAttrs> opt_attrs, Optional<VirtualDevice> opt_virtual_device,
-                       Optional<Span> opt_span) {
+                       Optional<Span> opt_span, Optional<Integer> opt_id) {
       return WithFields(function, opt_params, opt_body, opt_ret_type, opt_ty_params, opt_attrs,
-                        opt_virtual_device, opt_span);
+                        opt_virtual_device, opt_span, opt_id);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)

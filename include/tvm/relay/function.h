@@ -58,6 +58,8 @@ class FunctionNode : public BaseFuncNode {
    */
   tvm::Array<TypeVar> type_params;
 
+  Integer id;
+
   void VisitAttrs(tvm::AttrVisitor* v) {
     v->Visit("params", &params);
     v->Visit("body", &body);
@@ -66,6 +68,7 @@ class FunctionNode : public BaseFuncNode {
     v->Visit("attrs", &attrs);
     v->Visit("virtual_device_", &virtual_device_);
     v->Visit("span", &span);
+    v->Visit("id", &id);
     v->Visit("_checked_type_", &checked_type_);
   }
 
@@ -114,7 +117,7 @@ class Function : public BaseFunc {
    * \param span The span of the function.
    */
   TVM_DLL Function(tvm::Array<Var> params, Expr body, Type ret_type, tvm::Array<TypeVar> ty_params,
-                   tvm::DictAttrs attrs = DictAttrs(), Span span = Span());
+                   tvm::DictAttrs attrs = DictAttrs(), Span span = Span(), Integer id = -1);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Function, BaseFunc, FunctionNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(FunctionNode);
@@ -131,7 +134,8 @@ Function WithFields(Function function, Optional<Array<Var>> opt_params = Optiona
                     Optional<Array<TypeVar>> opt_ty_params = Optional<Array<TypeVar>>(),
                     Optional<DictAttrs> opt_attrs = Optional<DictAttrs>(),
                     Optional<VirtualDevice> opt_virtual_device = Optional<VirtualDevice>(),
-                    Optional<Span> opt_span = Optional<Span>());
+                    Optional<Span> opt_span = Optional<Span>(),
+                    Optional<Integer> opt_id = Optional<Integer>());
 
 /*
  * \brief Returns the Relay FunctionNode represented by base_func if it should be optimized,
