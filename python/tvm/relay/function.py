@@ -50,12 +50,12 @@ class Function(BaseFunc):
         Span that points to original source code.
     """
 
-    def __init__(self, params, body, ret_type=None, type_params=None, attrs=None, span=None):
+    def __init__(self, params, body, ret_type=None, type_params=None, attrs=None, span=None, id=-1):
         if type_params is None:
             type_params = convert([])
 
         self.__init_handle_by_constructor__(
-            _ffi_api.Function, params, body, ret_type, type_params, attrs, span
+            _ffi_api.Function, params, body, ret_type, type_params, attrs, span, id
         )
 
     def __call__(self, *args):
@@ -107,6 +107,7 @@ def FunctionWithFields(
     attrs=None,
     virtual_device=None,
     span=None,
+    id=-1
 ):
     """
     Returns function with the given properties. A None property denotes 'no change'.
@@ -114,5 +115,5 @@ def FunctionWithFields(
     fields.
     """
     return _ffi_api.FunctionWithFields(
-        function, params, body, ret_type, ty_params, attrs, virtual_device, span
+        function, params, body, ret_type, ty_params, attrs, virtual_device, span, id
     )
