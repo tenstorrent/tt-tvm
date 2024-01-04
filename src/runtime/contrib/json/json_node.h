@@ -162,6 +162,9 @@ class JSONGraphNode {
       } else if (key == "framework_dtype"){
         reader->Read(&value);
         attrs_[key] = value.c_str();
+      } else if (key == "span") {
+        reader->Read(&value);
+        attrs_[key] = value.c_str();
       } else {
         reader->BeginArray();
         ICHECK(reader->NextArrayItem());

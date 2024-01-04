@@ -207,6 +207,7 @@ class Fill : ExprFunctor<Expr(const Expr&, const Var&)>, private transform::Lexi
     if (include_set_ == nullptr && function_nesting() > 0) {
       ICHECK(IsAtomic(ret)) << "expression:" << std::endl << PrettyPrint(ret);
     }
+    ret->span = e->span;
     return ret;
   }
 

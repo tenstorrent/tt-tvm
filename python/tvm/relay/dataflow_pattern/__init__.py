@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional
 
 import tvm._ffi
 from tvm.relay.expr import RelayExpr as Expr
+from tvm.relay.expr_functor import ExprVisitor
 
 from ... import _ffi as tvm_ffi
 from ... import ir as _ir

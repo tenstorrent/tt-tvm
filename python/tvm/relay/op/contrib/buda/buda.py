@@ -288,7 +288,7 @@ class AddNopsToPassthrough(ExprMutator):
     def visit_call(self, call):
         new_op = self.visit(call.op)
         new_args = [self.visit(arg) for arg in call.args]
-        return tvm.relay.Call(new_op, new_args, call.attrs)
+        return tvm.relay.Call(new_op, new_args, call.attrs, span=call.span)
 
     def visit_global_var(self, gvar):
         return gvar
@@ -304,7 +304,7 @@ class AddNopsToPassthrough(ExprMutator):
 
         self.output_vars.extend([output for output in outputs if isinstance(output, tvm.relay.Var)])
         new_body = self.visit(fn.body)
-        return tvm.relay.Function(list(fn.params), new_body, fn.ret_type, fn.type_params, fn.attrs)
+        return tvm.relay.Function(list(fn.params), new_body, fn.ret_type, fn.type_params, fn.attrs, span=fn.span)
 
 def _always_true(expr):
     return True
@@ -823,7 +823,7 @@ class EnumerateNodes(ExprMutator):
 
     def visit_tuple_getitem(self, op):
         new_tuple_value = self.visit(op.tuple_value)
-        return tvm.relay.TupleGetItem(new_tuple_value, op.index, id=self.unique_index())
+        return tvm.relay.TupleGetItem(new_tuple_value, op.index, id=self.unique_index(), span=op.span)
 
     def visit_tuple(self, tup):
         new_fields = [self.visit(field) for field in tup.fields]
@@ -1160,13 +1160,13 @@ class FlattenInputs(ExprMutator):
             tup_index = self.tuple_indices[self.input_tuples.index(op.tuple_value)]
             return self.visit(self.old_param_map[tup_index][op.index])
         
-        new_op = tvm.relay.TupleGetItem(self.visit(op.tuple_value), op.index)
+        new_op = tvm.relay.TupleGetItem(self.visit(op.tuple_value), op.index, span=op.span)
         return new_op
 
     def visit_call(self, call):
         new_op = self.visit(call.op)
         new_args = [self.visit(arg) for arg in call.args]
-        return tvm.relay.Call(new_op, new_args, call.attrs)
+        return tvm.relay.Call(new_op, new_args, call.attrs, span=call.span)
 
     def visit_function(self, fn):
         new_body = fn.body
@@ -1199,7 +1199,7 @@ class FlattenInputs(ExprMutator):
                 
 
         new_body = self.visit(fn.body)
-        return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs)
+        return tvm.relay.Function(self.new_params, new_body, fn.ret_type, fn.type_params, fn.attrs, span=fn.span)
     
 class FlattenOutputs(ExprMutator):
 
@@ -1227,7 +1227,7 @@ class FlattenOutputs(ExprMutator):
                 new_body = tvm.relay.expr.Tuple(new_fields)
                 tup = tuple_in_tuple(new_body)
         
-        return tvm.relay.Function(fn.params, new_body, fn.ret_type, fn.type_params, fn.attrs)
+        return tvm.relay.Function(fn.params, new_body, fn.ret_type, fn.type_params, fn.attrs, span=fn.span)
 
 def flatten_IO(mod, flattened_name_map):
 
@@ -1484,7 +1484,7 @@ def merge_functions(mod, funcs_to_merge, new_name):
                         if isinstance(arg.tuple_value, tvm.relay.expr.Call) and isinstance(arg.tuple_value.op, tvm.relay.expr.GlobalVar):
                             callnodes = extract_function_callnodes(placed, [arg.tuple_value.op])
                             if len(callnodes):
-                                arg = tvm.relay.TupleGetItem(callnodes[0], arg.index)
+                                arg = tvm.relay.TupleGetItem(callnodes[0], arg.index, span=callnodes[0].span)
                     new_args.append(arg)
                     
     placed = FunctionArgPlacer(gvar, new_args).visit(placed)
@@ -1581,7 +1581,7 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
         tmp = new_return_type[old_idx]
         new_return_type[old_idx] = new_return_type[new_idx]
         new_return_type[new_idx] = tmp
-        new_fn = tvm.relay.Function(function.params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=function.attrs)
+        new_fn = tvm.relay.Function(function.params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=function.attrs, span=func.span)
         mod[func] = new_fn
 
         # swap tuplegetitem indices in main module
@@ -1598,7 +1598,7 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
         new_params[old_idx] = new_params[new_idx]
         new_params[new_idx] = tmp
         
-        new_fn = tvm.relay.Function(new_params, function.body, ret_type=function.ret_type, attrs=function.attrs)
+        new_fn = tvm.relay.Function(new_params, function.body, ret_type=function.ret_type, attrs=function.attrs, span=func.span)
         mod[func] = new_fn
         
         # switch args in main module
@@ -1661,7 +1661,7 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
         tt_function = mod[tt_func]
         new_params = list(tt_function.params)
         new_params = permute_list(new_params[:num_args], io_map) + new_params[num_args:] # Everything after index: num_args are actual parameters, not activations
-        new_tt_function = tvm.relay.Function(new_params, tt_function.body, ret_type=tt_function.ret_type, attrs=tt_function.attrs)
+        new_tt_function = tvm.relay.Function(new_params, tt_function.body, ret_type=tt_function.ret_type, attrs=tt_function.attrs, span=tt_function.span)
         mod[tt_func] = new_tt_function
         
         # Permute the args of the tt function call
@@ -1713,7 +1713,7 @@ def align_func_io(mod, cpu_pre_func, tt_func, cpu_post_func):
         cpu_post_function = mod[cpu_post_func]
         new_params = list(cpu_post_function.params)
         new_params = permute_list(new_params[:num_args], io_map) + new_params[num_args:] # Everything after index: num_args are actual parameters, not activations
-        new_cpu_post_function = tvm.relay.Function(new_params, cpu_post_function.body, ret_type=cpu_post_function.ret_type, attrs=cpu_post_function.attrs)
+        new_cpu_post_function = tvm.relay.Function(new_params, cpu_post_function.body, ret_type=cpu_post_function.ret_type, attrs=cpu_post_function.attrs, span=cpu_post_function.span)
         mod[cpu_post_func] = new_cpu_post_function
         
         # Permute the args of the tt function call
@@ -1774,7 +1774,7 @@ def add_passthrough_variable(mod, func, output_node, var_name):
     else:
         new_return_type.extend(mod[func].ret_type.fields)
     new_return_type.append(output_node.checked_type)
-    new_fn = tvm.relay.Function(new_params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=mod[func].attrs)
+    new_fn = tvm.relay.Function(new_params, new_body, ret_type=tvm.relay.TupleType(new_return_type), attrs=mod[func].attrs, span=mod[func].span)
 
     mod[func] = new_fn
     
@@ -1861,7 +1861,7 @@ def handle_output_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
                     else:
                         outputs = list(mod["main"].body.fields)
                         outputs[out_idx] = new_output_node
-                        new_main_fn = tvm.relay.Function(mod["main"].params, tvm.relay.expr.Tuple(outputs), ret_type=mod["main"].ret_type, attrs=mod["main"].attrs)
+                        new_main_fn = tvm.relay.Function(mod["main"].params, tvm.relay.expr.Tuple(outputs), ret_type=mod["main"].ret_type, attrs=mod["main"].attrs, span=mod["main"].span)
                         mod["main"] = new_main_fn
                     
                     passthrough_count += 1
@@ -1903,7 +1903,7 @@ def handle_input_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func, input_na
                     old_func_arg = func_callnode.args[param_idx_map[func_to_change_arg]]
                     new_args = list(func_callnode.args)
                     new_args[param_idx_map[func_to_change_arg]] = new_func_arg
-                    new_call = tvm.relay.Call(func_callnode.op, new_args, func_callnode.attrs)
+                    new_call = tvm.relay.Call(func_callnode.op, new_args, func_callnode.attrs, span=func_callnode.span)
                     mod["main"] = FunctionArgPlacer(func_to_change_arg, new_args).visit(mod["main"])
                     
                     # Retrieve new func_callnode
@@ -1951,7 +1951,7 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
     for arg in passthrough_args:
         if isinstance(cpu_pre_callnode.checked_type, tvm.ir.type.TupleType):
             _, output_idx = arg
-            new_tt_args.append(tvm.relay.TupleGetItem(cpu_pre_callnode, output_idx))
+            new_tt_args.append(tvm.relay.TupleGetItem(cpu_pre_callnode, output_idx, span=cpu_pre_callnode.span))
         else:
             assert len(passthrough_args) == 1, "More than one passthrough arg, but cpu pre output is not a tuple"
             new_tt_args.append(cpu_pre_callnode)
@@ -1962,7 +1962,7 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
     for i, arg in enumerate(passthrough_args):
         if isinstance(cpu_pre_callnode.checked_type, tvm.ir.type.TupleType):
             _, output_idx = arg
-            output_node = tvm.relay.TupleGetItem(cpu_pre_callnode, output_idx)
+            output_node = tvm.relay.TupleGetItem(cpu_pre_callnode, output_idx, span=cpu_pre_callnode.span)
             new_tt_params.append(tvm.relay.Var(f"inter_cpu_passthrough_{i}", cpu_pre_callnode.checked_type.fields[output_idx]))
         else:
             new_tt_params.append(tvm.relay.Var(f"inter_cpu_passthrough_{i}", cpu_pre_callnode.checked_type))
@@ -1980,7 +1980,7 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
         new_tt_return_type.extend(mod[tt_func].ret_type.fields)
     new_tt_return_type.extend([new_tt_params[i].type_annotation for i in range(len(new_tt_params))])
 
-    mod[tt_func] = tvm.relay.Function(list(mod[tt_func].params) + new_tt_params, new_tt_body, ret_type=tvm.relay.TupleType(new_tt_return_type), attrs=mod[tt_func].attrs)
+    mod[tt_func] = tvm.relay.Function(list(mod[tt_func].params) + new_tt_params, new_tt_body, ret_type=tvm.relay.TupleType(new_tt_return_type), attrs=mod[tt_func].attrs, span=mod[tt_func].span)
     # Fix first output retrieval if func output was not originally a tuple
     if not isinstance(mod[tt_func].body, tvm.relay.expr.Tuple):
         tt_func_callnode = extract_function_callnodes(mod["main"], [func])[0]
@@ -1994,7 +1994,7 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
     cpu_post_callnode = extract_function_callnodes(mod["main"], [cpu_post_func])[0]
     new_cpu_post_args = list(cpu_post_callnode.args)
     for i, idx in enumerate(cpu_post_arg_indices_to_change):
-        new_cpu_post_args[idx] = tvm.relay.TupleGetItem(tt_func_callnode, old_tt_func_num_outputs + i)
+        new_cpu_post_args[idx] = tvm.relay.TupleGetItem(tt_func_callnode, old_tt_func_num_outputs + i, span=tt_func_callnode.span)
 
     mod["main"] = FunctionArgPlacer(cpu_post_func, new_cpu_post_args).visit(mod["main"])
     mod = tvm.transform.Sequential([transform.InferType()])(mod)
