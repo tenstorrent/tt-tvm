@@ -1005,6 +1005,8 @@ class PyTorchOpConverter:
         
         # Convert to scaler if provided values is TVM call expression and is not dependent on any inputs (i.e. constant)
         fill_value = _infer_value(fill_value, {}).numpy().item() if type(fill_value) == _expr.Call and len(_analysis.free_vars(fill_value)) == 0 else fill_value
+        if type(fill_value) == tvm.relay.expr.TupleGetItem:
+            fill_value = _infer_value(fill_value, {}).numpy().item()
 
         import torch
 
