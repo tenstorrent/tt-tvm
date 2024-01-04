@@ -53,6 +53,13 @@ class DFPatternRewrite {
       Expr post = args[1];
       Map<DFPattern, Array<Expr>> node_map = args[2];
       *rv = this->Callback(pre, post, node_map);
+      if (rv->IsObjectRef<Expr>())
+      {
+        auto ret = rv->AsObjectRef<Expr>();
+        if (not ret->span.defined() or ret->span->source_name->name.empty()) {
+          ret->span = pre->span;
+        }
+      }
     };
     return DFPatternCallback(pattern_, PackedFunc(func), require_type_, rewrite_once_);
   }

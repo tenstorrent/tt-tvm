@@ -75,6 +75,9 @@ class ExprFunctor:
         else:
             raise Exception(f"warning unhandled case: {type(expr)}")
 
+        if hasattr(expr, "span") and res is not None and hasattr(res, "span") and not res.span:
+            res.span = expr.span
+
         self.memo_map[expr] = res
 
         return res

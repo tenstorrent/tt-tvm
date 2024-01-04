@@ -67,6 +67,8 @@ class CreateJson(ExprVisitor):
             op["class"] = name_partial
             op["type"] = name_partial
             op["opcode"] = "RelayOp"
+            if hasattr(call, 'span'):
+                op["span"] = repr(call.span)
             self.node_map[call] = name
         return super().visit_call(call)
 

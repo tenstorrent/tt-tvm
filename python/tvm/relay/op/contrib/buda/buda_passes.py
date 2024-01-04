@@ -579,7 +579,8 @@ class DenseWeightTranspose(DFPatternCallback):
         wt1 = tvm.relay.transpose(weight)
         wt2 = tvm.relay.transpose(wt1)
         dtype = post.checked_type.dtype
-        return tvm.relay.nn.dense(act, wt2, out_dtype=dtype)
+        res = tvm.relay.nn.dense(act, wt2, out_dtype=dtype)
+        return res
 
 
 class LiftLinearSplit(DFPatternCallback):
@@ -929,7 +930,7 @@ class ArgmaxAndMaxReconstruct(DFPatternCallback):
             exclude=node_map[self.argmax][0].attrs.exclude,
         )
         maximum = tvm.relay.squeeze(maximum, axis=node_map[self.argmax][0].attrs.axis)
-        return tvm.relay.Tuple([post.fields[0], argmax, maximum])
+        return tvm.relay.Tuple([post.fields[0], argmax, maximum], span=pre.span)
 
 class LowerTakeToStridedSlice(DFPatternCallback):
     def __init__(self, rewrite_once=True, require_type=True):

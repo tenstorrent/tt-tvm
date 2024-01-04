@@ -33,6 +33,8 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
     Expr expr = GetRef<Expr>(cn);
     std::string name;
+    std::string span;
+
     const CallNode* call = cn;
     if (const auto* op_node = cn->op.as<OpNode>()) {
       name = op_node->name;
@@ -74,6 +76,9 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
     auto node = std::make_shared<JSONGraphNode>(name,     /* name_ */
                                                 "kernel", /* op_type_ */
                                                 inputs, 1 /* num_outputs_ */);
+    if (cn->span.defined() and not cn->span->source_name->name.empty()) {
+      node->SetAttr("span", std::string(cn->span->source_name->name));
+    }
     SetCallNodeAttribute(node, call);
     return AddNode(node, GetRef<Expr>(cn));
   }

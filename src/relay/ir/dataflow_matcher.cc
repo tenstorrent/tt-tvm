@@ -895,8 +895,14 @@ Expr PatternRewriter::DispatchVisitExpr(const Expr& pre) {
       }
       node_map.insert({kv.first, tmp});
     }
+
     // run the user callback function
-    return callback_->function(pre, post, Map<DFPattern, Array<Expr>>(node_map));
+    auto before = post->span;
+    post = callback_->function(pre, post, Map<DFPattern, Array<Expr>>(node_map));
+
+    if (not post->span.defined() or post->span->source_name->name.empty()) {
+      post->span = before;
+    }
   }
   return post;
 }
@@ -969,7 +975,9 @@ class PatternPartitioner : protected MixedModeMutator {
         func = WithAttr(std::move(func), kv.first, kv.second);
       }
     }
-    return Call(func, args);
+    auto res = Call(func, args);
+    res->span = group.root_node->span;
+    return res;
   }
 
   Expr DispatchVisitExpr(const Expr& pre) override {
