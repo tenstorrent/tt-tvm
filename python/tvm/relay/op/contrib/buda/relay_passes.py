@@ -118,6 +118,10 @@ def run_relay_compile_passes(relay_module, print_all=False):
     logger.trace("After CanonicalizeOps")
     logger.trace(relay_module.functions)
 
+    # relay_module = tvm.transform.Sequential([relay.qnn.transform.CanonicalizeOps()])(relay_module)
+    # logger.trace("After QNN CanonicalizeOps")
+    # logger.trace(relay_module.functions)
+
     relay_module = tvm.transform.Sequential([transform.InferType()])(relay_module)
     logger.trace("After InferType")
     logger.trace(relay_module.functions)

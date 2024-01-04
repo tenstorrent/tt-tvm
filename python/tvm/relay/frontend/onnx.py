@@ -5303,19 +5303,25 @@ class QLinearConv(OnnxOpConverter):
         )
         use_bias = len(inputs) == 9
 
-        x_zp_bcast = _op.broadcast_to(x_zero_point, infer_shape(weight))
-        x_cast = _op.cast(x_zp_bcast, "float32")
-        w_cast = _op.cast(weight, "float32")
-        zp_requant = _op.sum(_op.multiply(x_cast, w_cast), axis=[1, 2, 3], keepdims=False)
-        
-        zp_requant = try_resolve_to_const(zp_requant, "int32")
+        if x_zp_value != 0:
+            raise RuntimeError("Non-zero input zp is not supported yet")
+            # x_zp_bcast = _op.broadcast_to(x_zero_point, infer_shape(weight))
+            # x_cast = _op.cast(x_zp_bcast, "float32")
+            # w_cast = _op.cast(weight, "float32")
+            # zp_requant = _op.sum(_op.multiply(x_cast, w_cast), axis=[1, 2, 3], keepdims=False)
+            
+            # zp_requant = try_resolve_to_const(zp_requant, "int32")
 
-        if use_bias:
-            bias = _op.subtract(inputs[8], zp_requant)
-            out = _op.nn.bias_add(out, bias)
+            # if use_bias:
+            #     bias = _op.subtract(inputs[8], zp_requant)
+            #     out = _op.nn.bias_add(out, bias)
+            # else:
+            #     bias = _op.broadcast_to(_op.negative(zp_requant), infer_shape(out)[1:2])
+            #     out = _op.nn.bias_add(out, bias)
+
         else:
-            bias = _op.broadcast_to(_op.negative(zp_requant), infer_shape(out)[1:2])
-            out = _op.nn.bias_add(out, bias)
+            if use_bias:
+                out = _op.nn.bias_add(out, inputs[8])
 
         infer_type(out)
         out_dtype = infer_type(inputs[7]).checked_type.dtype
@@ -5496,10 +5502,14 @@ class QLinearMatMul(OnnxOpConverter):
         trans_a = attr.get("transA", False)
         trans_b = attr.get("transB", False)
 
-        if trans_a:
-            a = _op.transpose(a, axes=[1,0])
-        if not trans_b:
-            b = _op.transpose(b, axes=[1,0])
+        # if trans_a:
+        #     axes = np.arange(len(infer_shape(a)))
+        #     axes[-2:] = [axes[-1],] + [axes[-2],]
+        #     a = _op.transpose(a, axes=axes)
+        # if not trans_b:
+        #     axes = np.arange(len(infer_shape(b)))
+        #     axes[-2:] = [axes[-1],] + [axes[-2],]
+        #     b = _op.transpose(b, axes=axes)
 
         a_type = infer_type(a).checked_type  # 'T1' in ONNX doc for this op
         a_scale_type = infer_type(a_scale).checked_type
@@ -5563,35 +5573,86 @@ class QLinearMatMul(OnnxOpConverter):
         # if a_type.dtype == "uint8" and b_type.dtype == "uint8":
         #     matmul_result_dtype = "uint32"
 
-        matmul_result = _op.nn.dense(
-            a,
-            b,
-            out_dtype=matmul_result_dtype,
-        #     a_zp_scalar,
-        #     b_zp_scalar,
-        #     a_scale_scalar,
-        #     b_scale_scalar,
-        #     num_hidden_units,
-        #     matmul_result_dtype,
-        )
+        if len(a_shape) == 2:
+            a_ = _op.reshape(a, [1,] + list(a_shape))
+            b_ = _op.reshape(b, [1,] + list(b_shape))
+            matmul_result = _op.nn.batch_matmul(
+                a_,
+                b_,
+                out_dtype=matmul_result_dtype,
+                transpose_a=trans_a,
+                transpose_b=trans_b,
+            )
+
+        elif len(a_shape) == 3:
+            a_ = a
+            if len(b_shape) == 2:
+                b_ = _op.reshape(b, [1,] + list(b_shape))
+                b_ = _op.broadcast_to(b_, [a_shape[0],] + list(b_shape))
+            elif len(b_shape) == 4:
+                b_ = _op.reshape(b, [b_shape[0] * b_shape[1],] + list(b_shape[2:]))
+            else:
+                b_ = b
+
+            matmul_result = _op.nn.batch_matmul(
+                a_,
+                b_,
+                out_dtype=matmul_result_dtype,
+                transpose_a=trans_a,
+                transpose_b=trans_b,
+            )
+
+        else:
+            assert len(a_shape) == 4
+            a_ = _op.reshape(a, [a_shape[0] * a_shape[1],] + list(a_shape[2:]))
+            if len(b_shape) == 2:
+                b_ = _op.reshape(b, [1,] + list(b_shape))
+                b_ = _op.broadcast_to(b_, [a_shape[0] * a_shape[1],] + list(b_shape))
+            elif len(b_shape) == 4:
+                b_ = _op.reshape(b, [b_shape[0] * b_shape[1],] + list(b_shape[2:]))
+            else:
+                b_ = b
+
+            matmul_result = _op.nn.batch_matmul(
+                a_,
+                b_,
+                out_dtype=matmul_result_dtype,
+                transpose_a=trans_a,
+                transpose_b=trans_b,
+            )
 
         matmul_result_scale_scalar = fold_constant(_op.multiply(a_scale_scalar, b_scale_scalar))
 
-        a_bcast = _op.broadcast_to(a_zp, a_shape)
-        a_cast = _op.cast(a_bcast, "float32")
-        b_cast = _op.cast(b, "float32")
+        if a_zp.data.numpy().item() != 0:
+            raise RuntimeError("Do not support non-zero zero point yet")
+            # a_bcast = _op.broadcast_to(a_zp, infer_shape(a_))
+            # if len(infer_shape(a_bcast)) == 2:
+            #     matmul_result_zp_scalar = _op.nn.dense(a_bcast, b_, out_dtype="int32")
+            # elif len(infer_shape(a_bcast)) == 3:
+            #     assert len(infer_shape(b_)) == 3
+            #     matmul_result_zp_scalar = _op.nn.batch_matmul(
+            #         a_bcast,
+            #         b_,
+            #         out_dtype="int32",
+            #         transpose_a=trans_a,
+            #         transpose_b=trans_b,
+            #     )
+            # else:
+            #     raise RuntimeError("Do not support 4D matmul yet")
 
-        matmul_result_zp_scalar = _op.nn.dense(a_cast, b_cast, out_dtype="float32")
 
-        matmul_result_zp_scalar = try_resolve_to_const(matmul_result_zp_scalar, "int32")
+            # matmul_result_zp_scalar = try_resolve_to_const(matmul_result_zp_scalar, "int32")
 
-        if bias is not None:
-            matmul_result_zp_scalar = _op.reshape(matmul_result_zp_scalar, infer_shape(bias))
-            bias = _op.subtract(bias, matmul_result_zp_scalar)
-            matmul_result = _op.nn.bias_add(matmul_result, bias)
+            # if bias is not None:
+            #     matmul_result_zp_scalar = _op.reshape(matmul_result_zp_scalar, infer_shape(bias))
+            #     bias = _op.subtract(bias, matmul_result_zp_scalar)
+            #     matmul_result = _op.add(matmul_result, bias)
+            # else:
+            #     bias = _op.broadcast_to(_op.negative(matmul_result_zp_scalar), infer_shape(matmul_result))
+            #     matmul_result = _op.add(matmul_result, bias)
         else:
-            bias = _op.broadcast_to(_op.negative(matmul_result_zp_scalar), infer_shape(matmul_result)[1:])
-            matmul_result = _op.nn.bias_add(matmul_result, bias)
+            matmul_result_zp_scalar = _op.const(0, dtype="int8")
+
 
         # This information might only be found in the C++ code-comments for the
         # dense.matmul op, but the quantized tensor returned by _qnn.op.dense
@@ -5600,6 +5661,15 @@ class QLinearMatMul(OnnxOpConverter):
         # 'matmul_result_zp_scalar' has type 'int32' to satisfy input requirements
         # of the [de/re]quantize ops below.
 
+        # Change back to 4D if needed
+        if len(a_shape) == 4:
+            result_shape = infer_shape(matmul_result)
+            matmul_result = _op.reshape(
+                matmul_result, [a_shape[0], a_shape[1], result_shape[-2], result_shape[-1]]
+            )
+        elif len(a_shape) == 2:
+            result_shape = infer_shape(matmul_result)
+            matmul_result = _op.reshape(matmul_result, result_shape[1:])
 
         if "int32" in expected_out_dtypes:
             # This is the adaptation of the QLinearMatMul converter for MatMulInteger,
@@ -5609,6 +5679,10 @@ class QLinearMatMul(OnnxOpConverter):
         # requantize requires y_scale to be constant,
         # if y_scale is not constant, doing dequantize -> quantize
         if isinstance(y_scale_scalar, _expr.Constant):
+            # y_scale_scalar = _op.broadcast_to(y_scale_scalar, infer_shape(matmul_result))
+            # matmul_result_scale_scalar = _op.broadcast_to(
+            #     matmul_result_scale_scalar, infer_shape(matmul_result)
+            # )
             y = _qnn.op.requantize(
                 matmul_result,
                 matmul_result_scale_scalar,
@@ -7411,6 +7485,8 @@ class GraphProto:
             sym = get_relay_op(op_name)(*inputs, **attrs)
         elif op_name in convert_map:
             sym = convert_map[op_name](inputs, attrs, self._params)
+            # print("Converted {} to ".format(op_name))
+            # print(infer_shape(sym))
         else:
             raise NotImplementedError(f"Operator {op_name} not implemented.")
         return sym
