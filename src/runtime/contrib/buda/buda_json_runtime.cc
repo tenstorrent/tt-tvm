@@ -118,7 +118,6 @@ class BudaRuntime : public JSONRuntimeBase {
     //   TVMRetValue rv;
     //   pf->CallPacked(TVMArgs(values.data(), codes.data(), values.size()), &rv);
 
-    //   // TODO (arui) : Free the pointers passed to TVMArgs
     //   std::cout << "Returned" << std::endl;
 
     //   DLTensor *ret_value = static_cast<DLTensor *>(rv);

@@ -443,7 +443,7 @@ class DecomposeConv1DToConv2D(DFPatternCallback):
                 reshaped_weights,
                 strides=[post.attrs.strides[0], 1],
                 padding=[post.attrs.padding[0], 0, post.attrs.padding[1], 0],
-                # (TODO arui) Since weight kernel is 1 on unsqueezed dim, dilation shouldnt matter. This is needed because we dont support different
+                # (TODO) Since weight kernel is 1 on unsqueezed dim, dilation shouldnt matter. This is needed because we dont support different
                 # dilation for each dim in pybuda conv2d.
                 dilation=[post.attrs.dilation[0], post.attrs.dilation[0]],
                 groups=post.attrs.groups,

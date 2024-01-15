@@ -765,7 +765,7 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
 
     return json_graphs, flattened_inputs
 
-# TODO (arui) : Verify graphdef output vs. TVM output
+# TODO: Verify graphdef output vs. TVM output
 def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
     output_list_ = compiler_cfg.framework_model_output_names
     # framework_outputs = tfmod(*inputs)
