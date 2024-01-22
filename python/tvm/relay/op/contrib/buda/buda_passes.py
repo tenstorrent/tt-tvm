@@ -2811,6 +2811,30 @@ class AttemptRemoveStackWDim(DFPatternCallback):
         
         return super().callback(pre, post, node_map)
 
+
+class SimplifyReshape(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape_0 = is_op("reshape")(self.act)
+        self.transpose_0 = is_op("transpose")(self.reshape_0).has_attr({"axes": [0, 3, 2, 1]})
+        self.transpose_1 = is_op("transpose")(self.transpose_0).has_attr({"axes": [0, 1, 3, 2]})
+        self.reshape_1 = is_op("reshape")(self.transpose_1)
+        self.pattern = self.reshape_1
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        input_shape = list(pre_node_map[self.act][0].checked_type.shape)
+        reshape_1 = node_map[self.reshape_1][0]
+        final_shape = list(reshape_1.attrs.newshape)
+
+        if input_shape[0] * input_shape[1] == final_shape[-1]:
+            reshape_0 = tvm.relay.reshape(node_map[self.reshape_0][0], newshape=[1, 1, input_shape[-2] * input_shape[-3], input_shape[-1]])
+            final_transpose = tvm.relay.transpose(reshape_0, axes=[0,1,3,2])
+            return final_transpose
+
+        return post
+
 class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -3520,49 +3544,7 @@ class PadSpecificBatchMatmulShapes(DFPatternCallback):
 
         return unpadded_bmm
 
-# class SplitBatchMMIntoMM(DFPatternCallback):
-#     def __init__(self):
-#         super().__init__(rewrite_once=True, require_type=True)
 
-#         self.qk_states = wildcard()
-#         self.v_states = wildcard()
-        
-#         self.attn_bmm = is_op("nn.batch_matmul")(self.qk_states, self.v_states)
-
-#         self.pattern = self.attn_bmm
-        
-#     def callback(self, pre, post, node_map):
-#         pre_node_map = construct_pre_node_map(self.pattern, pre)
-        
-#         qk_states = node_map[self.qk_states][0]
-#         v_states = node_map[self.v_states][0]
-#         attn_bmm = node_map[self.attn_bmm][0]
-        
-#         from tvm.relay.frontend.common import infer_shape
-#         print("qk_states", infer_shape(qk_states))
-#         print("v_states", infer_shape(v_states))
-#         print("attn_bmm", infer_shape(attn_bmm))
-        
-#         split_size = 3
-        
-#         if list(infer_shape(qk_states)) != [12, 1500, 1500] and \
-#            list(infer_shape(v_states)) != [12, 1500, 64] and \
-#            list(infer_shape(attn_bmm)) != [12, 1500, 64]:
-#             return post
-        
-#         # Split attention states
-#         qk_states_split = tvm.relay.split(qk_states, split_size, 0)
-#         v_states_split = tvm.relay.split(v_states, split_size, 0)
-
-#         # Split single batch mamtul into batch multiple matmuls
-#         outputs = []
-#         for i in range(split_size):
-#             outputs.append(tvm.relay.nn.batch_matmul(qk_states_split[i], v_states_split[i], transpose_a=False, transpose_b=False))
-#             print(f"outputs[{i}]", infer_shape(outputs[i]))
-#         output = tvm.relay.concatenate(outputs, axis=0)
-#         print("output", infer_shape(output))
-
-#         return output
 
 
 def _get_callback_name(callback):
@@ -3681,6 +3663,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ReconstructJaxLayerNorm(),
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
             RemoveRedundantReshapeTransposeReshape(),
+            SimplifyReshape(),
             ReplicatePyBudaReshapeTranspose(),
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim(),
@@ -3693,7 +3676,6 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             InverseMaskGen(),
             ReplaceYolov5Perf(),
             # TransformDenseIntoBatchMM(),
-            # SplitBatchMMIntoMM(),
             # LowerSplitToStridedSlice(),
             PadSpecificBatchMatmulShapes(),
             SimplifyVITOnnxAttention(),
