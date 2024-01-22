@@ -75,7 +75,7 @@ def extract_framework_model_outputs(
     
         framework_outputs = model(*inputs, **kwargs)
 
-        # TODO (aknezevic); ref sha: 1fe78625c809e6ca887a8da5fdde44836830f990
+        # TODO ref sha: 1fe78625c809e6ca887a8da5fdde44836830f990
         # Figure out how to sort dictionary outputs:
         #
         # if isinstance(framework_outputs, dict):
