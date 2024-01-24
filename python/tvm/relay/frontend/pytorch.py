@@ -4289,7 +4289,7 @@ class PyTorchOpConverter:
 
         import torch
 
-        if not isinstance(data, (_expr.Expr, list, torch.Tensor, np.ndarray)):
+        if not isinstance(data, (_expr.Expr, list, tuple, torch.Size, torch.Tensor, np.ndarray)):
             msg = "Data type %s could not be parsed in zeros op" % (type(data))
             raise AssertionError(msg)
 
