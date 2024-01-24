@@ -2188,7 +2188,11 @@ class PyTorchOpConverter:
     def chunk(self, inputs, input_types):
         data = inputs[0]
 
-        num_chunks = int(inputs[1])
+        if isinstance(inputs[1],tvm.relay.expr.Constant) and inputs[1].data.shape == ():
+            num_chunks = int(inputs[1].data.numpy())
+        else:
+            num_chunks = int(inputs[1])
+
         axis = int(inputs[2])
 
         if isinstance(data, _expr.Expr):
