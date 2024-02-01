@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 from pybuda.tensor import to_tf_tensors
 from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
 import torch

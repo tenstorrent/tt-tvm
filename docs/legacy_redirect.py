@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation
+#
+# SPDX-License-Identifier: Apache-2.0
 # -*- coding: utf-8 -*-
 
 # Licensed to the Apache Software Foundation (ASF) under one

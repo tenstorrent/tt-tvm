@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation
+#
+# SPDX-License-Identifier: Apache-2.0
 #!/usr/bin/env bash
 
 # Licensed to the Apache Software Foundation (ASF) under one
