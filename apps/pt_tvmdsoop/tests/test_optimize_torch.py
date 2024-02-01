@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation
+#
+# SPDX-License-Identifier: Apache-2.0
 # pylint: disable=missing-class-docstring
 #!/usr/bin/env python
 

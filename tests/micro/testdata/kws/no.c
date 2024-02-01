@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation
+//
+// SPDX-License-Identifier: Apache-2.0
 /*
  * This work is a derivative of "Speech Commands V2" by Google, used under CC BY 4.0.
  */

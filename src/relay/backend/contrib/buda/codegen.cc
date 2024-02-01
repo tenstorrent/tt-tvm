@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/expr_functor.h>
