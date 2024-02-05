@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-#!/usr/bin/bash -e
-#set -e # exit if a command fails
+set -e # exit if a command fails
 
 if [ -n "$CI_PROJECT_DIR" ]; then
   if [ -z $PYBUDA_ROOT ]; then export PYBUDA_ROOT=$CI_PROJECT_DIR; fi
@@ -39,10 +38,17 @@ else
 fi
 
 echo $TVM_BUILD_CONFIG
-cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME || exit 1
-make -j$(nproc) || exit 1
+cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
+make -j$(nproc)
 
 echo "TVM Built Successful"
 cd $PYBUDA_ROOT
 
 pip install -e third_party/tvm/python
+
+for dir in cutlass cutlass_fpA_intB_gemm/cutlass libflash_attn/cutlass; do
+    pushd $TVM_HOME/3rdparty/$dir
+    git restore docs media
+    popd
+done
+echo "Files removed during tvm build have been restored."
