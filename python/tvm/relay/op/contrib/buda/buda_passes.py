@@ -2210,17 +2210,7 @@ class RemoveQuantDequantSequence(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
-        print("--------------------------")
-        print(act.checked_type.shape)
         quant = node_map[self.quant][0]
-        print(quant.checked_type.shape)
-        print(quant.args[1])
-        print(quant.args[2])
-        print(quant.attrs.axis)
-        print(post.args[1])
-        print(post.args[2])
-        print(post.attrs.axis)
-
         return node_map[self.act][0]
 
 
