@@ -1708,7 +1708,7 @@ class ExplicateTranspose(DFPatternCallback):
         if transpose_b:
             b = tvm.relay.transpose(b, axes=axes)
             
-        return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False)
+        return tvm.relay.nn.batch_matmul(a, b, transpose_a=False, transpose_b=False, out_dtype=post.checked_type.dtype)
 
 class LowerAdaptiveAvgPool(DFPatternCallback):
     def __init__(self):
@@ -2199,6 +2199,135 @@ class ReconstructOnnxGelu(DFPatternCallback):
             return post
 
         return tvm.relay.gelu(node_map[self.act][0])
+
+
+class RemoveQuantDequantSequence(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.quant = is_op("qnn.quantize")(self.act, wildcard(), wildcard(),)
+        self.pattern = is_op("qnn.dequantize")(self.quant, wildcard(), wildcard(),)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        quant = node_map[self.quant][0]
+        return node_map[self.act][0]
+
+
+class ReconstructOnnxQuantizedGelu(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.one_over_root_two = wildcard()
+        self.one = wildcard()
+        self.half_added = wildcard()
+
+        self.act_0 = is_op("qnn.dequantize")(self.act, wildcard(), wildcard(),)
+        self.act_1 = is_op("qnn.dequantize")(self.act, wildcard(), wildcard(),)
+
+        times_root_two = is_op("multiply")(self.act_0, self.one_over_root_two)
+        erf = is_op("erf")(times_root_two)
+
+        # CHECK IF WE NEED IT
+        # quantize_erf = is_op("qnn.quantize")(erf, wildcard(), wildcard(),)
+        # dequantize_erf = is_op("qnn.dequantize")(quantize_erf, wildcard(), wildcard(),)
+
+
+        add = is_op("add")(erf, self.one)
+
+        # CHECK 
+        # quantize_add = is_op("qnn.quantize")(add, wildcard(), wildcard(),)
+        # dequantize_add = is_op("qnn.dequantize")(quantize_add, wildcard(), wildcard(),)
+
+        mult2 = is_op("multiply")(self.act_1, add)
+
+        # Check
+        # quantize_mult2 = is_op("qnn.quantize")(mult2, wildcard(), wildcard(),)
+        # dequantize_mult2 = is_op("qnn.dequantize")(quantize_mult2, wildcard(), wildcard(),)
+
+        gelu = is_op("multiply")(mult2, self.half_added)
+
+        self.pattern = gelu
+
+    def callback(self, pre, post, node_map):
+        if isinstance(node_map[self.half_added][0], tvm.relay.expr.Constant):
+            half_added = math.isclose(node_map[self.half_added][0].data.numpy(), 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        elif isinstance(node_map[self.half_added][0].args[0], tvm.relay.expr.Constant):
+            # Compute dequant
+            op = node_map[self.half_added][0]
+            assert (op.op.name == "qnn.dequantize")
+            input_int = op.args[0].data.numpy()
+            input_scale = op.args[1].data.numpy()
+            input_zp = op.args[2].data.numpy()
+            float_ = (float)(input_int - input_zp) * input_scale
+            half_added = math.isclose(float_, 0.5, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            return post
+
+        if isinstance(node_map[self.one][0], tvm.relay.expr.Constant):
+            one_added = math.isclose(node_map[self.one][0].data.numpy(), 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        elif isinstance(node_map[self.one][0].args[0], tvm.relay.expr.Constant):
+            # Compute dequant
+            op = node_map[self.one][0]
+            assert (op.op.name == "qnn.dequantize")
+            input_int = op.args[0].data.numpy()
+            input_scale = op.args[1].data.numpy()
+            input_zp = op.args[2].data.numpy()
+            float_ = (float)(input_int - input_zp) * input_scale
+            one_added = math.isclose(float_, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            return post
+
+        sqrt_half = node_map[self.one_over_root_two][0]
+        # Relay graph may use sqrt(1/2) outright, or take the recipricoral of sqrt(2)
+        if isinstance(sqrt_half, tvm.relay.expr.Constant):
+            sqrt_half = sqrt_half.data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 0.70710677, rel_tol=1e-6, abs_tol=1e-6)
+        else:
+            sqrt_half = sqrt_half.args[0].data.numpy()
+            root_two_multiplied = math.isclose(sqrt_half, 1.4142135, rel_tol=1e-6, abs_tol=1e-6)
+
+        if not (half_added and one_added and root_two_multiplied):
+            return post
+
+        quantize_act = node_map[self.act][0]
+        original_dequant = node_map[self.act_0][0]
+        dequant_act = tvm.relay.qnn.op.dequantize(quantize_act, original_dequant.args[1], original_dequant.args[2])
+        return tvm.relay.gelu(dequant_act)
+    
+
+class DecomposeQnnConcat(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.pattern = is_op("qnn.concatenate")(wildcard(), wildcard(), wildcard(),wildcard(),wildcard(),)
+
+
+    def callback(self, pre, post, node_map):
+        data = post.args[0]
+        input_scales = post.args[1]
+        input_zps = post.args[2]
+        output_scale = post.args[3]
+        output_zp = post.args[4]
+
+        assert len(input_scales) == len(input_zps) == len(data)
+        new_concat_inputs = []
+        for i in range(len(data)):
+            if input_scales[i].data.numpy() == output_scale.data.numpy() and input_zps[i].data.numpy() == output_zp.data.numpy():
+                new_concat_inputs.append(data[i])
+            else:
+                # Insert requant
+                inp = tvm.relay.qnn.op.requantize(
+                    data[i],
+                    input_scale=input_scales[i],
+                    input_zero_point=input_zps[i],
+                    output_scale=output_scale,
+                    output_zero_point=output_zp,
+                    out_dtype=post.checked_type.dtype,
+                )
+                new_concat_inputs.append(inp)
+
+        return tvm.relay.concatenate(new_concat_inputs, axis=post.attrs.axis)
+        
 
 
 class ReconstructPyTorchGeluNew(DFPatternCallback):
@@ -3636,6 +3765,9 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
+            RemoveQuantDequantSequence(),
+            ReconstructOnnxQuantizedGelu(),
+            DecomposeQnnConcat(),
             # DecomposeErf(),
             ReconstructTFGelu(),
             ReconstructOnnxGelu(),
