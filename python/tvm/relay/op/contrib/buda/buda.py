@@ -891,7 +891,7 @@ class ConstructDiGraph(ExprVisitor):
                     hash_graph = HashGraph()
                     hash_graph.visit(call.args[1])
                     for pair in hash_graph.calls_nodes:
-                        logger.info(f"Adding: {pair[1][1][0].name} to fallback")
+                        logger.info("Adding: adv_index to fallback")
                         self.fallback_nodes.add(pair[1])
                         self.register_args(pair[0], pair[1])
                 
