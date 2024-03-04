@@ -1070,7 +1070,10 @@ class PyTorchOpConverter:
     def linspace(self, inputs, input_types):
         start = inputs[0]
         stop = inputs[1]
-        step = inputs[2]
+        if isinstance(inputs[2],tvm.relay.expr.Constant) and inputs[2].data.shape == ():
+            step = int(inputs[2].data.numpy())
+        else:
+            step = int(inputs[2])
 
         # Find the spacing between values as step
         if step != 1:
