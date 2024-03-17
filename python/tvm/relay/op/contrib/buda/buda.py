@@ -873,7 +873,7 @@ class ConstructDiGraph(ExprVisitor):
             and call.op.body.tuple_value.op.get_attr("target.pybuda_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)
-            logger.info(f"Adding: {call.op.body.op} to fallback")
+            logger.info(f"Adding: {call.op.body.tuple_value.op} to fallback")
 
         elif (
             isinstance(call.op, tvm.relay.function.Function) 
