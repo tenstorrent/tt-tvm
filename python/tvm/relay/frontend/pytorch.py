@@ -5872,12 +5872,12 @@ def export_c_graph(location, graph):
     with open(f"{fname}", "w") as f:
         f.write(str(graph))
 
-def _binary_search(lst, func):
-    """Binary search for the first index that func returns True"""
+def _binary_search(lst, condition):
+    """Binary search for the first index that `condition` returns True"""
     l, r = 0, len(lst)
     while l < r:
         m = (l + r) // 2
-        if func(lst[m]):
+        if condition(lst[m]):
             r = m
         else:
             l = m + 1
@@ -5910,8 +5910,10 @@ def outplace_inplace_ops(opnodes):
 
         relevant_ops = node_inputs_map[orig_node]
         begin_idx = _binary_search(relevant_ops, lambda x: x[0] > node_idx)
-        for idx, node in relevant_ops[begin_idx:]:
+        for _, node in relevant_ops[begin_idx:]:
             node.replaceInputWith(orig_node, replacement_node)
+
+    del node_inputs_map
 
 def from_pytorch(
     script_module,
