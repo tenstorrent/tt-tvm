@@ -5872,7 +5872,7 @@ def export_c_graph(location, graph):
     with open(f"{fname}", "w") as f:
         f.write(str(graph))
 
-def _binray_search(lst, func):
+def _binary_search(lst, func):
     """Binary search for the first index that func returns True"""
     l, r = 0, len(lst)
     while l < r:
@@ -5909,7 +5909,7 @@ def outplace_inplace_ops(opnodes):
             continue
 
         relevant_ops = node_inputs_map[orig_node]
-        begin_idx = _binray_search(relevant_ops, lambda x: x[0] > node_idx)
+        begin_idx = _binary_search(relevant_ops, lambda x: x[0] > node_idx)
         for idx, node in relevant_ops[begin_idx:]:
             node.replaceInputWith(orig_node, replacement_node)
 
