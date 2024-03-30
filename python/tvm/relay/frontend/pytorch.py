@@ -5057,11 +5057,6 @@ class PyTorchOpConverter:
         # use a cunter to prevent from messing up its scope in span
         empty_counter = 0
 
-        # TODO REMOVE BEFORE PR???
-        # * This is for debug purposes
-        converted_operators = 0
-        max_operators = 0
-
         self.input_remap = input_remap
         for node_name, op_node in operators:
 
@@ -5144,15 +5139,6 @@ class PyTorchOpConverter:
                 else:
                     relay_op = self.convert_map[operator]
 
-                # TODO REMOVE BEFORE PR
-                # * It is normal for max_operators to increase for a while. It will eventually stop.
-                converted_operators+=1
-                max_operators = len(outputs)
-                #print("relay_op: ", relay_op)
-                #print("OP_Node: ", op_node)
-                #print("OP inputs: ", _get_op_inputs(op_node, outputs, self.input_remap))
-                print(f"Converted {converted_operators}/{max_operators}")
-
                 self._set_parameter_source_name(op_node, outputs, self.input_remap)
                 relay_out = relay_op(
                     # since the elements in "outputs" may change due to span-filling process
@@ -5175,9 +5161,6 @@ class PyTorchOpConverter:
                     outputs[node_name] = relay_out
 
             self.current_op.pop()
-
-        # TODO REMOVE BEFORE PR
-        print("Finished converting. Some background operations will now continue but trust me it is not hanging. This will take a while...")
 
         # TODO(@haoyang9804): outputs[ret_name] could be None and cause some issue
         # revealed by https://github.com/apache/tvm/issues/15004
