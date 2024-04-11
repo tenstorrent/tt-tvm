@@ -5289,10 +5289,6 @@ class QLinearConv(OnnxOpConverter):
         out = _op.nn.conv2d(
             data,
             weight,
-            # x_zero_point,
-            # w_zero_point,
-            # x_scale,
-            # w_scale,
             kernel_size=attr["kernel_shape"],
             channels=out_channels,
             strides=strides,
@@ -5502,15 +5498,6 @@ class QLinearMatMul(OnnxOpConverter):
         trans_a = attr.get("transA", False)
         trans_b = attr.get("transB", False)
 
-        # if trans_a:
-        #     axes = np.arange(len(infer_shape(a)))
-        #     axes[-2:] = [axes[-1],] + [axes[-2],]
-        #     a = _op.transpose(a, axes=axes)
-        # if not trans_b:
-        #     axes = np.arange(len(infer_shape(b)))
-        #     axes[-2:] = [axes[-1],] + [axes[-2],]
-        #     b = _op.transpose(b, axes=axes)
-
         a_type = infer_type(a).checked_type  # 'T1' in ONNX doc for this op
         a_scale_type = infer_type(a_scale).checked_type
         a_zp_type = infer_type(a_zp).checked_type
@@ -5570,8 +5557,6 @@ class QLinearMatMul(OnnxOpConverter):
         matmul_result_dtype = "int32"
         # TODO(vvchernov): possibly it is better to use unsigned type for result
         # if input types are unsigned:
-        # if a_type.dtype == "uint8" and b_type.dtype == "uint8":
-        #     matmul_result_dtype = "uint32"
 
         if len(a_shape) == 2:
             a_ = _op.reshape(a, [1,] + list(a_shape))
@@ -5651,7 +5636,7 @@ class QLinearMatMul(OnnxOpConverter):
             #     bias = _op.broadcast_to(_op.negative(matmul_result_zp_scalar), infer_shape(matmul_result))
             #     matmul_result = _op.add(matmul_result, bias)
         else:
-            matmul_result_zp_scalar = _op.const(0, dtype="int8")
+            matmul_result_zp_scalar = _op.const(0, dtype="int32")
 
 
         # This information might only be found in the C++ code-comments for the
@@ -5679,14 +5664,10 @@ class QLinearMatMul(OnnxOpConverter):
         # requantize requires y_scale to be constant,
         # if y_scale is not constant, doing dequantize -> quantize
         if isinstance(y_scale_scalar, _expr.Constant):
-            # y_scale_scalar = _op.broadcast_to(y_scale_scalar, infer_shape(matmul_result))
-            # matmul_result_scale_scalar = _op.broadcast_to(
-            #     matmul_result_scale_scalar, infer_shape(matmul_result)
-            # )
             y = _qnn.op.requantize(
                 matmul_result,
                 matmul_result_scale_scalar,
-                _op.const(0, dtype="int32"),
+                matmul_result_zp_scalar,
                 y_scale_scalar,
                 y_zp_scalar,
                 axis=-1,
@@ -7099,7 +7080,7 @@ def _get_convert_map(opset):
         "DequantizeLinear": DequantizeLinear.get_converter(opset),
         "DynamicQuantizeLinear": DynamicQuantizeLinear.get_converter(opset),
         "ReverseSequence": ReverseSequence.get_converter(opset),
-        "QGemm": QGemm.get_converter(opset),
+        # "QGemm": QGemm.get_converter(opset),
         "QLinearConv": QLinearConv.get_converter(opset),
         "QLinearConcat": QLinearConcat.get_converter(opset),
         "QLinearAdd": QLinearAdd.get_converter(opset),
