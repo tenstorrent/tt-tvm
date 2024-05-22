@@ -28,6 +28,35 @@ from tvm.te import hybrid
 from . import cpp, tag
 from .utils import const_vector, make_idx, within_index
 
+def pixel_shuffle(data, upscale_factor):
+    """Pixel Shuffle operator in Python.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        N-D with shape (d_0, d_1, ..., d_{N-1})
+
+    upscale_factor : int or tuple of ints
+        Integer value to be upscaled with
+
+    Returns
+    -------
+    ret : numpy.ndarray
+        The computed result.
+    """
+    b, c, h, w = data.shape
+    upscale_squared = upscale_factor * upscale_factor
+    assert c % upscale_squared == 0, f"The number of channels ({c}) is not divisible by upscale_factor squared ({upscale_squared})."
+    oc = c // upscale_squared
+    oh = h * upscale_factor
+    ow = w * upscale_factor
+    new_shape = [b, oc, upscale_factor, upscale_factor, h, w]
+    out_shape = [b, oc, oh, ow]
+    data = tvm.topi.reshape(data, new_shape)
+    axes = [0, 1, 4, 2, 5, 3]
+    data = tvm.topi.transpose(data, axes)
+    data = tvm.topi.reshape(data, out_shape)
+    return data
 
 def expand_dims(a, axis, num_newaxis=1):
     """Expand the shape of an array.
