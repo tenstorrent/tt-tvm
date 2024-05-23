@@ -31,7 +31,25 @@ from tvm.script import tir as T
 
 import tvm.testing
 
+def verify_pixel_shuffle(in_shape, upscale_factor):
+    A = te.placeholder(shape=in_shape, name="A")
+    B = topi.pixel_shuffle(A, upscale_factor)
+    
+    def check_device(target, dev):
+        print("Running on target: %s" % target)
+        with tvm.target.Target(target):
+            s = tvm.topi.testing.get_injective_schedule(target)(B)
+        foo = tvm.build(s, [A, B], target, name="pixel_shuffle")
+        data_npy = np.random.normal(size=in_shape).astype(A.dtype)
+        out_npy = tvm.topi.testing.pixel_shuffle_python(data_npy, upscale_factor)
+        data_nd = tvm.nd.array(data_npy, dev)
+        out_nd = tvm.nd.empty(out_npy.shape, device=dev, dtype=B.dtype)
+        foo(data_nd, out_nd)
+        tvm.testing.assert_allclose(out_nd.numpy(), out_npy)
 
+    for target, dev in tvm.testing.enabled_targets():
+        check_device(target, dev)
+        
 def verify_expand_dims(in_shape, out_shape, axis, num_newaxis):
     A = te.placeholder(shape=in_shape, name="A")
     B = topi.expand_dims(A, axis, num_newaxis)
@@ -875,7 +893,12 @@ def verify_trilu(input_shape, upper, k=0):
     for target, dev in tvm.testing.enabled_targets():
         check_device(target, dev)
 
-
+@tvm.testing.uses_gpu
+def test_pixel_shuffle():
+    verify_pixel_shuffle((1, 256, 4, 128), 2)
+    verify_pixel_shuffle((3, 32, 10, 10), 4)
+    verify_pixel_shuffle((2, 98, 6, 6), 7)
+    
 @tvm.testing.uses_gpu
 def test_strided_slice():
     verify_strided_slice((3, 4, 3), [0, 0, 0], [4, -5, 4], [1, -1, 2])

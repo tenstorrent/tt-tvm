@@ -217,6 +217,26 @@ def log_softmax_strategy(attrs, inputs, out_type, target):
     )
     return strategy
 
+def wrap_compute_pixel_shuffle(topi_compute):
+    """Wrap pixel_shuffle topi compute"""
+
+    def _compute_pixel_shuffle(attrs, inputs, out_type):
+        return [topi_compute(inputs[0], attrs.upscale_factor)]
+
+    return _compute_pixel_shuffle
+
+@override_native_generic_func("pixel_shuffle_strategy")
+def pixel_shuffle_strategy(attrs, inputs, out_type, target):
+    """pixel_shuffle generic strategy"""
+    # NOTE: This op does not have an optimized manual schedule,
+    # so it should only be used together with auto-scheduler.
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_pixel_shuffle(topi.pixel_shuffle),
+        wrap_topi_schedule(topi.generic.schedule_extern),
+        name="pixel_shuffle.generic",
+    )
+    return strategy
 
 # lrn
 @generic_func
