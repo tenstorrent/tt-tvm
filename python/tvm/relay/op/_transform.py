@@ -222,6 +222,15 @@ def compute_scatter_nd(attrs, inputs, output_type):
 
 _reg.register_strategy("scatter_nd", strategy.scatter_nd_strategy)
 
+# pixel_shuffle
+@_reg.register_compute("pixel_shuffle")
+def compute_pixel_shuffle(attrs, inputs, output_type):
+    """Compute definition of pixel_shuffle"""
+    return [topi.pixel_shuffle(inputs[0], attrs.upscale_factor)]
+
+
+_reg.register_strategy("pixel_shuffle", strategy.pixel_shuffle_strategy)
+
 # cumsum
 @_reg.register_compute("cumsum")
 def compute_cumsum(attrs, inputs, output_type):
