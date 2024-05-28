@@ -459,6 +459,66 @@ def clean_names(json_graph, forge_params, param_name_lookup={}):
 
     return json_graph
 
+def duplicate_dequantize_nodes_in_onnx_graph(onnx_module):
+    from collections import defaultdict
+
+    # Create a dictionary to store the consumers of each tensor
+    tensor_consumers = defaultdict(list)
+
+    graph = onnx_module.graph
+    # Populate the tensor_consumers dictionary
+    for node in graph.node:
+        for input_name in node.input:
+            tensor_consumers[input_name].append(node.name)
+
+    # Find and duplicate nodes with output branches
+    nodes_to_add = []
+    nodes_to_remove = []
+    indices_for_adding = []
+    for node_ind, node in enumerate(graph.node):
+
+        if node.op_type != "DequantizeLinear":
+            continue
+
+        output_name = node.output[0]
+        consumers = tensor_consumers[output_name]
+
+        if len(consumers) > 1:
+            # Duplicate the node for each consumer
+            for i, consumer_name in enumerate(consumers):
+                new_node_name = node.name + f"_clone{i}"
+                new_output_name = output_name + f"_clone{i}"
+
+                cloned_node = onnx.helper.make_node(
+                    node.op_type,
+                    node.input,
+                    [new_output_name],
+                    name=new_node_name
+                )
+
+                # Add the cloned node to the list of nodes to add
+                nodes_to_add.append(cloned_node)
+                indices_for_adding.append((cloned_node, node_ind))
+
+                # Update the consumer to use the cloned node's output
+                consumer_node = next(n for n in graph.node if n.name == consumer_name)
+                for j, input_name in enumerate(consumer_node.input):
+                    if input_name == output_name:
+                        consumer_node.input[j] = new_output_name
+
+            # Remove the original node since it will be replaced by its clones
+            nodes_to_remove.append(node)
+
+
+    # This is needed to remain the order of the nodes in graph
+    # since graph is not put in topsort order when visiting nodes
+    for i, (node, insertion_index) in enumerate(indices_for_adding):
+        graph.node.insert(insertion_index + i, node)
+
+    for node in nodes_to_remove:
+        graph.node.remove(node)
+
+
 def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     import onnxruntime as ort
     
@@ -483,6 +543,7 @@ def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, ve
 
     assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
 
+    duplicate_dequantize_nodes_in_onnx_graph(onnx_mod)
     framework_outputs = extract_framework_model_outputs(
         framework="onnx",
         model=onnx_mod,
