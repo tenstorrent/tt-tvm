@@ -2268,19 +2268,6 @@ class ReconstructOnnxGelu(DFPatternCallback):
         return tvm.relay.gelu(node_map[self.act][0])
 
 
-class RemoveQuantDequantSequence(DFPatternCallback):
-    def __init__(self):
-        super().__init__(rewrite_once=True, require_type=True)
-        self.act = wildcard()
-        self.quant = is_op("qnn.quantize")(self.act, wildcard(), wildcard(),)
-        self.pattern = is_op("qnn.dequantize")(self.quant, wildcard(), wildcard(),)
-
-    def callback(self, pre, post, node_map):
-        act = node_map[self.act][0]
-        quant = node_map[self.quant][0]
-        return node_map[self.act][0]
-
-
 class ReconstructOnnxQuantizedGelu(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -3400,7 +3387,7 @@ class SimplifyTransposeReshape(DFPatternCallback):
             if index != val:
                 count += 1
 
-        assert (count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point")
+        assert count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point"
         is_transpose_yz = len(transpose_axes) >= 3 and len(dims) >= 3 and (transpose_axes[-2] == dims[-3] and transpose_axes[-3] == dims[-2])
 
         if (
@@ -3893,7 +3880,7 @@ def _get_callback_name(callback):
     elif isinstance(callback, tvm.transform.Pass):
         return callback.info.name
     else:
-        raise NotImplementedError(f"Type of callback ({type(callback)}) not implemented")
+        raise NotImplementedError(f"Type of callback ({(callback)}) not implemented")
 
 
 def _run_pattern_callback(relay_module, callback, callback_name):
@@ -3991,7 +3978,6 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
-            RemoveQuantDequantSequence(),
             ReconstructOnnxQuantizedGelu(),
             DecomposeQnnConcat(),
             # DecomposeErf(),
