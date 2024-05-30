@@ -3380,17 +3380,34 @@ class PyTorchOpConverter:
             mask = _expr.const(_infer_value(mask, {}))
         mask = _op.cast(mask, "float32")
 
+        # Pybuda will convert all cast ops to Identity. This can be an issue.
+        # In pytorch, when the mask has float values, it treats 0 as False and 
+        # everything else as True. We cannot assume that mask will contain only
+        # zeroes and ones, as multiplication with the mask will yeild incorrect
+        # results.
+        mask = _op.abs(mask)
+        mask = _op.clip(mask, 0, 1.0)
+
+        # In the event some values actually lie between 0 and 1 we use greater
+        # to ceil those all to 1.
+        # NOTE: The cast here is just to stop TVM from complaining. It will be
+        # replaced with the identity function further down the line
+        mask = _op.cast(_op.greater(mask, _expr.const(0, "float32")), "float32")
+
         value = _op.cast(_wrap_const(inputs[2]), input_types[0])
         value = _op.broadcast_to_like(value, mask)
 
         one_const = _expr.const(1, dtype="float32")
+        inverse_mask = _op.subtract(one_const, mask)
 
         # Original implementation
         # return _op.where(mask, value, inputs[0])
 
         # Implementaiton without using where operator in order to avoide numerical instability
         # for certain models caused by the future matmul (once where is decomposed)
-        return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
+        
+        # (!mask * x) + (mask*y)
+        return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
 
 
     def baddbmm(self, inputs, input_types):
