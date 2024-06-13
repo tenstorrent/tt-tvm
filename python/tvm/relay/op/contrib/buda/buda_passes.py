@@ -2391,7 +2391,127 @@ class ReconstructQDQGemmSequence(DFPatternCallback):
         dequant_act = tvm.relay.qnn.op.dequantize(add_act, scale_dequant, zp_dequant, axis=dequant_axis)
         
         return dequant_act
+
+
+class ReconstructQDQConv(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.weight = wildcard()
+        self.act = wildcard()
+        self.bias = wildcard()
+        
+        self.dequant_weight = is_op("qnn.dequantize")(self.weight, wildcard(), wildcard(),)
+        self.dequant_act = is_op("qnn.dequantize")(self.act, wildcard(), wildcard(),)
+
+        self.conv2d = is_op('nn.conv2d')(self.dequant_act, self.dequant_weight)
+        self.add = is_op("nn.bias_add")(self.conv2d, self.bias)
+        
+        self.pattern = self.add
     
+
+    def callback(self, pre, post, node_map):
+        
+        # inputs
+        act = node_map[self.act][0]
+        weight = node_map[self.weight][0]
+
+        # dequant parameters
+        activations_dequant = node_map[self.dequant_act][0]
+        weight_dequant = node_map[self.dequant_weight][0]
+        scale_activations = activations_dequant.args[1]
+        scale_weights = weight_dequant.args[1]
+        scale_dequant = scale_weights * scale_activations
+
+        zp_dequant    = activations_dequant.args[2]
+        dequant_axis = activations_dequant.attrs.axis
+
+
+        # conv
+        conv_attrs = node_map[self.conv2d][0].attrs
+        conv2d_act = tvm.relay.op.nn.conv2d(
+                act,
+                weight,
+                strides=conv_attrs.strides,
+                padding=conv_attrs.padding,
+                groups=conv_attrs.groups,
+                channels=conv_attrs.channels,
+                kernel_size=conv_attrs.kernel_size,
+                out_dtype='int32'
+            )
+        
+        # bias add
+        bias = node_map[self.bias][0]
+        # reshaping bias to match conv2d output
+        new_shape = list(node_map[self.bias][0].checked_type.concrete_shape) + [1, 1]
+        bias = tvm.relay.reshape(bias, new_shape)
+        # quantizing bias using act and weights scale and zp=0 as per https://arxiv.org/pdf/1712.05877
+        zp_bias = tvm.relay.expr.const(0)
+        bias = tvm.relay.qnn.op.quantize(bias, scale_dequant, zp_bias, axis=0, out_dtype='int32')
+        bias = tvm.relay.cast(bias, "int32")
+        add_act = tvm.relay.add(conv2d_act, bias)
+
+        dequant_act = tvm.relay.qnn.op.dequantize(add_act, scale_dequant, zp_dequant, axis=dequant_axis)
+
+        return dequant_act
+    
+
+class ReconstructQDQGemm(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.bias = wildcard()
+        self.weight = wildcard()
+        self.act = wildcard()
+        
+        self.dequant_w = is_op("qnn.dequantize")(self.weight, wildcard(), wildcard(),)
+        self.transpose1 = is_op("transpose")(self.dequant_w)
+        self.transpose2 = is_op("transpose")(self.transpose1)
+
+        self.dequant_act = is_op("qnn.dequantize")(self.act, wildcard(), wildcard(),)
+
+        self.gemm = is_op('nn.dense')(self.dequant_act, self.transpose2)
+        self.add = is_op("add")(self.gemm, self.bias)
+        self.pattern = self.add
+    
+
+    def callback(self, pre, post, node_map):
+        from tvm.relay.frontend.common import infer_shape
+        # inputs
+        act = node_map[self.act][0]
+        weight = node_map[self.weight][0]
+        
+        # dequant parameters
+        activations_dequant = node_map[self.dequant_act][0]
+        weight_dequant = node_map[self.dequant_w][0]
+        scale_activations = activations_dequant.args[1]
+        scale_weights = weight_dequant.args[1]
+        scale_dequant = scale_weights * scale_activations
+
+        zp_dequant    = activations_dequant.args[2]
+        dequant_axis = activations_dequant.attrs.axis
+        
+
+        transpose1_axes = node_map[self.transpose1][0].attrs.axes
+        transpose1_weights = tvm.relay.transpose(weight, axes=transpose1_axes)
+        #transpose2_axes = node_map[self.transpose2][0].attrs.axes
+        #transpose2_weights = tvm.relay.transpose(transpose1_weights, axes=transpose2_axes)
+
+        # gemm
+        gemm_act = tvm.relay.nn.matmul(act, transpose1_weights, out_dtype='int32')
+
+
+        # bias add
+        bias = node_map[self.bias][0]
+        # quantizing bias using act and weights scale and zp=0 as per https://arxiv.org/pdf/1712.05877
+        zp_bias = tvm.relay.expr.const(0)
+        bias = tvm.relay.qnn.op.quantize(bias, scale_dequant, zp_bias, axis=0, out_dtype='int32')
+        add_act = tvm.relay.add(gemm_act, bias)
+        
+
+        dequant_act = tvm.relay.qnn.op.dequantize(add_act, scale_dequant, zp_dequant, axis=dequant_axis)
+        
+        return dequant_act
+
 
 class RemoveQuantDequantSequence(DFPatternCallback):
     def __init__(self):
@@ -2404,6 +2524,62 @@ class RemoveQuantDequantSequence(DFPatternCallback):
         act = node_map[self.act][0]
         quant = node_map[self.quant][0]
         return node_map[self.act][0]
+
+
+class ReshapeQDQParameters(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        
+        self.quant = is_op("qnn.quantize")(self.act, wildcard(), wildcard(),)
+        self.dequant = is_op("qnn.dequantize")(self.quant, wildcard(), wildcard(),)
+        self.pattern = self.dequant
+
+
+    def reshape_to_match_input(self, parameter, input_values):
+        from tvm.relay.frontend.common import infer_shape
+        parameter_shape = infer_shape(parameter)
+        new_shape = [parameter_shape[0]] if len(parameter_shape) > 0 else [1]
+
+        input_shape = infer_shape(input_values)
+        while len(new_shape) < len(input_shape):
+            new_shape.append(1)
+        parameter = tvm.relay.reshape(parameter, new_shape)
+        parameter = tvm.relay.broadcast_to_like(parameter, input_values)                                                      
+        return parameter
+         
+
+    def callback(self, pre, post, node_map):
+        from tvm.relay.frontend.common import infer_shape
+        act = node_map[self.act][0]
+        
+        # quantization activations
+        orig_quant  = node_map[self.quant][0]
+        scale_quant = orig_quant.args[1]
+        scale_quant = self.reshape_to_match_input(scale_quant, act)
+        zp_quant    = orig_quant.args[2]
+        quant_axis  = orig_quant.attrs.axis
+        
+        quant_args = orig_quant.args
+        quant_args = [quant_arg for quant_arg in quant_args]
+        quant_args[1] = scale_quant
+        node_map[self.quant][0].args = quant_args
+        #quant_act   = tvm.relay.qnn.op.quantize(act, scale_quant, zp_quant, axis=quant_axis)
+        
+        orig_dequant  = node_map[self.dequant][0]
+        scale_dequant = orig_dequant.args[1]
+        scale_dequant = self.reshape_to_match_input(scale_dequant, act)
+        zp_dequant    = orig_dequant.args[2]
+        dequant_axis  = orig_dequant.attrs.axis
+
+        dequant_args = orig_dequant.args
+        dequant_args = [dequant_arg for dequant_arg in dequant_args]
+        dequant_args[1] = scale_dequant
+        node_map[self.quant][0].args = dequant_args
+        #dequant_act   = tvm.relay.qnn.op.dequantize(quant_act, scale_dequant, zp_dequant, axis=(0, 1, 2, 3))
+        
+        
+        return post
 
 
 class ReconstructOnnxQuantizedGelu(DFPatternCallback):
@@ -3525,7 +3701,7 @@ class SimplifyTransposeReshape(DFPatternCallback):
             if index != val:
                 count += 1
 
-        assert (count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point")
+        assert count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point"
         is_transpose_yz = len(transpose_axes) >= 3 and len(dims) >= 3 and (transpose_axes[-2] == dims[-3] and transpose_axes[-3] == dims[-2])
 
         if (
@@ -3966,7 +4142,7 @@ def _get_callback_name(callback):
     elif isinstance(callback, tvm.transform.Pass):
         return callback.info.name
     else:
-        raise NotImplementedError(f"Type of callback ({type(callback)}) not implemented")
+        raise NotImplementedError(f"Type of callback ({(callback)}) not implemented")
 
 
 def _run_pattern_callback(relay_module, callback, callback_name):
@@ -4063,9 +4239,13 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
-            ReconstructQDQConvSequence(),
-            ReconstructQDQGemmSequence(),
-            RemoveQuantDequantSequence(),
+            #ReconstructQDQConvSequence(),
+            #ReconstructQDQGemmSequence(),
+            #RemoveQuantDequantSequence(),
+            #ReshapeQDQParameters(),
+            ReconstructQDQConv(),
+            ReconstructQDQGemm(),
+            
             ReconstructOnnxQuantizedGelu(),
             DecomposeQnnConcat(),
             # DecomposeErf(),
