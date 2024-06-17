@@ -2297,7 +2297,6 @@ class ReconstructQDQConvSequence(DFPatternCallback):
         scale_bias = scale_act * scale_weights
         zp_bias = tvm.relay.expr.const(0)
         bias = tvm.relay.qnn.op.quantize(bias, scale_bias, zp_bias, axis=0, out_dtype='int32')
-        bias = tvm.relay.cast(bias, "int32")
         add_act = tvm.relay.add(conv2d_act, bias)
 
         
@@ -4245,7 +4244,6 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             #ReshapeQDQParameters(),
             ReconstructQDQConv(),
             ReconstructQDQGemm(),
-            
             ReconstructOnnxQuantizedGelu(),
             DecomposeQnnConcat(),
             # DecomposeErf(),
