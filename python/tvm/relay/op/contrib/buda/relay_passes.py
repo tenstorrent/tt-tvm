@@ -22,7 +22,7 @@ from loguru import logger
 
 
 def fskip_eliminate(expr):
-    if isinstance(expr, relay.expr.Call) and expr.op.name == "transpose":
+    if isinstance(expr, relay.expr.Call) and (expr.op.name == "transpose" or expr.op.name == "qnn.dequantize" or expr.op.name == "qnn.quantize"):
         return True
     return False
 
