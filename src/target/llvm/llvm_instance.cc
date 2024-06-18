@@ -45,7 +45,11 @@
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorOr.h>
+#if TVM_LLVM_VERSION >= 180
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
@@ -896,7 +900,11 @@ std::string LLVMTarget::GetTargetMetadata(const llvm::Module& module) {
   if (llvm::Metadata* tvm_target = module.getModuleFlag("tvm_target")) {
     auto* mdstr = llvm::cast<llvm::MDString>(tvm_target);
     llvm::StringRef meta = mdstr->getString();
+#if TVM_LLVM_VERSION >= 180
+    if (meta.starts_with("llvm")) {
+#else
     if (meta.startswith("llvm")) {
+#endif
       return meta.str();
     }
   }

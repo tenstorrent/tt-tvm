@@ -129,9 +129,15 @@ void CodeGenHexagon::InitTarget() {
   const auto hvx_length_feature = "+hvx-length";  // +hvx-length{64|128}b
   for (const std::string& f : llvm_target_->GetTargetFeatures()) {
     llvm::StringRef fs(f);
+#if TVM_LLVM_VERSION >= 180
+    if (!fs.starts_with(hvx_length_feature)) continue;
+
+    ICHECK(fs.ends_with("b")) << "malformed target feature: " << f;
+#else
     if (!fs.startswith(hvx_length_feature)) continue;
 
     ICHECK(fs.endswith("b")) << "malformed target feature: " << f;
+#endif
     int hvx_bytes = 0;
     size_t len_begin = std::strlen(hvx_length_feature);
     ICHECK(!fs.substr(len_begin, fs.size() - len_begin - 1).getAsInteger(10, hvx_bytes))
