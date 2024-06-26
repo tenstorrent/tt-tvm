@@ -3318,6 +3318,14 @@ class PyTorchOpConverter:
             mask = _expr.const(_infer_value(mask, {}))
         mask = _op.cast(mask, "float32")
 
+        disable_masked_fill_v2 = bool(int(os.environ.get("PYBUDA_DISABLE_MASKED_FILL_V2", 0)))
+        if disable_masked_fill_v2:
+            value = _op.cast(_wrap_const(inputs[2]), input_types[0])
+            value = _op.broadcast_to_like(value, mask)
+
+            one_const = _expr.const(1, dtype="float32")
+            return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
+
         # Pybuda will convert all cast ops to Identity. This can be an issue.
         # In pytorch, when the mask has float values, it treats 0 as False and 
         # everything else as True. We cannot assume that mask will contain only
