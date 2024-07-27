@@ -7203,7 +7203,7 @@ class GraphProto:
             if self._freeze_params:
                 self._nodes[init_tensor.name] = _expr.const(array)
             else:
-                if (
+                if "constant" in init_tensor.name.lower() or (
                     "weight" not in init_tensor.name
                     and "bias" not in init_tensor.name
                     and ("int" in array.dtype or "bool" in array.dtype)
