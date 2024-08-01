@@ -489,12 +489,12 @@ def duplicate_dequantize_nodes_in_onnx_graph(onnx_module):
             for i, consumer_name in enumerate(consumers):
                 new_node_name = node.name + f"_clone{i}"
                 new_output_name = output_name + f"_clone{i}"
-
                 cloned_node = onnx.helper.make_node(
                     node.op_type,
                     node.input,
                     [new_output_name],
-                    name=new_node_name
+                    name=new_node_name,
+                    axis=node.attribute[0].i
                 )
 
                 # Add the cloned node to the list of nodes to add
