@@ -3552,14 +3552,21 @@ class Where(OnnxOpConverter):
 
     @classmethod
     def _impl_v9(cls, inputs, attr, params):
+        
+        condition= inputs[0]
+        
+        condition = _op.cast(condition, "float32")
+        condition = _op.abs(condition)
+        condition = _op.clip(condition, 0, 1.0)
+        condition = _op.cast(_op.greater(condition, _expr.const(0, "float32")), "float32")
+
         # Handle -inf/inf values for where operator
         if isinstance(inputs[1], _expr.Constant) and list(analysis.free_vars(inputs[1])) == []:
             val = infer_value(inputs[1], {}).numpy()
-            if val.shape == ():
+            if val.shape == () and np.isinf(val):
                 val = np.sign(val) * 1e4
                 inputs[1] = _expr.const(val)
-        
-        return _op.where(*inputs)
+        return _op.where(condition, inputs[1], inputs[2])
 
 
 class Or(Elemwise):
