@@ -1124,8 +1124,21 @@ class PyTorchOpConverter:
     def elu(self, inputs, input_types):
         data = inputs[0]
         dtype = input_types[0]
-        alpha = _expr.const(-float(inputs[1]), dtype=dtype)
-        return alpha * _op.nn.relu(_expr.const(1, dtype=dtype) - _op.exp(data)) + _op.nn.relu(data)
+        alpha = _expr.const(float(inputs[1]), dtype=dtype)
+        data_shape = self.infer_shape(data)
+        one_const = _expr.Constant(tvm.nd.array(np.ones(data_shape).astype(dtype)))
+        zero_const = _expr.Constant(tvm.nd.array(np.zeros(data_shape).astype(dtype)))
+
+        # Calculate the exponential of values less than 0 in 'data' to avoid 'inf' values for higher numbers.
+        exp = _op.exp(_op.where(_op.less(data, zero_const), data, zero_const))
+
+        # Exponential Linear Unit (ELU) function:
+        #       ELU(data) =
+        #           - If data > 0: data
+        #           - If data <= 0: alpha * (exp(data) - 1)
+        subtract = _op.subtract(exp, one_const)
+        multiply = _op.multiply(alpha, subtract)
+        return _op.where(_op.greater(data, zero_const), data, multiply)
 
     def celu(self, inputs, input_types):
         data = inputs[0]
