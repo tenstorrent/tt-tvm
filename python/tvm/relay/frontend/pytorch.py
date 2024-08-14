@@ -4307,8 +4307,13 @@ class PyTorchOpConverter:
     def tril(self, inputs, input_types):
         x = inputs[0]
         x_shape = _infer_shape(x)
-
-        y = np.tril(np.ones(x_shape)).astype(_convert_tvm_to_np_dtype(input_types[0]))
+        diagonal = inputs[1]
+        
+        if isinstance(diagonal, tvm.relay.expr.Call):
+            diagonal = _infer_value(diagonal,{})
+            diagonal = diagonal.asnumpy().item()
+        
+        y = np.tril(np.ones(x_shape), k = diagonal).astype(_convert_tvm_to_np_dtype(input_types[0]))
         y = tvm.nd.array(y)
         y = tvm.relay.Constant(y)
 
@@ -5291,6 +5296,8 @@ def _convert_tvm_to_np_dtype(dtype):
         np_type = np.int8
     elif dtype == "uint8":
         np_type = np.uint8
+    elif dtype == "bool":
+        np_type = np.bool
     else:
         raise NotImplementedError("input_type {} is not handled yet".format(dtype))
     return np_type
