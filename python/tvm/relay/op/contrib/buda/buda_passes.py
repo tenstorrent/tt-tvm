@@ -2166,6 +2166,43 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
             cubic_alpha=-0.75,
         )
 
+class ReconstructOnnxResize2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape1 = is_op("reshape")(self.act)
+        self.bcast_to = is_op("broadcast_to")(self.reshape1)
+        self.pattern = is_op("reshape")(self.bcast_to)
+
+    def callback(self, pre, post, node_map):
+        
+        reshape1 = node_map[self.reshape1][0]
+        act = reshape1.args[0]
+        bcast_to = node_map[self.bcast_to][0]
+        reshape2 = node_map[self.pattern][0]
+
+        act_shape = [int(dim) for dim in act.checked_type.shape]
+        reshape1_shape = [int(dim) for dim in reshape1.attrs.newshape]
+        bcast_shape = [int(dim) for dim in bcast_to.attrs.shape]
+        reshape2_shape = [int(dim) for dim in reshape2.attrs.newshape]
+
+        if len(act_shape) != 4 or len(reshape1_shape) != 6 or len(bcast_shape) != 6 or len(reshape2_shape) != 4:
+            return post
+        
+        if reshape2_shape[-1] != bcast_shape[-1]*act_shape[-1] or reshape2_shape[-2] != bcast_shape[-3]*act_shape[-2]:
+            return post
+        
+        if reshape2_shape[-3] != act_shape[-3] or reshape2_shape[-4] != act_shape[-4]:
+            return post
+
+        new_resize = tvm.relay.image.resize2d(
+            act,
+            size=reshape2_shape[-2:],
+            layout="NCHW",
+            method="nearest_neighbor",
+        )
+        return new_resize
+
 class DecomposeMultiIndexAdvIndex(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
@@ -3928,6 +3965,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             ConvertExpandDimsToReshape(),
             DecomposeMultiAxisMean(),
             DecomposeMultiAxisSum(),
+            ReconstructOnnxResize2d(),
             DecomposeMultiAxisBroadcast(),
             RemoveRedundantTake(),
             RemoveRedundantReshape(),
