@@ -61,9 +61,6 @@ def extract_framework_model_outputs(
             
             framework_outputs = flatten_outputs(framework_outputs)
 
-        framework_outputs = (
-            act.float() if torch.is_floating_point(act) else act for act in framework_outputs
-        )
         framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
     elif framework == "tensorflow":
@@ -167,9 +164,6 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
         flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(
             inputs, input_names
         )
-        flattened_inputs = [
-            inp.float() if torch.is_floating_point(inp) else inp for inp in flattened_inputs
-        ]
 
     elif framework == "tensorflow":
         # The tensorflow trace automatically flattens inputs
