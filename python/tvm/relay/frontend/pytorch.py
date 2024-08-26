@@ -1108,6 +1108,10 @@ class PyTorchOpConverter:
     def elu(self, inputs, input_types):
         data = inputs[0]
         dtype = input_types[0]
+        disable_elu_handle_inf = bool(int(os.environ.get("PYBUDA_DISABLE_ELU_HANDLE_INF", 0)))
+        if disable_elu_handle_inf:
+            alpha = _expr.const(-float(inputs[1]), dtype=dtype)
+            return alpha * _op.nn.relu(_expr.const(1, dtype=dtype) - _op.exp(data)) + _op.nn.relu(data)
         alpha = _expr.const(float(inputs[1]), dtype=dtype)
         data_shape = self.infer_shape(data)
         one_const = _expr.Constant(tvm.nd.array(np.ones(data_shape).astype(dtype)))
