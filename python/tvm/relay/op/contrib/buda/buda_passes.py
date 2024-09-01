@@ -1390,7 +1390,18 @@ class DecomposeEinsum(DFPatternCallback):
 
             return out
 
-        elif match_einsum_pattern("ij, jk -> ik", equation) or match_einsum_pattern("ij, kr -> ir", equation):
+        elif match_einsum_pattern("ij, jk -> ik", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
+
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            return tvm.relay.nn.matmul(srcA, srcB)
+
+        elif match_einsum_pattern("ij, kr -> ir", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
 
