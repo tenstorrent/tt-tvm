@@ -40,11 +40,11 @@ class CreateJson(ExprVisitor):
         op = {}
         op["name"] = name
         op["epoch"] = 0
-        op["ir"] = "pybuda"
+        op["ir"] = "forge"
         op["unique_id"] = self.node_idx
         op["input_nodes"] = []
         op["output_nodes"] = []
-        op["pybuda"] = 1
+        op["forge"] = 1
         self.graph["nodes"][name] = op
         self.node_idx += 1
         return op
@@ -183,7 +183,7 @@ def convert_serialized_tvm_to_reportify_graph(mod):
 
 
 def dump_graph(mod, test_name, stage):
-    if bool(int(os.environ.get("PYBUDA_DISABLE_REPORTIFY_DUMP", "0"))):
+    if bool(int(os.environ.get("FORGE_DISABLE_REPORTIFY_DUMP", "0"))):
         return
 
     for global_var in mod.get_global_vars():
