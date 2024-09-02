@@ -478,7 +478,7 @@ class DecomposeConv1DToConv2D(DFPatternCallback):
                 strides=[post.attrs.strides[0], 1],
                 padding=[post.attrs.padding[0], 0, post.attrs.padding[1], 0],
                 # (TODO) Since weight kernel is 1 on unsqueezed dim, dilation shouldnt matter. This is needed because we dont support different
-                # dilation for each dim in pybuda conv2d.
+                # dilation for each dim in forge conv2d.
                 dilation=[post.attrs.dilation[0], post.attrs.dilation[0]],
                 groups=post.attrs.groups,
                 channels=post.attrs.channels,
@@ -1379,7 +1379,7 @@ class DecomposeEinsum(DFPatternCallback):
             srcA = node_map[self.act][0][0]
             srcB = node_map[self.act][0][1]
 
-            # have to sum over each axis one by one for pybuda
+            # have to sum over each axis one by one for forge
             B_sum = tvm.relay.sum(srcB, axis=[0])
             B_sum = tvm.relay.sum(B_sum, axis=[0])
 
@@ -3105,7 +3105,7 @@ class SimplifyReshape(DFPatternCallback):
 
         return post
 
-class ReplicatePyBudaReshapeTranspose(DFPatternCallback):
+class ReplicateForgeReshapeTranspose(DFPatternCallback):
     def __init__(self):
         super().__init__(rewrite_once=True, require_type=True)
         self.act = wildcard()
@@ -3779,9 +3779,9 @@ class PadSpecificBatchMatmulShapes(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         # Environment variable guard
-        if "PYBUDA_PAD_MM" not in os.environ:
+        if "FORGE_PAD_MM" not in os.environ:
             return post
-        tile_r_padding = ast.literal_eval(os.environ.get('PYBUDA_PAD_MM', "{}"))
+        tile_r_padding = ast.literal_eval(os.environ.get('FORGE_PAD_MM', "{}"))
         pre_node_map = construct_pre_node_map(self.pattern, pre)
         
         lhs = node_map[self.lhs][0]
@@ -3826,7 +3826,7 @@ class GQABroadcastReshape(DFPatternCallback):
 
     Where n_query_heads == n_kv_heads * n_kv_blocks. The problem with this subpattern is this broadcast that is 
     performed (bc1) which generates a 5D tensor with 4 dimensions that are not equal to 1. 
-    That bc output is then input to reshape1 and pybuda compiler has no way to decompose a reshape that is performed
+    That bc output is then input to reshape1 and forge compiler has no way to decompose a reshape that is performed
     on such input tensor. That is why we change this pattern so that this doesn't occur.
     
     Modification:
@@ -4008,7 +4008,7 @@ def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None,
             RemoveRedundantTranposesBetwenAvgPoolAndFlatteningReshape(),
             RemoveRedundantReshapeTransposeReshape(),
             SimplifyReshape(),
-            ReplicatePyBudaReshapeTranspose(),
+            ReplicateForgeReshapeTranspose(),
             CommuteIndexPastReshape(),
             AttemptRemoveStackWDim(),
             # RemoveRedundantBinaryStacks(),

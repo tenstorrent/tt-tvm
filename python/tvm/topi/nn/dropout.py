@@ -7,7 +7,7 @@ from tvm import te
 from .. import utils
 from .. import tag
 
-# For the purpose of compiling Dropout for Pybuda/Buda, the Topi implementation 
+# For the purpose of compiling Dropout for Forge/Buda, the Topi implementation 
 # would be a simple NOP to match the inference behavior. Actual dropout will be
 # implemented in Buda
 

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-from pybuda.tensor import to_tf_tensors
-from pybuda.tvm_utils import flatten_inputs, flatten_structured_output
+from forge.tensor import to_tf_tensors
+from forge.tvm_utils import flatten_inputs, flatten_structured_output
 import torch
 
 import numpy as np
@@ -23,7 +23,7 @@ import json
 
 from collections import OrderedDict
 from collections.abc import MutableMapping
-import pybuda
+import forge
 
 from json import JSONEncoder
 import os
@@ -40,7 +40,8 @@ from jax.experimental import jax2tf
 from jax.tools.jax_to_ir import tf_wrap_with_input_names
 import collections
 from transformers.utils.generic import ModelOutput
-from tvm.contrib.pybuda_utils import (
+from transformers.modeling_flax_utils import FlaxPreTrainedModel
+from tvm.contrib.forge_utils import (
     extract_framework_model_outputs, 
     extract_flatten_inputs, 
     construct_tvm_ir,
@@ -62,13 +63,13 @@ def retrieve_graph(json_graph, t):
     json_graph["param_names"][function_name] = t[2]
 
 @tvm.register_func
-def retrieve_pybuda_json_graph(*args):
+def retrieve_forge_json_graph(*args):
     t = tuple(args)
     global dev_json_graph
     retrieve_graph(dev_json_graph, t)
 
 @tvm.register_func
-def retrieve_pybuda_cpudevice_json_graph(*args):
+def retrieve_forge_cpudevice_json_graph(*args):
     t = tuple(args)
     global cpu_json_graph
     retrieve_graph(cpu_json_graph, t)
@@ -76,9 +77,9 @@ def retrieve_pybuda_cpudevice_json_graph(*args):
 
 def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=None, verify_cfg=None, input_names=[]):
     """
-    Loads TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
-    run whole compilation process from specific framework to the PyBuda graph representation, or
-    skip this compilation process and load serialize TVM graph which is already ported to PyBuda
+    Loads TVM graph ported to the Forge from other frameworks (TensorFlow, Pytorch). Can eather
+    run whole compilation process from specific framework to the Forge graph representation, or
+    skip this compilation process and load serialize TVM graph which is already ported to Forge
     by initial invocation.
 
     Parameters
@@ -114,7 +115,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
 
 def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, input_names=[], path=None, verify_cfg=None, framework=None):
     """
-    Compiles TVM graph ported to the PyBuda from other frameworks (TensorFlow, Pytorch). Can eather
+    Compiles TVM graph ported to the Forge from other frameworks (TensorFlow, Pytorch). Can eather
     run whole compilation process or only load serilized TVM graph and thus increase test performance.
 
     Parameters
@@ -272,11 +273,11 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     json_graphs = []
     if cpu_pre_function is not None:
         save_nid_to_input_idx(input_names, cpu_pre_json_graph) # Input order might not be preserved by TVM
-        cpu_pre_json_graph["num_pybuda_inputs"] = len(input_names)
+        cpu_pre_json_graph["num_forge_inputs"] = len(input_names)
         json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_pre_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
     else:
         save_nid_to_input_idx(input_names, dev_json_graph) # Input order might not be preserved by TVM
-        dev_json_graph["num_pybuda_inputs"] = len(input_names)
+        dev_json_graph["num_forge_inputs"] = len(input_names)
         
     json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
 
@@ -408,7 +409,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
         # If we have conv2d_transpose ops that are channel-last, tvm cannot execute the module, skip in this case
         skip_verify = has_op(mod['main'], "nn.conv2d_transpose", {"data_layout": "NHWC"})
         if skip_verify:
-            logger.warning("Module contains a channel-last nn.conv2d_transpose op, this is not supported in TVM (but may be supported in PyBuda). Skipping verification...")
+            logger.warning("Module contains a channel-last nn.conv2d_transpose op, this is not supported in TVM (but may be supported in Forge). Skipping verification...")
         else:
             verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)
 
@@ -423,7 +424,7 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
 
 
 def clean_names(json_graph, buda_params, param_name_lookup={}):
-    precursor = "tvmgen_default_pybuda_main_" if json_graph["device"] != "cpu" else "tvmgen_default_pybuda_cpudevice_main_"
+    precursor = "tvmgen_default_forge_main_" if json_graph["device"] != "cpu" else "tvmgen_default_forge_cpudevice_main_"
 
     def trim_count(name):
         for i in range(-1, -len(name), -1):
@@ -866,7 +867,7 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, layout="NCHW", outputs=output_list_)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
 
-    assert compiler_cfg.enable_tvm_constant_prop == True, "Pybuda Compile only support tf graphdef model with TVM parameter binding."
+    assert compiler_cfg.enable_tvm_constant_prop == True, "Forge Compile only support tf graphdef model with TVM parameter binding."
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
@@ -1060,9 +1061,9 @@ def get_auto_path(graph_hash, compiler_cfg, is_load):
         path to store/load graph
     """
 
-    auto_cache = int(os.environ.get("PYBUDA_ENABLE_TVM_CACHE", 0))
+    auto_cache = int(os.environ.get("FORGE_ENABLE_TVM_CACHE", 0))
     if bool(auto_cache) and compiler_cfg.tvm_graph_store_path == "" and compiler_cfg.tvm_graph_load_path == "":
-        assert auto_cache == -1 or auto_cache == 1, f"PYBUDA_ENABLE_TVM_CACHE value of {auto_cache} not understood. Set to 1 to enable cache, 0 to disable and -1 to recache module"
+        assert auto_cache == -1 or auto_cache == 1, f"FORGE_ENABLE_TVM_CACHE value of {auto_cache} not understood. Set to 1 to enable cache, 0 to disable and -1 to recache module"
         if auto_cache == -1 and is_load:
             auto_path = ""
         else:
@@ -1076,7 +1077,7 @@ def get_auto_path(graph_hash, compiler_cfg, is_load):
                 if len(split_string) > 2 and split_string[2] == "third_party/tvm":
                     tvm_short_cache = split_string[1][:8]
                     break
-            assert tvm_short_cache is not None, "Couild not find tvm submodule, are you running from pybuda git repo?"
+            assert tvm_short_cache is not None, "Couild not find tvm submodule, are you running from forge git repo?"
 
             auto_path = "generated_modules/tvm_cache/" + tvm_short_cache + "_" + graph_hash
     else:
@@ -1086,7 +1087,7 @@ def get_auto_path(graph_hash, compiler_cfg, is_load):
 
 def load_serialized_tvm_graph(compiler_cfg, graph_hash, framework):
     """
-    Loads serialized TVM graph representation ported to PyBuda in form of python dictionary.
+    Loads serialized TVM graph representation ported to Forge in form of python dictionary.
 
     Parameters
     ----------
@@ -1128,13 +1129,13 @@ def load_serialized_tvm_graph(compiler_cfg, graph_hash, framework):
 
 def serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework):
     """
-    Serializes TVM graph representation ported to PyBuda in form of JSON and stores it 
+    Serializes TVM graph representation ported to Forge in form of JSON and stores it 
     on the desired destination.
 
     Parameters
     ----------
     json_graph: Dictionary
-        Previously compiled TVM graph pored to PyBuda representation
+        Previously compiled TVM graph pored to Forge representation
 
     compiler_cfg: CompilerConfig
         Compiler configurations
