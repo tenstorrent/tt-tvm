@@ -2,22 +2,22 @@
 set -e # exit if a command fails
 
 if [ -n "$CI_PROJECT_DIR" ]; then
-  if [ -z $PYBUDA_ROOT ]; then export PYBUDA_ROOT=$CI_PROJECT_DIR; fi
+  if [ -z $FORGE_ROOT ]; then export FORGE_ROOT=$CI_PROJECT_DIR; fi
 else
-  if [ -z $PYBUDA_ROOT ]; then export PYBUDA_ROOT=`git rev-parse --show-toplevel`; fi
+  if [ -z $FORGE_ROOT ]; then export FORGE_ROOT=`git rev-parse --show-toplevel`; fi
 fi
 
-echo $PYBUDA_ROOT
-cd $PYBUDA_ROOT
-export TVM_HOME=$PYBUDA_ROOT/third_party/tvm
+echo $FORGE_ROOT
+cd $FORGE_ROOT
+export TVM_HOME=$FORGE_ROOT/third_party/tvm
 
 # Download / untar LLVM
-cd $PYBUDA_ROOT/third_party
-if [ ! -d "$PYBUDA_ROOT/third_party/llvm" ]; then
+cd $FORGE_ROOT/third_party
+if [ ! -d "$FORGE_ROOT/third_party/llvm" ]; then
   wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
-  LLVM_TAR=$PYBUDA_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
-  LLVM_DIR=$PYBUDA_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
-  tar -xf $LLVM_TAR && mv $LLVM_DIR $PYBUDA_ROOT/third_party/llvm && rm -f $LLVM_TAR
+  LLVM_TAR=$FORGE_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz
+  LLVM_DIR=$FORGE_ROOT/third_party/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
+  tar -xf $LLVM_TAR && mv $LLVM_DIR $FORGE_ROOT/third_party/llvm && rm -f $LLVM_TAR
 fi
 
 cd $TVM_HOME
@@ -28,7 +28,7 @@ cp $TVM_HOME/cmake/config.cmake $TVM_HOME/build
 cd $TVM_HOME/build
 
 # Link the LLVM thats just been downloaded
-LLVM_LINK=$PYBUDA_ROOT/third_party/llvm/bin/llvm-config
+LLVM_LINK=$FORGE_ROOT/third_party/llvm/bin/llvm-config
 sed -i "s#/usr/bin/llvm-config#$LLVM_LINK#g" $TVM_HOME/build/config.cmake
 
 if [[ "$TVM_BUILD_CONFIG" == "debug" ]]; then
@@ -42,7 +42,7 @@ cmake -DCMAKE_BUILD_TYPE=$TVM_BUILD_CONFIG $TVM_HOME
 make -j$(nproc)
 
 echo "TVM Built Successful"
-cd $PYBUDA_ROOT
+cd $FORGE_ROOT
 
 pip install -e third_party/tvm/python
 

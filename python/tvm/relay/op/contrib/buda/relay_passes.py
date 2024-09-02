@@ -32,7 +32,7 @@ def run_relay_compile_passes(relay_module, print_all=False):
     logger.trace("After InferType")
     logger.trace(relay_module.functions)
 
-    dump_flops = bool(int(os.environ.get("PYBUDA_SHOW_FLOPS_ESTIMATE", "0")))
+    dump_flops = bool(int(os.environ.get("FORGE_SHOW_FLOPS_ESTIMATE", "0")))
     if dump_flops:
         total_macs = analysis.get_total_mac_number(relay_module["main"])
         total_gflops = (total_macs * 2) / 1e9

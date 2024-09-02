@@ -4744,10 +4744,10 @@ class PyTorchOpConverter:
 
         L, S = query_shape[-2], key_shape[-2]
 
-        enable_flash_attention = bool(int(os.environ.get("PYBUDA_ENABLE_FLASH_ATTENTION", 0)))
+        enable_flash_attention = bool(int(os.environ.get("FORGE_ENABLE_FLASH_ATTENTION", 0)))
 
         if enable_flash_attention:
-            # Return a scaled_dot_product_attention op to PyBuda
+            # Return a scaled_dot_product_attention op to Forge
             assert scale is None, "Must not provide a scale factor"
             assert attn_mask is not None, "Explicit attn_mask should be set when is_causal=False"
             assert not is_causal, "Not supporting is_causal=True yet since we would need to generate causal mask."
