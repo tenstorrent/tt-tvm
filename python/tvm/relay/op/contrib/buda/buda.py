@@ -35,15 +35,15 @@ import networkx as nx
 
 def _register_external_op_helper_pytorch(op_name, compiler_cfg, supported=True):
     op = tvm.ir.op.Op.get(op_name)
-    if op.has_attr("target.pybuda_cpudevice"):
-        op.reset_attr("target.pybuda_cpudevice")
+    if op.has_attr("target.forge_cpudevice"):
+        op.reset_attr("target.forge_cpudevice")
 
-    @tvm.ir.register_op_attr(op_name, "target.pybuda_cpudevice")
+    @tvm.ir.register_op_attr(op_name, "target.forge_cpudevice")
     def _func_wrapper(expr):
         return compiler_cfg.enable_tvm_cpu_fallback
     return _func_wrapper
 
-def initialize_pybuda_cpudevice_ops(mod, compiler_cfg):
+def initialize_forge_cpudevice_ops(mod, compiler_cfg):
     ResetOpAttributes().visit(mod["main"])
     for op in compiler_cfg.cpu_fallback_ops:
         _register_external_op_helper_pytorch(op, compiler_cfg)
@@ -144,26 +144,26 @@ def channel_last_resize():
 
     return transpose_result_1
 
-@register_pattern_table("pybuda")
+@register_pattern_table("forge")
 def pattern_table():
-    matmul = ("pybuda.matmul", dense_to_matmul())
-    hslice = ("pybuda.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
+    matmul = ("forge.matmul", dense_to_matmul())
+    hslice = ("forge.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
     hstack = [
-        ("pybuda.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
-        ("pybuda.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
+        ("forge.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
+        ("forge.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
         ]
     binary_stack = [
-        ("pybuda.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
-        ("pybuda.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
+        ("forge.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
+        ("forge.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
     ]
-    adv_index = ("pybuda.adv_index", decompose_adv_index_input_tuple())
-    buda_conv2d_with_bias = ("pybuda.buda_conv2d_with_bias", merge_conv2d_with_bias())
-    buda_conv2d_transpose_with_bias = ("pybuda.buda_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
-    dropout = ("pybuda.dropout", dropout_tuple_get_item())
-    concatenate = ("pybuda.concatenate", decompose_concatenate())
+    adv_index = ("forge.adv_index", decompose_adv_index_input_tuple())
+    buda_conv2d_with_bias = ("forge.buda_conv2d_with_bias", merge_conv2d_with_bias())
+    buda_conv2d_transpose_with_bias = ("forge.buda_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
+    dropout = ("forge.dropout", dropout_tuple_get_item())
+    concatenate = ("forge.concatenate", decompose_concatenate())
 
-    # channel_last_maxpool2d = ("pybuda.channel_last_maxpool", channel_last_maxpool())
-    channel_last_resize2d = ("pybuda.channel_last_resize2d", channel_last_resize())
+    # channel_last_maxpool2d = ("forge.channel_last_maxpool", channel_last_maxpool())
+    channel_last_resize2d = ("forge.channel_last_resize2d", channel_last_resize())
     buda_patterns = [
         *hstack, 
         *binary_stack, 
@@ -217,11 +217,11 @@ tm_cpu_fallback_ops_of_interest = [
     "tile",
     "unravel_index",
     "where",
-    # PyBuda
-    "pybuda.adv_index",
-    "pybuda.binary_stack",
-    "pybuda.hslice",
-    "pybuda.hstack",
+    # Forge
+    "forge.adv_index",
+    "forge.binary_stack",
+    "forge.hslice",
+    "forge.hstack",
 ]
 
 # TM CPU Fallback ops which should not be included in fallback
@@ -255,10 +255,10 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.sparse_dense",
     "nn.upsampling",
     "nn.upsampling3d",
-    # PyBuda
-    "pybuda.buda_conv2d_transpose_with_bias",
-    "pybuda.buda_conv2d_with_bias",
-    "pybuda.matmul",
+    # Forge
+    "forge.buda_conv2d_transpose_with_bias",
+    "forge.buda_conv2d_with_bias",
+    "forge.matmul",
 ]
 
 class UpdateConstants(DFPatternCallback):
@@ -340,13 +340,13 @@ class CheckFallbackOps(ExprVisitor):
         return super().visit_op(op)
     
    
-class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
+class UnwrapForgeOpsForCPUFallback(ExprMutator):
     def __init__(self):
         super().__init__()
 
     def visit_call(self, call):
         if isinstance(call.op, tvm.relay.function.Function):
-            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.matmul":
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "forge_cpudevice.matmul":
                 if isinstance(call.args[0], tvm.relay.expr.Call) and isinstance(call.args[0], tvm.ir.op.Op) and call.args[0].op.name == "reshape":
                     arg0 = call.args[0].args[0]
                 else:
@@ -362,7 +362,7 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
                 logger.trace("CPU fallback on linear")
                 return super().visit(tvm.relay.nn.dense(arg0, arg1))
             
-            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.hslice":
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "forge_cpudevice.hslice":
                 # Get hslice input
                 if isinstance(call.args[0], tvm.relay.expr.Call):
                     arg0 = call.args[0]
@@ -386,7 +386,7 @@ class UnwrapPyBudaOpsForCPUFallback(ExprMutator):
                 logger.trace("CPU fallback on hslice")
                 return ops
             
-            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "pybuda_cpudevice.binary_stack" and "PartitionedFromPattern" in call.op.attrs and call.op.attrs["PartitionedFromPattern"] == "Tuple_stack_reshape_":
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "forge_cpudevice.binary_stack" and "PartitionedFromPattern" in call.op.attrs and call.op.attrs["PartitionedFromPattern"] == "Tuple_stack_reshape_":
                 # Get binary_stack input
                 arg0 = call.args[0] if len(call.args) > 0 else None
                 arg1 = call.args[1] if len(call.args) > 1 else None
@@ -414,8 +414,8 @@ class ResetOpAttributes(ExprVisitor):
         super().__init__()
 
     def visit_op(self, op):
-        if op.has_attr("target.pybuda_cpudevice"):
-            op.reset_attr("target.pybuda_cpudevice")
+        if op.has_attr("target.forge_cpudevice"):
+            op.reset_attr("target.forge_cpudevice")
         return super().visit_op(op)
 
 def node_hash(node):
@@ -513,8 +513,8 @@ class ArgFallbackFinder(ExprVisitor):
                     self.fallback_nodes = self.fallback_nodes | nx.ancestors(self.graph, arg_hash )
             
             # Special case, cpu matmul with doubly-transposed weights
-            if call_hash[1][0] == "pybuda.matmul":
-                if hasattr(call.args[1], "op") and call.args[1].op.name == "transpose": # first transpose is implicit in pybuda.matmul
+            if call_hash[1][0] == "forge.matmul":
+                if hasattr(call.args[1], "op") and call.args[1].op.name == "transpose": # first transpose is implicit in forge.matmul
                     self.fallback_nodes.add(node_hash(call.args[1]))
             
                  
@@ -577,14 +577,14 @@ class DetermineTarget(ExprMutator):
             if node_hash(call) in self.nodes_to_cpu_eval:
                 if isinstance(call.op, tvm.relay.function.Function):
                     self.graph_changed = True
-                    new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in call.op.attrs.items()}
+                    new_attrs = {k: (v if k != "Composite" else v.replace("forge", "forge_cpudevice")) for (k, v) in call.op.attrs.items()}
                     new_fn = call.op.with_attr(new_attrs)
                     logger.info(f"Changing {call.op.attrs['PartitionedFromPattern']}'s attr from {call.op.attrs['Composite']} to {new_fn.attrs['Composite']}")
                     return super().visit_call(tvm.relay.expr.Call(new_fn, call.args))
         elif node_hash(call) in self.nodes_to_cpu_eval and not isinstance(call.op, tvm.relay.function.Function) :
             try:
                 
-                tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                tvm.ir.register_op_attr(call.op.name, "target.forge_cpudevice", _cpu_eval, level=5)
             except:
                 pass
 
@@ -595,7 +595,7 @@ class DetermineTarget(ExprMutator):
                 call_node_ancestors = nx.ancestors(self.graph, node_hash(call))
                 for arg_index, arg in enumerate(call.args):
                     output_nodes = self.graph.out_degree(node_hash(arg))
-                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.pybuda_cpudevice") is not None and output_nodes == 1:
+                    if isinstance(arg, tvm.relay.expr.Call) and isinstance(arg.op, tvm.ir.op.Op) and arg.op.get_attr("target.forge_cpudevice") is not None and output_nodes == 1:
                         arg_ancestors = nx.ancestors(self.graph, node_hash(arg))
                         arg_ancestors.add(node_hash(arg))
                         non_arg_ancestors = call_node_ancestors - arg_ancestors
@@ -606,7 +606,7 @@ class DetermineTarget(ExprMutator):
                         self.nodes_to_cpu_eval.add(node_hash(call))
                         self.nodes_to_cpu_eval = self.nodes_to_cpu_eval | call_node_ancestors
                         try:
-                            tvm.ir.register_op_attr(call.op.name, "target.pybuda_cpudevice", _cpu_eval, level=5)
+                            tvm.ir.register_op_attr(call.op.name, "target.forge_cpudevice", _cpu_eval, level=5)
                         except:
                             pass
                         break
@@ -864,13 +864,13 @@ class ConstructDiGraph(ExprVisitor):
     def visit_call(self, call):
         node = node_hash(call)
         self.node_indexer.count_visit("call", node)
-        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.pybuda_cpudevice") is not None:
+        if isinstance(call.op, tvm.ir.op.Op) and call.op.get_attr("target.forge_cpudevice") is not None:
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
         elif (
             isinstance(call.op, tvm.relay.function.Function) 
             and isinstance(call.op.body, tvm.relay.expr.TupleGetItem)
-            and call.op.body.tuple_value.op.get_attr("target.pybuda_cpudevice") is not None
+            and call.op.body.tuple_value.op.get_attr("target.forge_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.tuple_value.op} to fallback")
@@ -878,11 +878,11 @@ class ConstructDiGraph(ExprVisitor):
         elif (
             isinstance(call.op, tvm.relay.function.Function) 
             and not isinstance(call.op.body, tvm.relay.expr.TupleGetItem)
-            and call.op.body.op.get_attr("target.pybuda_cpudevice") is not None
+            and call.op.body.op.get_attr("target.forge_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op.body.op} to fallback")
-            if node[1][0] == "pybuda.adv_index":
+            if node[1][0] == "forge.adv_index":
                 logger.trace("Special case: adv_index. If none of the ancestors of the indices are float, fallback all ancestors to indices")
                 index_checker = IndexChecker()
                 index_checker.visit(call.args[1])
@@ -904,7 +904,7 @@ class ConstructDiGraph(ExprVisitor):
             and isinstance(call.args[0], tvm.relay.expr.Call)
             and isinstance(call.args[0].op, tvm.ir.op.Op)
             and call.args[0].op.name == "embedding"
-            and call.args[0].op.get_attr("target.pybuda_cpudevice") is not None
+            and call.args[0].op.get_attr("target.forge_cpudevice") is not None
         ):
             self.fallback_nodes.add(node)
             logger.info(f"Adding: {call.op} to fallback")
@@ -934,10 +934,10 @@ class MainFunctionFinder(ExprVisitor):
 
     def visit_call(self, call):
         if isinstance(call.op, tvm.relay.expr.GlobalVar):
-            if "pybuda_cpudevice_main" in call.op.name_hint:
+            if "forge_cpudevice_main" in call.op.name_hint:
                 self.funcs.append(call.op)
                 self.cpu_funcs.append(call.op)
-            elif "pybuda_main" in call.op.name_hint:
+            elif "forge_main" in call.op.name_hint:
                 self.funcs.append(call.op)
                 self.tt_funcs.append(call.op)
         super().visit_call(call)
@@ -1454,7 +1454,7 @@ def merge_functions(mod, funcs_to_merge, new_name):
                 new_type_params.append(type_param)
     
     new_fn = tvm.relay.Function(new_params, new_body)
-    new_attrs = {k: (v if k != "Composite" else v.replace("pybuda", "pybuda_cpudevice")) for (k, v) in mod[funcs_to_merge[0]].attrs.items()}
+    new_attrs = {k: (v if k != "Composite" else v.replace("forge", "forge_cpudevice")) for (k, v) in mod[funcs_to_merge[0]].attrs.items()}
     new_attrs["global_symbol"] = new_name
     new_fn = new_fn.with_attr(new_attrs)
     
@@ -2004,7 +2004,7 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
     return mod
 
 def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
-    initialize_pybuda_cpudevice_ops(mod, compiler_cfg)
+    initialize_forge_cpudevice_ops(mod, compiler_cfg)
 
     with tvm.transform.PassContext(opt_level=5):
         logger.trace("partition_for_buda:: At Entry")
@@ -2041,7 +2041,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         if compiler_cfg.enable_tvm_cpu_fallback:
             fallback_on_cpu(mod, compiler_cfg, input_names)
 
-        mod = tvm.transform.Sequential([transform.AnnotateTarget(["pybuda_cpudevice", "pybuda"])])(mod)
+        mod = tvm.transform.Sequential([transform.AnnotateTarget(["forge_cpudevice", "forge"])])(mod)
         logger.trace("After AnnotateTarget")
         logger.trace(mod.functions)
 
@@ -2055,8 +2055,8 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
 
         for k, v in mod.global_var_map_.items():
             if "cpudevice" in k:
-                mod[v] = UnwrapPyBudaOpsForCPUFallback().visit(mod[v])
-        logger.trace("After UnwrapPyBudaOpsForCPUFallback")
+                mod[v] = UnwrapForgeOpsForCPUFallback().visit(mod[v])
+        logger.trace("After UnwrapForgeOpsForCPUFallback")
         logger.trace(mod.functions)
 
         # Unravel f(x) = x functions
@@ -2080,9 +2080,9 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
         # now we have the pre/post functions figured out
         # merge the pre-functions, tt-functions, and post-functions into one each
         #     i.e we have one cpu pre function, one cpu post function, and one tt function
-        mod = merge_functions(mod, partition_finder.cpu_pre_funcs, "tvmgen_default_pybuda_cpudevice_main_pre")
-        mod = merge_functions(mod, partition_finder.tt_funcs, "tvmgen_default_pybuda_main")
-        mod = merge_functions(mod, partition_finder.cpu_post_funcs, "tvmgen_default_pybuda_cpudevice_main_post")
+        mod = merge_functions(mod, partition_finder.cpu_pre_funcs, "tvmgen_default_forge_cpudevice_main_pre")
+        mod = merge_functions(mod, partition_finder.tt_funcs, "tvmgen_default_forge_main")
+        mod = merge_functions(mod, partition_finder.cpu_post_funcs, "tvmgen_default_forge_cpudevice_main_post")
         
         # Assert that merge_functions merges cpu pre/post into at most one each, and that there is exactly one tt function
         func_finder = MainFunctionFinder()
