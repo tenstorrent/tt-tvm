@@ -195,7 +195,7 @@ def dump_graph(mod, test_name, stage):
         tvm_subdir = path + get_tvm_reports_relpath()
         os.makedirs(tvm_subdir + stage + "_graphs", exist_ok=True)
 
-        filename = tvm_subdir + stage + "_" + global_var.name_hint + "_"  + ".buda"
+        filename = tvm_subdir + stage + "_" + global_var.name_hint + "_"  + ".forge"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, "w") as f:
             f.write(tvm_graph)

@@ -34,7 +34,7 @@ import onnx
 import onnx.numpy_helper
 import mxnet as mx
 from tvm.relay.expr import Tuple
-from tvm.relay.op.contrib.buda.buda import verify_tvm_compile
+from tvm.relay.op.contrib.forge.forge import verify_tvm_compile
 
 from jax.experimental import jax2tf
 from jax.tools.jax_to_ir import tf_wrap_with_input_names
@@ -144,31 +144,31 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, input_names=[], 
     cpu_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "cpu"}
   
     if framework == "pytorch":
-        json_graphs, inputs = compile_pytorch_for_buda(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
+        json_graphs, inputs = compile_pytorch_for_forge(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
     elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
-        json_graphs, inputs = compile_tf_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, inputs = compile_tf_for_forge(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "tf_graphdef":
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             tf_inputs = tuple(None if t is None else tf.convert_to_tensor(t.detach().numpy()) for t in inputs)
         else:
             tf_inputs = inputs
-        json_graphs = compile_tf_graphdef_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg,)
+        json_graphs = compile_tf_graphdef_for_forge(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg,)
     elif framework == "onnx":
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         onnx_inputs = [x.detach().numpy() for x in inputs]
-        json_graphs, _ = compile_onnx_for_buda(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, _ = compile_onnx_for_forge(module, path, *onnx_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "mxnet":
         assert all([isinstance(x, torch.Tensor) for x in inputs])
         mxnet_inputs = [mx.nd.array(x.detach().numpy()) for x in inputs]
-        json_graphs = compile_mxnet_for_buda(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs = compile_mxnet_for_forge(module, *mxnet_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "jax":
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
-        json_graphs, inputs = compile_jax_for_buda(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, inputs = compile_jax_for_forge(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "tflite":
         tf_inputs = to_tf_tensors(inputs, force_float32=True)
-        json_graphs, inputs = compile_tflite_for_buda(module, path, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+        json_graphs, inputs = compile_tflite_for_forge(module, path, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     else:
         raise RuntimeError(f"Unsupported module type {type(module)}")
 
@@ -189,7 +189,7 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
 
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
-def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, param_name_lookup={}, graph_hash=""):
+def extract_graphs(partitioned_mod, forge_params, input_names, weight_names, param_name_lookup={}, graph_hash=""):
     mod = partitioned_mod["main"]
     main_graph = str(mod.astext())
     cpu_json_graph["hash"] = graph_hash
@@ -237,18 +237,18 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
             del cpu_pre_json_graph["functions"][func]
 
         cpu_pre_json_graph["params"] = {}
-        for function_name in buda_params.keys():
+        for function_name in forge_params.keys():
             if function_name == cpu_pre_function:
-                cpu_pre_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_pre_json_graph["param_names"][function_name])})
+                cpu_pre_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(forge_params[function_name].items(), cpu_pre_json_graph["param_names"][function_name])})
     else:
         cpu_pre_json_graph = {"graph":""}
 
     dev_json_graph["graph"] = dev_json_graph["functions"][device_function]
     
     dev_json_graph["params"] = {}
-    for function_name in buda_params.keys():
+    for function_name in forge_params.keys():
         if function_name in dev_json_graph["param_names"]:
-            dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+            dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(forge_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
     if cpu_post_function is not None:
         cpu_post_json_graph = copy.deepcopy(cpu_json_graph)
@@ -264,9 +264,9 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
             del cpu_post_json_graph["functions"][func]
 
         cpu_post_json_graph["params"] = {}
-        for function_name in buda_params.keys():
+        for function_name in forge_params.keys():
             if function_name == cpu_post_function:
-                cpu_post_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), cpu_post_json_graph["param_names"][function_name])})
+                cpu_post_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(forge_params[function_name].items(), cpu_post_json_graph["param_names"][function_name])})
     else:
         cpu_post_json_graph = {"graph":""}
 
@@ -274,15 +274,15 @@ def extract_graphs(partitioned_mod, buda_params, input_names, weight_names, para
     if cpu_pre_function is not None:
         save_nid_to_input_idx(input_names, cpu_pre_json_graph) # Input order might not be preserved by TVM
         cpu_pre_json_graph["num_forge_inputs"] = len(input_names)
-        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_pre_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_pre_json_graph, forge_params=forge_params, param_name_lookup=param_name_lookup)))
     else:
         save_nid_to_input_idx(input_names, dev_json_graph) # Input order might not be preserved by TVM
         dev_json_graph["num_forge_inputs"] = len(input_names)
         
-    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+    json_graphs.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, forge_params=forge_params, param_name_lookup=param_name_lookup)))
 
     if cpu_post_json_graph["graph"] != "":
-        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_post_json_graph, buda_params=buda_params, param_name_lookup=param_name_lookup)))
+        json_graphs.append(copy.deepcopy(clean_names(json_graph=cpu_post_json_graph, forge_params=forge_params, param_name_lookup=param_name_lookup)))
 
     return json_graphs
 
@@ -330,7 +330,7 @@ class ConvertEmulatedDtypes:
         for inp, df in zip(self.flatten_object(self.inputs), self.input_dfs):
             inp.data = inp.data.to(df)
 
-def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
+def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
     training_mode = torchmod.training
 
     with ConvertEmulatedDtypes(torchmod, inputs):
@@ -342,7 +342,7 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
             verify_cfg=verify_cfg,
         )
 
-        # (Temporary): Remove when buda supports dropout
+        # (Temporary): Remove when forge supports dropout
         if training_mode and compiler_cfg.enable_tvm_dropout == False:
             torchmod.eval()
 
@@ -387,22 +387,22 @@ def compile_pytorch_for_buda(torchmod, *inputs, graph_name, compiler_cfg, verify
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
     
-    # Compile TVM for Buda
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    # Compile TVM for Forge
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     if training_mode:
         torchmod.train()
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, torchmod.state_dict().keys(), graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, flattened_input_names, torchmod.state_dict().keys(), graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
 
-def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_names = [], return_params=False, compiler_cfg=None, verify_cfg=None):
+def compile_tvm_for_forge(mod, params, inputs, golden_outputs, graph_name, input_names = [], return_params=False, compiler_cfg=None, verify_cfg=None):
     target = "llvm"
     verify_args = {'inputs': inputs, 'framework_outputs': golden_outputs, 'verify_cfg': verify_cfg}
-    mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name, **verify_args)
+    mod, params = tvm.relay.op.contrib.compile_for_forge(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
     if verify_cfg is not None and verify_cfg.verify_tvm_compile:
         assert compiler_cfg.convert_framework_params_to_tvm, "Cannot verify TVM compile without converting framework params to relay"
@@ -411,19 +411,19 @@ def compile_tvm_for_buda(mod, params, inputs, golden_outputs, graph_name, input_
         if skip_verify:
             logger.warning("Module contains a channel-last nn.conv2d_transpose op, this is not supported in TVM (but may be supported in Forge). Skipping verification...")
         else:
-            verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_buda", verify_cfg=verify_cfg)
+            verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_forge", verify_cfg=verify_cfg)
 
-    # Reconstruct Ops + export buda graph
-    mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
+    # Reconstruct Ops + export forge graph
+    mod, forge_params = tvm.relay.op.contrib.forge.partition_for_forge(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
     tvm.relay.build_module.build(mod, target=target, params=params)
 
     if return_params:
-        return mod, buda_params
+        return mod, forge_params
     else:
         return mod
 
 
-def clean_names(json_graph, buda_params, param_name_lookup={}):
+def clean_names(json_graph, forge_params, param_name_lookup={}):
     precursor = "tvmgen_default_forge_main_" if json_graph["device"] != "cpu" else "tvmgen_default_forge_cpudevice_main_"
 
     def trim_count(name):
@@ -459,7 +459,7 @@ def clean_names(json_graph, buda_params, param_name_lookup={}):
 
     return json_graph
 
-def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     import onnxruntime as ort
     
     assert path != None, "Onnx compile needs path to onnx file on disk."
@@ -508,16 +508,16 @@ def compile_onnx_for_buda(onnx_mod, path, *inputs, graph_name, compiler_cfg, ver
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     weight_names = [weight.name for weight in onnx_mod.graph.initializer]
-    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, weight_names, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, weight_names, graph_hash=m.hexdigest())
 
     return json_graphs, inputs
 
 
 
-def compile_tflite_for_buda(module, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_tflite_for_forge(module, path, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     
     assert path != None, "TFLite compile needs path to .tflite file on disk."
     tflite_model_buf = open(path, "rb").read()
@@ -573,9 +573,9 @@ def compile_tflite_for_buda(module, path, *inputs, graph_name, compiler_cfg, ver
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
-    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, [], graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, [], graph_hash=m.hexdigest())
 
     return json_graphs, inputs
 
@@ -620,7 +620,7 @@ def get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,):
         return graph_def, tf_func
 
 
-def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_jax_for_forge(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     # Extract framework model outputs
     framework_outputs = extract_framework_model_outputs(
         framework="jax",
@@ -673,8 +673,8 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
     # Construct NumPy inputs
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
 
-    # Compile TVM for Buda
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    # Compile TVM for Forge
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     # Extract Graphs (TT, CPU, ...)
     def flatten_params(params, parent_key="", sep="."):
@@ -697,12 +697,12 @@ def compile_jax_for_buda(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cfg
             model_params = jaxmodel.variables['params']._dict
     
     weight_names = list(flatten_params(model_params).keys())
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names,weight_names, param_name_lookup, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, flattened_input_names,weight_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
 
-def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_tf_for_forge(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     # Extract framework model outputs
     framework_outputs = extract_framework_model_outputs(
         framework="tensorflow",
@@ -759,17 +759,17 @@ def compile_tf_for_buda(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=Non
     # Construct NumPy inputs
     np_inputs = {i : None if x is None else x.numpy() for i, x in  zip(flattened_input_names, flattened_inputs)}
 
-    # Compile TVM for Buda
-    partitioned_mod, buda_params = compile_tvm_for_buda(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    # Compile TVM for Forge
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     
     # Extract Graphs (TT, CPU, ...)
     weight_names = [weight.name for weight in tfmod.weights]
-    json_graphs = extract_graphs(partitioned_mod, buda_params, flattened_input_names, weight_names, param_name_lookup, graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, flattened_input_names, weight_names, param_name_lookup, graph_hash=m.hexdigest())
 
     return json_graphs, flattened_inputs
 
 # TODO: Verify graphdef output vs. TVM output
-def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
+def compile_tf_graphdef_for_forge(graph_def, *inputs, graph_name, compiler_cfg,):
     output_list_ = compiler_cfg.framework_model_output_names
     # framework_outputs = tfmod(*inputs)
     # if not isinstance(framework_outputs, (list, tuple)):
@@ -811,19 +811,19 @@ def compile_tf_graphdef_for_buda(graph_def, *inputs, graph_name, compiler_cfg,):
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
     target = "llvm"
-    mod, params = tvm.relay.op.contrib.compile_for_buda(mod, target=target, params=params, graph_name=graph_name)
+    mod, params = tvm.relay.op.contrib.compile_for_forge(mod, target=target, params=params, graph_name=graph_name)
 
-    # Reconstruct Ops + export buda graph
-    partitioned_mod, buda_params = tvm.relay.op.contrib.buda.partition_for_buda(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
+    # Reconstruct Ops + export forge graph
+    partitioned_mod, forge_params = tvm.relay.op.contrib.forge.partition_for_forge(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
 
     tvm.relay.build_module.build(partitioned_mod, target=target, params=params)
 
-    json_graphs = extract_graphs(partitioned_mod, buda_params, input_names, [], graph_hash=m.hexdigest())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, [], graph_hash=m.hexdigest())
 
     return json_graphs
 
 
-def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg=None):
+def compile_mxnet_for_forge(module, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     framework_outputs = []
     if verify_cfg is not None and verify_cfg.verify_tvm_compile:
         framework_outputs = module(*inputs)
@@ -862,18 +862,18 @@ def compile_mxnet_for_buda(module, *inputs, graph_name, compiler_cfg, verify_cfg
         propped_params = {k : (v, True) for k, v, in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
-    _, buda_params = compile_tvm_for_buda(mod, params, input_name_to_tensor, framework_outputs, input_names=list(input_dict.keys()), graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+    _, forge_params = compile_tvm_for_forge(mod, params, input_name_to_tensor, framework_outputs, input_names=list(input_dict.keys()), graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     dev_json_graph["hash"] = m.hexdigest()
     dev_json_graph["params"] = {}
-    for function_name in buda_params.keys():
-        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(buda_params[function_name].items(), dev_json_graph["param_names"][function_name])})
+    for function_name in forge_params.keys():
+        dev_json_graph["params"].update({name:v.numpy() for (k, v), name in zip(forge_params[function_name].items(), dev_json_graph["param_names"][function_name])})
 
     dev_functions = list(dev_json_graph["functions"].keys())
     dev_json_graph["graph"] = dev_json_graph["functions"][dev_functions[0]]
 
     json_graph = []
-    json_graph.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, buda_params=buda_params)))
+    json_graph.append(copy.deepcopy(clean_names(json_graph=dev_json_graph, forge_params=forge_params)))
     return json_graph
 
 

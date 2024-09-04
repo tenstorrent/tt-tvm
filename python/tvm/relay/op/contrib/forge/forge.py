@@ -20,7 +20,7 @@ from tvm.target.compilation_config import make_compilation_config
 from ....dataflow_pattern import wildcard, is_op
 from ..register import register_pattern_table
 from .reportify import dump_graph
-from .buda_passes import run_buda_compile_passes
+from .forge_passes import run_forge_compile_passes
 from .relay_passes import run_relay_compile_passes
 from .utils import *
 
@@ -49,7 +49,7 @@ def initialize_forge_cpudevice_ops(mod, compiler_cfg):
         _register_external_op_helper_pytorch(op, compiler_cfg)
     _register_external_op_helper_pytorch("scatter_elements", compiler_cfg)
 
-def nn_layernorm_to_buda_layernorm():
+def nn_layernorm_to_forge_layernorm():
     act = wildcard()
     return is_op("layernorm")
 
@@ -157,26 +157,26 @@ def pattern_table():
         ("forge.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
     ]
     adv_index = ("forge.adv_index", decompose_adv_index_input_tuple())
-    buda_conv2d_with_bias = ("forge.buda_conv2d_with_bias", merge_conv2d_with_bias())
-    buda_conv2d_transpose_with_bias = ("forge.buda_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
+    forge_conv2d_with_bias = ("forge.forge_conv2d_with_bias", merge_conv2d_with_bias())
+    forge_conv2d_transpose_with_bias = ("forge.forge_conv2d_transpose_with_bias", merge_conv2d_transpose_with_bias())
     dropout = ("forge.dropout", dropout_tuple_get_item())
     concatenate = ("forge.concatenate", decompose_concatenate())
 
     # channel_last_maxpool2d = ("forge.channel_last_maxpool", channel_last_maxpool())
     channel_last_resize2d = ("forge.channel_last_resize2d", channel_last_resize())
-    buda_patterns = [
+    forge_patterns = [
         *hstack, 
         *binary_stack, 
         hslice, 
         adv_index, 
         matmul, 
-        buda_conv2d_with_bias,
-        buda_conv2d_transpose_with_bias,
+        forge_conv2d_with_bias,
+        forge_conv2d_transpose_with_bias,
         dropout,
         concatenate
     ]
 
-    return buda_patterns
+    return forge_patterns
 
 # TM CPU Fallback ops of interest. Ones that are valuable 
 # to be included as additional fallback nodes
@@ -256,8 +256,8 @@ tm_cpu_fallback_ops_to_not_include = [
     "nn.upsampling",
     "nn.upsampling3d",
     # Forge
-    "forge.buda_conv2d_transpose_with_bias",
-    "forge.buda_conv2d_with_bias",
+    "forge.forge_conv2d_transpose_with_bias",
+    "forge.forge_conv2d_with_bias",
     "forge.matmul",
 ]
 
@@ -1086,7 +1086,7 @@ def verify_outputs(framework_outputs, relay_outputs, compile_location, rtol=1e-0
 def verify_tvm_compile(mod, params, inputs, target, framework_outputs, compile_location, verify_cfg=None):
     relay_outputs = get_relay_output(mod, params, inputs, target)
 
-    # Verify compile passes (original relay passes + buda passes)
+    # Verify compile passes (original relay passes + forge passes)
     if verify_cfg:
         verify_outputs(framework_outputs, relay_outputs, compile_location, rtol=verify_cfg.rtol, atol=verify_cfg.atol, pcc=verify_cfg.pcc)
     else:
@@ -1119,7 +1119,7 @@ def warn_of_int_comparisons(mod):
     warner = CompareWarner()
     rewrite(warner, mod['main'])
     
-def compile_for_buda(relay_module, graph_name, target='llvm', params=None, inputs=None, framework_outputs=None, verify_cfg=None):
+def compile_for_forge(relay_module, graph_name, target='llvm', params=None, inputs=None, framework_outputs=None, verify_cfg=None):
 
     if not isinstance(relay_module, (IRModule, _function.Function)):
         raise ValueError("Type of input parameter mod must be tvm.IRModule")
@@ -1142,8 +1142,8 @@ def compile_for_buda(relay_module, graph_name, target='llvm', params=None, input
 
         relay_module = run_relay_compile_passes(relay_module)
         dump_graph(relay_module, graph_name, "after_relay_passes")
-        compiled_relay_module = run_buda_compile_passes(relay_module, params, inputs, target, framework_outputs, verify_cfg)
-        dump_graph(compiled_relay_module, graph_name, "after_buda_passes")
+        compiled_relay_module = run_forge_compile_passes(relay_module, params, inputs, target, framework_outputs, verify_cfg)
+        dump_graph(compiled_relay_module, graph_name, "after_forge_passes")
         
         # Integer comparisons may lead to incorrect results on HW
         warn_of_int_comparisons(compiled_relay_module)
@@ -2003,11 +2003,11 @@ def handle_inter_func_passthrough(mod, cpu_pre_func, tt_func, cpu_post_func):
     mod = tvm.transform.Sequential([transform.InferType()])(mod)
     return mod
 
-def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
+def partition_for_forge(mod, graph_name, compiler_cfg, input_names=[]):
     initialize_forge_cpudevice_ops(mod, compiler_cfg)
 
     with tvm.transform.PassContext(opt_level=5):
-        logger.trace("partition_for_buda:: At Entry")
+        logger.trace("partition_for_forge:: At Entry")
         logger.trace(mod.functions)
         
         mod = tvm.transform.Sequential([transform.InferType()])(mod)
@@ -2144,7 +2144,7 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
             print("Operators: " + str(unsupported_op_names) + " are unsupported.")
             assert False
 
-        assert len(mod.global_var_map_) > 1, f"No buda compatible graph can be generated"
+        assert len(mod.global_var_map_) > 1, f"No forge compatible graph can be generated"
 
         constant_updator = UpdateConstants()
 
@@ -2165,6 +2165,6 @@ def partition_for_buda(mod, graph_name, compiler_cfg, input_names=[]):
                 zero_mtx = tvm.nd.array(np.zeros(param_val_np.shape).astype(param_val.dtype))
                 params[partition_key][param_key] = zero_mtx
 
-    dump_graph(mod, graph_name, "after_buda_partition")
+    dump_graph(mod, graph_name, "after_forge_partition")
         
     return mod, params

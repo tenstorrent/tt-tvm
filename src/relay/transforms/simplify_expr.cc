@@ -395,7 +395,7 @@ class SimplifyTranspose : public DFPatternRewrite {
     }
 
     if (need_transpose) {
-      // Buda can only support single axis transpose for now
+      // Forge can only support single axis transpose for now
       return post;
     }
     return MakeTranspose(x, axes);

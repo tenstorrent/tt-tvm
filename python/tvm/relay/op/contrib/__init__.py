@@ -31,7 +31,7 @@ from .tensorrt import *
 from .cutlass import *
 from .clml import *
 from .mrvl import *
-from .buda.buda import *
-from .buda.buda_passes import *
-from .buda.relay_passes import *
-from .buda.utils import *
+from .forge.forge import *
+from .forge.forge_passes import *
+from .forge.relay_passes import *
+from .forge.utils import *
