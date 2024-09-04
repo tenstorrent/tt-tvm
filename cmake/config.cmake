@@ -251,8 +251,8 @@ set(USE_ROCBLAS OFF)
 # Whether use contrib sort
 set(USE_SORT ON)
 
-# Buda
-set(USE_BUDA_CODEGEN ON)
+# Forge
+set(USE_FORGE_CODEGEN ON)
 
 # Whether to use Arm Compute Library (ACL) codegen
 # We provide 2 separate flags since we cannot build the ACL runtime on x86.

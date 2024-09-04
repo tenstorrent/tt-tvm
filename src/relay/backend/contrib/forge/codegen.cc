@@ -26,12 +26,12 @@ namespace contrib {
 using namespace backend;
 
 
-class BudaJSONSerializer : public backend::contrib::JSONSerializer {
+class ForgeJSONSerializer : public backend::contrib::JSONSerializer {
   using JSONGraphNode = tvm::runtime::json::JSONGraphNode;
   using JSONGraphNodeEntry = tvm::runtime::json::JSONGraphNodeEntry;
 
  public:
-  BudaJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
+  ForgeJSONSerializer(const std::string& symbol, const Expr& expr) : JSONSerializer(symbol, expr) {}
 
   std::vector<JSONGraphNodeEntry> VisitExpr_(const CallNode* cn) override {
     Expr expr = GetRef<Expr>(cn);
@@ -44,16 +44,16 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
     } else if (const auto* fn = cn->op.as<FunctionNode>()) {
       auto comp = fn->GetAttr<String>(attr::kComposite);
       auto body = fn->body.as<CallNode>();
-      ICHECK(comp.defined()) << "Buda JSON runtime only supports composite functions.";
+      ICHECK(comp.defined()) << "Forge JSON runtime only supports composite functions.";
       name = comp.value();
-      if (name == "buda.select") {
+      if (name == "forge.select") {
         call = GetRootCall(body, 0, "strided_slice");
       } else if (name == "forge.concatenate") {
         call = GetRootCall(fn->body.as<CallNode>(), 0, "concatenate");
-      } else if (name == "forge.buda_conv2d_with_bias") {
+      } else if (name == "forge.forge_conv2d_with_bias") {
         std::vector<std::string> names = {"nn.conv2d", "nn.bias_add"};
         call = GetRootCall(fn->body.as<CallNode>(), 1, names);
-      } else if (name == "forge.buda_conv2d_transpose_with_bias") {
+      } else if (name == "forge.forge_conv2d_transpose_with_bias") {
         std::vector<std::string> names = {"nn.conv2d_transpose", "nn.bias_add"};
         call = GetRootCall(fn->body.as<CallNode>(), 1, names);
       } else if (name == "forge.adv_index") {
@@ -68,7 +68,7 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
         call = GetRootCall(fn->body.as<CallNode>(), 6, "nn.conv2d_transpose");
       }
     } else {
-      LOG(FATAL) << "Buda JSON runtime does not support calls to " << cn->op->GetTypeKey();
+      LOG(FATAL) << "Forge JSON runtime does not support calls to " << cn->op->GetTypeKey();
     }
 
     std::vector<JSONGraphNodeEntry> inputs;
@@ -91,11 +91,11 @@ class BudaJSONSerializer : public backend::contrib::JSONSerializer {
  * \brief The external compiler/codegen tool. It takes a Relay expression/module and
  * compile it into a runtime module.
  */
-runtime::Module BudaCompiler(const ObjectRef& ref) {
+runtime::Module ForgeCompiler(const ObjectRef& ref) {
   ICHECK(ref->IsInstance<FunctionNode>());
   auto func = Downcast<Function>(ref);
   auto func_name = GetExtSymbol(func);
-  BudaJSONSerializer serializer(func_name, func);
+  ForgeJSONSerializer serializer(func_name, func);
   serializer.serialize();
   std::string graph_json = serializer.GetJSON();
   auto params = serializer.const_names();
@@ -104,23 +104,23 @@ runtime::Module BudaCompiler(const ObjectRef& ref) {
   ICHECK(jgr != nullptr) << "Cannot find retrieve_forge_json_graph";
   (*jgr)(func_name, graph_json, params);
 
-  const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
+  const auto* pf = runtime::Registry::Get("runtime.ForgeRuntimeCreate");
   ICHECK(pf != nullptr) << "Cannot find JSON runtime module to create";
   auto mod = (*pf)(func_name, graph_json, params);
   return mod;
 }
 
-TVM_REGISTER_GLOBAL("relay.ext.forge").set_body_typed(BudaCompiler);
+TVM_REGISTER_GLOBAL("relay.ext.forge").set_body_typed(ForgeCompiler);
 
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module and
  * compile it into a runtime module.
  */
-runtime::Module BudaCPUCompiler(const ObjectRef& ref) {
+runtime::Module ForgeCPUCompiler(const ObjectRef& ref) {
   ICHECK(ref->IsInstance<FunctionNode>());
   auto func = Downcast<Function>(ref);
   auto func_name = GetExtSymbol(func);
-  BudaJSONSerializer serializer(func_name, func);
+  ForgeJSONSerializer serializer(func_name, func);
   serializer.serialize();
   std::string graph_json = serializer.GetJSON();
   auto params = serializer.const_names();
@@ -129,13 +129,13 @@ runtime::Module BudaCPUCompiler(const ObjectRef& ref) {
   ICHECK(jgr != nullptr) << "Cannot find retrieve_forge_cpudevice_json_graph";
   (*jgr)(func_name, graph_json, params);
 
-  const auto* pf = runtime::Registry::Get("runtime.BudaRuntimeCreate");
+  const auto* pf = runtime::Registry::Get("runtime.ForgeRuntimeCreate");
   ICHECK(pf != nullptr) << "Cannot find JSON runtime module to create";
   auto mod = (*pf)(func_name, graph_json, params);
   return mod;
 }
 
-TVM_REGISTER_GLOBAL("relay.ext.forge_cpudevice").set_body_typed(BudaCPUCompiler);
+TVM_REGISTER_GLOBAL("relay.ext.forge_cpudevice").set_body_typed(ForgeCPUCompiler);
 
 }  // namespace contrib
 }  // namespace relay
