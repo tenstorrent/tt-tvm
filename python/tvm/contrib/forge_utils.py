@@ -17,7 +17,7 @@ from forge.verify.config import VerifyConfig
 from forge.config import CompilerConfig
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 from forge.tensor import to_pt_tensors
-from tvm.relay.op.contrib.buda.buda import extract_function_callnodes, trace_to_origin
+from tvm.relay.op.contrib.forge.forge import extract_function_callnodes, trace_to_origin
 
 
 def extract_framework_model_outputs(

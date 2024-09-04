@@ -603,7 +603,7 @@ class DenseWeightTranspose(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         # If there's already a transpose, we don't need another one to 
-        # fuse into buda.matmul
+        # fuse into forge.matmul
         if self.transpose_pattern.match(post.args[1]):
             return post
 
@@ -3912,9 +3912,9 @@ def _run_pattern_callback(relay_module, callback, callback_name):
 
 def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
     
-    run_verify = verify_cfg and params and inputs and target and framework_outputs and verify_cfg.verify_each_buda_pass
-    if verify_cfg and verify_cfg.verify_each_buda_pass and not run_verify:
-        logger.warning(f"Cannot verify relay module after buda passes because one of (params, inputs, target, golden_outputs, veirfy_cfg) is None")
+    run_verify = verify_cfg and params and inputs and target and framework_outputs and verify_cfg.verify_each_forge_pass
+    if verify_cfg and verify_cfg.verify_each_forge_pass and not run_verify:
+        logger.warning(f"Cannot verify relay module after forge passes because one of (params, inputs, target, golden_outputs, veirfy_cfg) is None")
 
     for callback in callbacks:
         callback_name = _get_callback_name(callback)
@@ -3925,12 +3925,12 @@ def run_pattern_callbacks(relay_module, callbacks, params=None, inputs=None, tar
             raise ex
         if run_verify:
             logger.trace(f"Verifying {callback_name}")
-            tvm.relay.op.contrib.buda.buda.verify_tvm_compile(relay_module, params, inputs, target, framework_outputs, callback_name, verify_cfg)
+            tvm.relay.op.contrib.forge.forge.verify_tvm_compile(relay_module, params, inputs, target, framework_outputs, callback_name, verify_cfg)
     
     return relay_module
 
 
-def run_buda_compile_passes(relay_module, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
+def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None, framework_outputs=None, verify_cfg=None):
     return run_pattern_callbacks(
         relay_module,
         [
