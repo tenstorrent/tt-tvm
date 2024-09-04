@@ -21,8 +21,8 @@
  */
 
 /*!
- * \file src/runtime/contrib/buda/buda_json_runtime.cc
- * \brief A simple JSON runtime for Buda.
+ * \file src/runtime/contrib/forge/forge_json_runtime.cc
+ * \brief A simple JSON runtime for Forge.
  */
 
 #include <tvm/runtime/ndarray.h>
@@ -63,14 +63,14 @@ using namespace tvm::runtime::json;
 using Graph = tt::graphlib::Graph;
 using namespace tt::graphlib;
 
-class BudaRuntime : public JSONRuntimeBase {
+class ForgeRuntime : public JSONRuntimeBase {
 
  public:
-  BudaRuntime(const std::string& symbol_name, const std::string& graph_json,
+  ForgeRuntime(const std::string& symbol_name, const std::string& graph_json,
                   const Array<String> const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
-  const char* type_key() const { return "buda_json"; }
+  const char* type_key() const { return "forge_json"; }
 
   void Init(const Array<NDArray>& consts) override {
   }
@@ -83,16 +83,16 @@ class BudaRuntime : public JSONRuntimeBase {
 
 };
 
-runtime::Module BudaRuntimeCreate(String symbol_name, String graph_json,
+runtime::Module ForgeRuntimeCreate(String symbol_name, String graph_json,
                                       const Array<String>& const_names) {
-  auto n = make_object<BudaRuntime>(symbol_name, graph_json, const_names);
+  auto n = make_object<ForgeRuntime>(symbol_name, graph_json, const_names);
   return runtime::Module(n);
 }
 
-TVM_REGISTER_GLOBAL("runtime.BudaRuntimeCreate").set_body_typed(BudaRuntimeCreate);
+TVM_REGISTER_GLOBAL("runtime.ForgeRuntimeCreate").set_body_typed(ForgeRuntimeCreate);
 
-TVM_REGISTER_GLOBAL("runtime.module.loadbinary_buda_json")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<BudaRuntime>);
+TVM_REGISTER_GLOBAL("runtime.module.loadbinary_forge_json")
+    .set_body_typed(JSONRuntimeBase::LoadFromBinary<ForgeRuntime>);
 
 }  // namespace contrib
 }  // namespace runtime

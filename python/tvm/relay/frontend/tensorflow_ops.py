@@ -279,7 +279,7 @@ def _pooling(name):
         if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
             tmp_shape = _infer_shape(inputs[0], mod)
             input_shape = [tmp_shape[ii] for ii in (0, 3, 1, 2)]
-            # Buda specific transpose order
+            # Forge specific transpose order
             inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
             inputs[0] = _op.transpose(inputs[0], axes=(0, 1, 3, 2))
             attr["data_format"] = "NCHW"
@@ -493,7 +493,7 @@ def _dilation2d():
 
         if attr["_target_layout"] == "NCHW" and attr["data_format"] == "NHWC":
             input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-            # Buda specific transpose order
+            # Forge specific transpose order
             inputs[0] = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
             inputs[0] = _op.transpose(inputs[0], axes=(0, 1, 3, 2))
             weights_shape = [weights_shape[ii] for ii in (2, 0, 1)]
@@ -3074,7 +3074,7 @@ def XLA_ConvV2():
         conv_attrs = {}
         if attr['_target_layout'] ==  'NCHW':
             input_shape = [input_shape[ii] for ii in (0, 3, 1, 2)]
-            # Buda specific transpose order
+            # Forge specific transpose order
             inputs_data = _op.transpose(inputs[0], axes=(0, 3, 2, 1))
             inputs_data = _op.transpose(inputs_data, axes=(0, 1, 3, 2))
  
