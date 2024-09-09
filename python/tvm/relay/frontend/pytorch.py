@@ -707,7 +707,7 @@ class PyTorchOpConverter:
 
     def reciprocal(self, inputs, input_types):
         data = inputs[0]
-        return _expr.const(1.0, dtype=input_types[0]) / data
+        return tvm.relay.reciprocal(data)
 
     def repeat(self, inputs, input_types):
         data = inputs[0]
