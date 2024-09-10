@@ -1824,7 +1824,6 @@ class LowerAdaptiveMaxPool(DFPatternCallback):
             padding=padding,
         )
 
-
 class LowerSqueezeToReshape(DFPatternCallback):
     def __init__(self):
         super().__init__(require_type=True, rewrite_once=True)
@@ -2058,7 +2057,6 @@ class ConvertExpandDimsToReshape(DFPatternCallback):
         target_shape = list(pre.checked_type.shape)
 
         return tvm.relay.reshape(act, newshape=target_shape)
-
 
 class DecomposeRepeat(DFPatternCallback):
     def __init__(self):
@@ -3970,10 +3968,10 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             LowerAdaptiveMaxPool(),
             EnsureKeepdims(),
             SimplifyTransposeReshape(),
-            LowerSqueezeToReshape(),
+            # LowerSqueezeToReshape(),
             PopulateTransposeAxes(),
             PopulateStridedSliceAxes(),
-            ConvertExpandDimsToReshape(),
+            # ConvertExpandDimsToReshape(),
             DecomposeMultiAxisMean(),
             DecomposeMultiAxisSum(),
             ReconstructOnnxResize2d(),
