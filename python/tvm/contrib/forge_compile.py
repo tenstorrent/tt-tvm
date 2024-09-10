@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-from forge.tensor import to_tf_tensors
+from forge.tensor import to_tf_tensors, to_pt_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 import torch
 
@@ -147,7 +147,7 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, input_names=[], 
         json_graphs, inputs = compile_pytorch_for_forge(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
     elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
-        tf_inputs = to_tf_tensors(inputs, force_float32=True)
+        tf_inputs = to_tf_tensors(inputs)
         json_graphs, inputs = compile_tf_for_forge(module, *tf_inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
     elif framework == "tf_graphdef":
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
@@ -977,7 +977,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
-            inputs = [torch.tensor(x.numpy()) for x in inputs if x is not None]  # Maybe we can switch all tensors to numpy?
+            inputs = to_pt_tensors(inputs)  # Maybe we can switch all tensors to numpy?
     elif framework == "tf_graphdef":
         weights = {}
     elif framework == "onnx":
