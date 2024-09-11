@@ -137,7 +137,7 @@ class ResolveConvChannels(DFPatternCallback):
 
 class FuseConvAndPoolPadding(DFPatternCallback):
     def __init__(self):
-        super().__init__(require_type=True)
+        super().__init__(require_type=True, rewrite_once=True)
         self.act = wildcard()
         self.weight = wildcard()
         self.pad = is_op("nn.pad")(self.act, wildcard())
@@ -145,14 +145,19 @@ class FuseConvAndPoolPadding(DFPatternCallback):
 
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
-        op = node_map[self.pattern][0].op
-        pad_width = node_map[self.pad][0].attrs.pad_width
+        conv_pool = node_map[self.pattern][0]
+        pad = node_map[self.pad][0]
+        if not all(conv_pool.attrs.padding[i] == 0 for i in range(len(conv_pool.attrs.padding))) \
+           or not isinstance(pad.args[1], tvm.relay.Constant) or not pad.args[1].data.shape == () \
+           or not int(pad.args[1].data.numpy()) == 0:
+           return
+
+        pad_width = pad.attrs.pad_width
         padding = list(pad_width[-2]) + list(pad_width[-3]) # left, right, top, bottom
-        
-        op_attrs = {**node_map[self.pattern][0].attrs}
+        op_attrs = {**conv_pool.attrs}
         op_attrs["padding"] = padding
 
-        if op.name == "nn.conv2d":
+        if conv_pool.op.name == "nn.conv2d":
             weight = node_map[self.weight][0]
             return tvm.relay.op.nn.conv2d(
                 act,
