@@ -135,6 +135,36 @@ class ResolveConvChannels(DFPatternCallback):
                 ceil_mode=conv.attrs.ceil_mode,
             )
 
+class FuseConvAndPoolPadding(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+        self.act = wildcard()
+        self.weight = wildcard()
+        self.pad = is_op("nn.pad")(self.act, wildcard())
+        self.pattern = is_op("nn.conv2d")(self.pad, self.weight) | is_op("nn.max_pool2d")(self.pad)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        op = node_map[self.pattern][0].op
+        pad_width = node_map[self.pad][0].attrs.pad_width
+        padding = list(pad_width[-2]) + list(pad_width[-3]) # left, right, top, bottom
+        
+        op_attrs = {**node_map[self.pattern][0].attrs}
+        op_attrs["padding"] = padding
+
+        if op.name == "nn.conv2d":
+            weight = node_map[self.weight][0]
+            return tvm.relay.op.nn.conv2d(
+                act,
+                weight,
+                **op_attrs
+            )
+        else:
+            return tvm.relay.op.nn.max_pool2d(
+                act,
+                **op_attrs
+            )
+
 class DecomposeRoll(DFPatternCallback):
     def __init__(self):
         super().__init__(require_type=True)
@@ -3847,6 +3877,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             DecomposeReverse(),
             ConvertLayout(),
             ResolveConvChannels(),
+            FuseConvAndPoolPadding(),
             DecomposeDynamicResize2d(),
             DecomposePRelu(),
             DecomposeRoll(),
