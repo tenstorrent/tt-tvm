@@ -356,6 +356,116 @@ class PyTorchOpConverter:
         (dtype,) = input_types
         return _op.power(inputs[0], _expr.const(2, dtype))
 
+    def eye(self, inputs, input_types):
+        breakpoint()
+
+    def pad_sequence(self, inputs, input_types):
+        logger.info("pad_sequence")
+        sequences = inputs[0]
+        batch_first = inputs[1]
+        padding_value = inputs[2]
+        
+        num_sequences = len(sequences)
+        seqs_shape = [_infer_shape(seq) for seq in sequences]
+        seq_lengths = [seq_shape[0] for seq_shape in seqs_shape]
+        max_seq_len = max(seq_lengths)
+
+        # Pad each sequence to the max_len
+        padded_sequences = []
+        for seq_idx in range(num_sequences):
+            seq = sequences[seq_idx]
+            seq_len = seq_lengths[seq_idx]
+
+            if seq_len == max_seq_len:
+                padded_seq = seq
+            else:
+                pad_len = max_seq_len - seq_len
+                pad_width = ((0, pad_len), (0, 0))
+                padded_seq = _op.nn.pad(seq, pad_width, pad_value=padding_value, pad_mode="constant")
+
+            # Apply padding to the sequence
+            padded_sequences.append(padded_seq)
+
+        # Stack all padded sequences into a single tensor
+        if batch_first:
+            padded_batch = _op.stack(padded_sequences, axis=0)
+        else:
+            padded_batch = _op.stack(padded_sequences, axis=1)
+        return padded_batch
+
+    def _pad_packed_sequence(self, inputs, input_types):
+        breakpoint()
+
+    def _pack_padded_sequence(self, inputs, input_types):
+        logger.info("_pack_padded_sequence")
+        sequences = inputs[0]  # (25, 3, 300)
+        seq_lengths = inputs[1]
+        batch_first = inputs[2]
+
+        # Output.Data Shape = (75, 300)
+        # Output.BatchSizes Shape = torch.Size([25]) - tensor([3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3])
+
+        # Get the batch size and max sequence length
+        # shape = _op.shape_of(sequences)
+        
+        # Extract the batch size and max sequence length from the shape
+        # if batch_first:
+        #     batch_size = _op.take(shape, _expr.const(0), axis=0)
+        #     max_seq_len = _op.take(shape, _expr.const(1), axis=0)
+        # else:
+        #     max_seq_len = _op.take(shape, _expr.const(0), axis=0)
+        #     batch_size = _op.take(shape, _expr.const(1), axis=0)
+
+        padded_sequences_shape = self.infer_shape(sequences)
+
+        if batch_first:
+            batch_size = padded_sequences_shape[0]
+        else:
+            batch_size = padded_sequences_shape[1]
+
+        all_seq_len = _infer_value(seq_lengths, {}).numpy().tolist()
+        # all_seq_len = [25, 21, 15]
+        max_seq_len = max(all_seq_len)
+
+        # Create a list to store the valid sequences
+        packed_sequences = []
+        
+        # Function to handle one sequence
+        def extract_sequence(seq_idx):
+            if batch_first:
+                seq = _op.strided_slice(sequences, begin=[seq_idx, 0], end=[seq_idx + 1, max_seq_len], slice_mode="end")
+                seq = _op.squeeze(seq, axis=[0])  # Remove batch dimension
+            else:
+                seq = _op.strided_slice(sequences, begin=[0, seq_idx], end=[max_seq_len, seq_idx + 1], slice_mode="end")
+                seq = _op.squeeze(seq, axis=[1])  # Remove batch dimension
+            
+            # Get the valid length for this sequence
+            seq_len = all_seq_len[seq_idx]  # _op.take(seq_lengths, seq_idx)
+            
+            # Slice the sequence to remove padding based on seq_len
+            valid_seq = _op.strided_slice(seq, begin=[0], end=[seq_len], slice_mode="end")
+            
+            return valid_seq
+        
+        # Extract and pack sequences for each index
+        for i in range(batch_size):
+            valid_seq = extract_sequence(i)
+            packed_sequences.append(valid_seq)
+
+        # Calculate Batch sizes
+        batch_sizes = _op.zeros((max_seq_len, ), "int32")
+        for seq_len in all_seq_len:
+            if seq_len == max_seq_len:
+                batch_sizes = _op.add(batch_sizes, _expr.const(0, "int32"))
+            else:
+                pad_len = max_seq_len - seq_len
+                batch_sizes = _op.add(batch_sizes, _op.concatenate([_op.ones((seq_len, ), "int32"), _op.zeros((pad_len, ), "int32")], axis=0))
+
+        # Concatenate all valid sequences to form the packed tensor
+        packed_tensor = _op.concatenate(packed_sequences, axis=0)
+
+        return packed_tensor, batch_sizes
+
     def lerp(self, inputs, input_types):
         if len(inputs) != 3:
             msg = f"Wrong number of arguments ({len(inputs)}) to parse."
@@ -883,6 +993,8 @@ class PyTorchOpConverter:
         if size is None:
             tmp = []
             for dim in data:
+                if isinstance(dim, int):
+                    dim = _expr.const(dim, "int64")
                 tmp.append(_op.cast(_op.expand_dims(dim, axis=0), "int64"))
             size = _op.concatenate(tmp, axis=0)
 
@@ -3902,6 +4014,172 @@ class PyTorchOpConverter:
 
         return _op.stack(input_seqs, 0), final_hiddens
 
+    def _infer_value_with_inputs(self, input):
+        assert isinstance(input, _expr.Call), "input should be of Call Node"
+
+        vars = _analysis.free_vars(input)
+        params = {}
+        for var in vars:
+            key = var.name_hint
+            if key in self.torch_inputs:
+                torch_tensor = self.torch_inputs[key]
+                dtype = _convert_data_type(str(torch_tensor.dtype))
+                params[key] = _expr.const(torch_tensor.numpy().tolist(), dtype)
+
+        value = _infer_value(input, params).numpy()
+        return value
+
+    def _lstm_packed(self, input, batch_sizes, batch_sizes_data, hx, cx, weight_ih, weight_hh, bias_ih, bias_hh, hidden_size):
+        """
+        Custom LSTM operation for packed sequences using TVM Relay ops.
+
+        Args:
+            input: Relay expression for packed input data (concatenated sequences) of shape [225, 6].
+            batch_sizes: Relay expression for batch sizes at each timestep of shape [9].
+            hx: Relay expression for initial hidden states of shape [1, 25, 32].
+            cx: Relay expression for initial cell states of shape [1, 25, 32].
+            weight_ih: Relay expression for input-hidden weights.
+            weight_hh: Relay expression for hidden-hidden weights.
+            bias_ih: Relay expression for input-hidden biases.
+            bias_hh: Relay expression for hidden-hidden biases.
+            hidden_size: Hidden state size of the LSTM.
+
+        Returns:
+            output: Packed output data of shape [225, 32].
+            h_n: Final hidden state of shape [1, 25, 32].
+            c_n: Final cell state of shape [1, 25, 32].
+        """
+        # Initialize output list to store hidden states at each timestep
+        outputs = []
+
+        # Initialize hidden and cell states
+        hidden, cell = hx, cx
+        offset = 0  # To keep track of position in the packed input tensor
+
+        # Loop through each timestep in the sequence
+        # Manually setting batch_sizes_val
+        # batch_sizes_data = np.array([25] * seq_len).astype("int32")
+        # input_shape = (225, 6)
+        # hidden_shape = (1, 25, 32)
+
+        for t in range(batch_sizes_data.shape[0]):
+            # Extract the batch size for the current timestep
+            # batch_size_t = relay.take(batch_sizes, relay.const(t, dtype="int32"))
+            batch_size_t = batch_sizes_data[t].item()
+            
+            # Extract the input slice for the current batch size
+            input_t = tvm.relay.strided_slice(input, begin=[offset], end=[offset + batch_size_t], axes=[0], slice_mode="end")
+
+            # Adjust hidden and cell states to match current batch size
+            hidden_t = tvm.relay.strided_slice(hidden, begin=[0], end=[batch_size_t], axes=[1], slice_mode="end")
+            cell_t = tvm.relay.strided_slice(cell, begin=[0], end=[batch_size_t], axes=[1], slice_mode="end")
+
+            # Apply LSTM cell for the current timestep
+            h_next, c_next = self._lstm_cell_for_packed_sequence(input_t, hidden_t, cell_t, weight_ih, weight_hh, bias_ih, bias_hh, batch_size_t, hidden_size)
+
+            # Append the hidden state to outputs
+            outputs.append(h_next)
+
+            # Update hidden and cell states for the next timestep
+            # sliced_hidden = relay.strided_slice(hidden, begin=[0, 0, 0], end=[hidden_shape[0], batch_size_t, hidden_shape[2]])
+            sliced_hidden = tvm.relay.strided_slice(hidden, begin=[0], end=[batch_size_t], axes=[1], slice_mode="end")
+            hidden = tvm.relay.concatenate([h_next, sliced_hidden], axis=1)
+            sliced_cell = tvm.relay.strided_slice(cell, begin=[0], end=[batch_size_t], axes=[1], slice_mode="end")
+            cell = tvm.relay.concatenate([c_next, sliced_cell], axis=1)
+
+            # Update offset to process the next batch of active sequences
+            offset += batch_size_t
+
+        # Concatenate the output hidden states for all timesteps to form packed output
+        output = tvm.relay.concatenate(outputs, axis=1)  # Output should be [225, 32] as given
+        output = tvm.relay.squeeze(output, axis=[0])
+
+        return output, h_next, c_next
+
+    # Define the LSTM cell TVM implementation (already implemented before)
+    def _lstm_cell_for_packed_sequence(self, input_t, h_prev, c_prev, weight_ih, weight_hh, bias_ih, bias_hh, batch_size_t, hidden_size):
+        """
+        Single LSTM cell operation using TVM ops for packed input.
+
+        Args:
+            input_t: Input tensor at current timestep [batch_size_t, input_size].
+            h_prev: Previous hidden state [1, batch_size_t, hidden_size].
+            c_prev: Previous cell state [1, batch_size_t, hidden_size].
+            weight_ih: Input-hidden weights [4 * hidden_size, input_size].
+            weight_hh: Hidden-hidden weights [4 * hidden_size, hidden_size].
+            bias_ih: Input-hidden biases [4 * hidden_size].
+            bias_hh: Hidden-hidden biases [4 * hidden_size].
+            batch_size_t: Current batch size.
+            hidden_size: Hidden state size.
+
+        Returns:
+            h_next: Next hidden state [1, batch_size_t, hidden_size].
+            c_next: Next cell state [1, batch_size_t, hidden_size].
+        """
+        # Multiply input by input-hidden weights and add bias
+        gates_input = tvm.relay.nn.dense(input_t, weight_ih) + bias_ih
+
+        # Multiply previous hidden state by hidden-hidden weights and add bias
+        h_prev_squeezed = tvm.relay.squeeze(h_prev, axis=[0])
+        gates_hidden = tvm.relay.nn.dense(h_prev_squeezed, weight_hh) + bias_hh
+
+        # Compute gates by adding the input and hidden projections
+        gates = tvm.relay.add(gates_input, gates_hidden)
+
+        # Split gate values into input, forget, cell, and output gates
+        i, f, g, o = tvm.relay.split(gates, indices_or_sections=4, axis=-1)
+
+        # Apply activations: sigmoid for input, forget, output gates, and tanh for cell gate
+        i = tvm.relay.sigmoid(i)
+        f = tvm.relay.sigmoid(f)
+        g = tvm.relay.tanh(g)
+        o = tvm.relay.sigmoid(o)
+
+        # Compute next cell state
+        c_next = tvm.relay.add(tvm.relay.multiply(f, c_prev), tvm.relay.multiply(i, g))
+
+        # Compute next hidden state
+        h_next = tvm.relay.multiply(o, tvm.relay.tanh(c_next))
+
+        # # Add batch dimension back to hidden and cell states
+        # h_next = relay.expand_dims(h_next, axis=0)
+        # c_next = relay.expand_dims(c_next, axis=0)
+
+        return h_next, c_next
+
+
+    def lstm_with_batch_sizes(self, inputs, input_types):
+
+        input = inputs[0]
+
+        batch_sizes = inputs[1]
+        batch_sizes_data = self._infer_value_with_inputs(batch_sizes)
+
+        _hidden_states = inputs[2]
+        assert len(_hidden_states) == 2, "lstm expects two hidden states"
+        hx = _hidden_states[0]
+        cx = _hidden_states[1]
+
+        _weights = inputs[3]
+        assert len(_weights) == 4, "lstm expects 2 weights and 2 bias"
+        weight_ih = _weights[0]
+        weight_hh = _weights[1]
+        bias_ih = _weights[2]
+        bias_hh = _weights[3]
+
+        hidden_size = self._infer_value_with_inputs(hx).shape[-1]
+
+        output, h_next, c_next = self._lstm_packed(
+            input=input, batch_sizes=batch_sizes, batch_sizes_data=batch_sizes_data,
+            hx=hx, cx=cx, 
+            weight_ih=weight_ih, weight_hh=weight_hh, 
+            bias_ih=bias_ih, bias_hh=bias_hh, 
+            hidden_size=hidden_size,
+        )
+
+        return output, h_next, c_next
+
+
     def lstm(self, inputs, input_types):
         """
         Description of LSTM in pytorch:https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html
@@ -3913,11 +4191,16 @@ class PyTorchOpConverter:
         """
         # TODO (vvchernov): support dropout
         assert len(inputs) == 9, "Input of size 9 is expected"
+
+        if input_types[1] == "int64" and input_types[2] == "ListType":
+            return self.lstm_with_batch_sizes(inputs, input_types)
+
         # Unpack inputs, note that if optional and not provided then value will be None.
         _X = inputs[0]
         # _X shape (seq_num, batch, feature_size) or (batch, seq_num, feature_size)
 
         hidden_states = inputs[1]
+        # breakpoint()
         assert len(hidden_states) == 2, "lstm expects two hidden states"
         h_0 = hidden_states[0]
         c_0 = hidden_states[1]
@@ -4600,6 +4883,10 @@ class PyTorchOpConverter:
     # Operator mappings
     def create_convert_map(self):
         self.convert_map = {
+            "aten::eye": self.eye,
+            "aten::pad_sequence": self.pad_sequence,
+            "aten::_pad_packed_sequence": self._pad_packed_sequence,
+            "aten::_pack_padded_sequence": self._pack_padded_sequence,
             "aten::is_floating_point": self.is_floating_point,
             "aten::pixel_shuffle": self.pixel_shuffle,
             "aten::device": self.none,
@@ -5095,20 +5382,23 @@ class PyTorchOpConverter:
         # The first element is a loop counter or boolean condition, ignore it
         return [_expr.TupleGetItem(loop_val, i + 1) for i in range(num_loop_var)]
 
-    def convert_operators(self, operators, outputs, ret_names, input_remap={}):
+    def convert_operators(self, operators, outputs, ret_names, torch_inputs={}, input_remap={}):
         """Convert each Torch IR operators to Relay equivalent"""
         # an op node might not belong to any of scope in trace info natively
         # use a cunter to prevent from messing up its scope in span
         empty_counter = 0
         self.input_remap = input_remap
+        self.torch_inputs = torch_inputs
         for node_name, op_node in operators:
 
-            logger.trace(f"Converting: {op_node.kind()} : {node_name}")
+            # logger.info(f"Converting: {op_node.kind()} : {node_name}")
             operator = op_node.kind()
             inputs = _get_op_inputs(op_node, outputs, self.input_remap)
             # we need to record what current operator is to provide correct source name
             # for operators needed to be taken care with (e.g. nms / arange ...)
             self.current_op.append(op_node)
+
+            # logger.info(f"{operator=}")
 
             if operator == "prim::Constant":
                 outputs[node_name] = _get_constant(op_node)
@@ -5967,6 +6257,7 @@ def outplace_inplace_ops(opnodes):
 def from_pytorch(
     script_module,
     input_infos,
+    inputs_dict,
     custom_convert_map=None,
     default_dtype="float32",
     use_parser_friendly_name=False,
@@ -6037,6 +6328,7 @@ def from_pytorch(
     converter = PyTorchOpConverter(prelude, default_dtype, use_parser_friendly_name)
 
     graph = script_module.graph.copy()
+    logger.info(f"{graph}")
     # Check if lower_all_tuples pass can be enabled
     graph_inputs = list(graph.inputs())
     for inp in graph_inputs:
@@ -6098,7 +6390,7 @@ def from_pytorch(
     )
     outplace_inplace_ops(operator_nodes)
     ret_name = _get_input_names(graph.return_node(), input_remap)
-    outputs = converter.convert_operators(operator_nodes, outputs, ret_name, input_remap)
+    outputs = converter.convert_operators(operator_nodes, outputs, ret_name, torch_inputs=inputs_dict, input_remap=input_remap)
 
     # ListConstruct kept original python list. Convert to tuple.
     outputs = [_expr.Tuple(output) if isinstance(output, list) else output for output in outputs]
