@@ -568,6 +568,7 @@ def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, ve
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
+        assert compiler_cfg.convert_framework_params_to_tvm, "Cannot use constant prop without converting framework params to relay"
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
@@ -633,6 +634,7 @@ def compile_tflite_for_forge(module, path, *inputs, graph_name, compiler_cfg, ve
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
+        assert compiler_cfg.convert_framework_params_to_tvm, "Cannot use constant prop without converting framework params to relay"
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
@@ -871,6 +873,7 @@ def compile_tf_graphdef_for_forge(graph_def, *inputs, graph_name, compiler_cfg,)
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
+        assert compiler_cfg.convert_framework_params_to_tvm, "Cannot use constant prop without converting framework params to relay"
         if len(compiler_cfg.tvm_constnat_prop_mask):
             propped_params = {k : (v, True) for k, v, in params.items() if any([mask in k for mask in compiler_cfg.tvm_constnat_prop_mask])}
         else:
@@ -926,6 +929,7 @@ def compile_mxnet_for_forge(module, *inputs, graph_name, compiler_cfg, verify_cf
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
     else:
+        assert compiler_cfg.convert_framework_params_to_tvm, "Cannot use constant prop without converting framework params to relay"
         propped_params = {k : (v, True) for k, v, in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
