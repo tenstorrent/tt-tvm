@@ -426,7 +426,10 @@ class DecomposeMultiAxisMean(DFPatternCallback):
             acts = tvm.relay.mean(acts, axis=int(axis), keepdims=True)
         
         if keepdims == False:
-            acts = tvm.relay.reshape(acts, newshape=output_shape)
+            # Need to squeeze in order from rightmost dim to leftmost dim
+            # Reverse sort since axes are positive
+            for axis in sorted(reduce_axes, reverse=True):
+                acts = tvm.relay.squeeze(acts, axis=[axis])
         return acts    
 
 class DecomposeMultiAxisSum(DFPatternCallback):
@@ -3831,6 +3834,58 @@ class GQABroadcastReshape(DFPatternCallback):
         transpose2 = tvm.relay.transpose(transpose1, axes=[0,2,1]) # (n_kv_heads*brcst_val, head_dim, bs*seqlen)
         return transpose2
 
+class RemoveDenseInputSqueeze(DFPatternCallback):
+    """
+    TVM adds squeeze ops around nn.dense activations to ensure that both the
+    lhs and rhs are the same rank. This is unnecessarry since TTNN can handle
+    differently ranked input tensors for matmul, just like pytorch and other 
+    frameworks can. This pattern callback removes those squeezes. The reason
+    that reshapes are being pattern matched here is because the squeezes get
+    converted to reshapes by this point.
+    """
+    def __init__(self, require_type=False, rewrite_once=False):
+        super().__init__(require_type, rewrite_once)
+        self.act = wildcard()
+        self.reshape1 = is_op("reshape")(self.act)
+        self.dense = is_op("nn.dense")(self.reshape1, wildcard())
+        self.pattern = is_op("reshape")(self.dense)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        reshape1 = node_map[self.reshape1][0]
+        reshape2 = node_map[self.pattern][0]
+        dense = node_map[self.dense][0]
+
+        # check if reshape is squeeze
+        act_shape = act.checked_type.shape
+        reshape1_shape = reshape1.checked_type.shape
+        reshape2_shape = reshape2.checked_type.shape
+        dense_shape = dense.checked_type.shape
+        
+        # Check that reshape did not affect matmul dims
+        if (reshape1_shape[-2:] != act_shape[-2:]):
+            return post
+        
+        # check that second reshape is the same rank as activation
+        if (len(reshape2_shape) != len(act_shape)):
+            return post
+
+        # check that the first reshape is a squeeze
+        act_dims = set(act_shape[:-2])
+        reshape1_dims = set(reshape1_shape[:-2])
+        if ((act_dims - reshape1_dims) != set([1])):
+            return post
+        
+        # check that the second reshape is an unsqueeze
+        dense_dims = set(dense_shape[:-2])
+        reshape2_dims = set(reshape2_shape[:-2])
+        if ((reshape2_dims - dense_dims) != set([1])):
+            return post
+        
+        return tvm.relay.nn.dense(act, dense.args[1])
+
+
+
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
@@ -3914,7 +3969,6 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             CastWhereConditionToBool(),
             LowerAdaptiveAvgPool(),
             LowerAdaptiveMaxPool(),
-            EnsureKeepdims(),
             SimplifyTransposeReshape(),
             # LowerSqueezeToReshape(),
             PopulateTransposeAxes(),
@@ -3923,6 +3977,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             DecomposeMultiAxisMean(),
             DecomposeMultiAxisSum(),
             DecomposeMultiAxisBroadcast(),
+            EnsureKeepdims(),
             RemoveRedundantTake(),
             RemoveRedundantReshape(),
             LowerCopyToNOP(),
@@ -3970,6 +4025,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             PadSpecificBatchMatmulShapes(),
             SimplifyVITOnnxAttention(),
             GQABroadcastReshape(),
+            RemoveDenseInputSqueeze(),
         ],
         params=params,
         inputs=inputs,
