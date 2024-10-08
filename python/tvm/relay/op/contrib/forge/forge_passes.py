@@ -1428,7 +1428,18 @@ class DecomposeEinsum(DFPatternCallback):
 
             return out
 
-        elif match_einsum_pattern("ij, jk -> ik", equation) or match_einsum_pattern("ij, kr -> ir", equation):
+        elif match_einsum_pattern("ij, jk -> ik", equation):
+            srcA_shape = pre.args[0][0].checked_type.shape
+            srcB_shape = pre.args[0][1].checked_type.shape
+
+            assert len(srcA_shape) == len(srcB_shape) == 2, "input tensors have incorrect number of dimensions"
+
+            srcA = node_map[self.act][0][0]
+            srcB = node_map[self.act][0][1]
+
+            return tvm.relay.nn.matmul(srcA, srcB)
+
+        elif match_einsum_pattern("ij, kr -> ir", equation):
             srcA_shape = pre.args[0][0].checked_type.shape
             srcB_shape = pre.args[0][1].checked_type.shape
 
@@ -2091,14 +2102,67 @@ class DecomposeRepeat(DFPatternCallback):
         self.pattern = is_op("repeat")(wildcard())
     
     def callback(self, pre, post, node_map):
-        axis = int(post.attrs.axis)
+        repeat_axis = int(post.attrs.axis)
         num_repeats = int(post.attrs.repeats)
         input_shape = list(pre.args[0].checked_type.shape)
-        assert input_shape[axis] == 1, "Cannot decompose repeat to broadcast when input dim != 1"
-        output_shape = input_shape
-        output_shape[axis] *= num_repeats
+        if input_shape[repeat_axis] == 1:
+            output_shape = input_shape
+            output_shape[repeat_axis] *= num_repeats
+            result = tvm.relay.broadcast_to(post.args[0], output_shape)
+        else:
+            if repeat_axis < 0:
+                repeat_axis = len(input_shape) + repeat_axis
 
-        result = tvm.relay.broadcast_to(post.args[0], output_shape)
+            # Step 1: If the repeat axis is not last dimension, transpose the act
+            #         to make repeat axis as the last dimension
+            # Eg:
+            #   act_shape = (1, 1, 3, 3)
+            #   num_repeats = 2
+            #   repeat_axis = 2
+            #   eg: (N, C, H, W) -> (N, C, W, H)
+            transpose_1 = post.args[0]
+            transpose_1_output_shape = input_shape
+            if int(len(input_shape) - 1) != int(repeat_axis):
+                for t_axes in range(int(repeat_axis), int(len(input_shape) - 1)):
+                    transpose_1_axes = list(range(len(input_shape)))
+                    transpose_1_axes[t_axes], transpose_1_axes[t_axes + 1] = transpose_1_axes[t_axes + 1], transpose_1_axes[t_axes]
+                    transpose_1 = tvm.relay.transpose(transpose_1, axes=transpose_1_axes)
+                    transpose_1_output_shape = [transpose_1_output_shape[i_axes] for i_axes in transpose_1_axes]
+
+            # Step 2: Reshape the act to 2D for matrix multiplication
+            #         eg: (N, C, W, H)  -> (N * C * W, H)
+            reshape_1_new_shape = [np.prod(transpose_1_output_shape[:-1]), transpose_1_output_shape[-1]]
+            reshape_1 = tvm.relay.reshape(transpose_1, newshape=reshape_1_new_shape)
+
+
+            # Step 3: Create a repetition matrix of shape (input_shape[repeat_axis], input_shape[repeat_axis] * num_repeats)
+            #         eg: (H, H * num_repeats)
+            repeat_matrix = np.zeros((int(input_shape[repeat_axis]), (int(input_shape[repeat_axis]) * num_repeats)))
+            for i in range(int(input_shape[repeat_axis])):
+                for j in range(num_repeats):
+                    repeat_matrix[i, i * num_repeats + j] = 1.0
+            repeat_matrix_constant = tvm.relay.Constant(tvm.nd.array(repeat_matrix.astype(np.float32)))
+
+            # Step 4: Perform matrix multiplication (reshape_1 x repeat_matrix_constant)
+            #         eg: (N * C * W, H) x (H, H * num_repeats) -> (N * C * W, H * num_repeats)
+            matmul_1 = tvm.relay.nn.matmul(reshape_1, repeat_matrix_constant)
+
+
+            # Step 5: Reshape back to original dimensions with repeated dimension
+            #         eg: (N * C * W, H * repeats) -> (N, C, W, H * repeats)
+            final_reshape_new_shape = list(transpose_1_output_shape)
+            final_reshape_new_shape[-1] = final_reshape_new_shape[-1] * num_repeats
+            reshape_2 = tvm.relay.reshape(matmul_1, newshape=final_reshape_new_shape)
+
+            # Step 6: If the repeat axis is not last dimension, transpose back to original axes order
+            #         eg: (N, C, W, H * repeats) => (N, C, H * repeats, W)
+            result = reshape_2
+            if int(len(input_shape) - 1) != int(repeat_axis):
+                for t_axes in range(int(len(input_shape) - 1), int(repeat_axis), -1):
+                    reverse_transpose_axes = list(range(len(input_shape)))
+                    reverse_transpose_axes[t_axes], reverse_transpose_axes[t_axes - 1] = reverse_transpose_axes[t_axes - 1], reverse_transpose_axes[t_axes]
+                    result = tvm.relay.transpose(result, axes=reverse_transpose_axes)
+
         return result
 
 
@@ -2148,6 +2212,43 @@ class ConvertUpsampleToResize2d(DFPatternCallback):
             coordinate_transformation_mode=coord_trans,
             cubic_alpha=-0.75,
         )
+
+class ReconstructOnnxResize2d(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+        self.act = wildcard()
+        self.reshape1 = is_op("reshape")(self.act)
+        self.bcast_to = is_op("broadcast_to")(self.reshape1)
+        self.pattern = is_op("reshape")(self.bcast_to)
+
+    def callback(self, pre, post, node_map):
+        
+        reshape1 = node_map[self.reshape1][0]
+        act = reshape1.args[0]
+        bcast_to = node_map[self.bcast_to][0]
+        reshape2 = node_map[self.pattern][0]
+
+        act_shape = [int(dim) for dim in act.checked_type.shape]
+        reshape1_shape = [int(dim) for dim in reshape1.attrs.newshape]
+        bcast_shape = [int(dim) for dim in bcast_to.attrs.shape]
+        reshape2_shape = [int(dim) for dim in reshape2.attrs.newshape]
+
+        if len(act_shape) != 4 or len(reshape1_shape) != 6 or len(bcast_shape) != 6 or len(reshape2_shape) != 4:
+            return post
+        
+        if reshape2_shape[-1] != bcast_shape[-1]*act_shape[-1] or reshape2_shape[-2] != bcast_shape[-3]*act_shape[-2]:
+            return post
+        
+        if reshape2_shape[-3] != act_shape[-3] or reshape2_shape[-4] != act_shape[-4]:
+            return post
+
+        new_resize = tvm.relay.image.resize2d(
+            act,
+            size=reshape2_shape[-2:],
+            layout="NCHW",
+            method="nearest_neighbor",
+        )
+        return new_resize
 
 class DecomposeMultiIndexAdvIndex(DFPatternCallback):
     def __init__(self):
@@ -2266,19 +2367,6 @@ class ReconstructOnnxGelu(DFPatternCallback):
             return post
 
         return tvm.relay.gelu(node_map[self.act][0])
-
-
-class RemoveQuantDequantSequence(DFPatternCallback):
-    def __init__(self):
-        super().__init__(rewrite_once=True, require_type=True)
-        self.act = wildcard()
-        self.quant = is_op("qnn.quantize")(self.act, wildcard(), wildcard(),)
-        self.pattern = is_op("qnn.dequantize")(self.quant, wildcard(), wildcard(),)
-
-    def callback(self, pre, post, node_map):
-        act = node_map[self.act][0]
-        quant = node_map[self.quant][0]
-        return node_map[self.act][0]
 
 
 class ReconstructOnnxQuantizedGelu(DFPatternCallback):
@@ -3400,7 +3488,7 @@ class SimplifyTransposeReshape(DFPatternCallback):
             if index != val:
                 count += 1
 
-        assert (count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point")
+        assert count == 2, "Multi-axis transpose should be decomposed into single-axis transpose at this point"
         is_transpose_yz = len(transpose_axes) >= 3 and len(dims) >= 3 and (transpose_axes[-2] == dims[-3] and transpose_axes[-3] == dims[-2])
 
         if (
@@ -3893,7 +3981,7 @@ def _get_callback_name(callback):
     elif isinstance(callback, tvm.transform.Pass):
         return callback.info.name
     else:
-        raise NotImplementedError(f"Type of callback ({type(callback)}) not implemented")
+        raise NotImplementedError(f"Type of callback ({(callback)}) not implemented")
 
 
 def _run_pattern_callback(relay_module, callback, callback_name):
@@ -3976,6 +4064,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             # ConvertExpandDimsToReshape(),
             DecomposeMultiAxisMean(),
             DecomposeMultiAxisSum(),
+            ReconstructOnnxResize2d(),
             DecomposeMultiAxisBroadcast(),
             EnsureKeepdims(),
             RemoveRedundantTake(),
@@ -3991,7 +4080,6 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             ConvertGlobalAvgPool2dtoAvgPool2d(),
             ConvertUpsampleToResize2d(),
             DecomposeMultiIndexAdvIndex(),
-            RemoveQuantDequantSequence(),
             ReconstructOnnxQuantizedGelu(),
             DecomposeQnnConcat(),
             # DecomposeErf(),

@@ -1108,8 +1108,25 @@ class PyTorchOpConverter:
     def elu(self, inputs, input_types):
         data = inputs[0]
         dtype = input_types[0]
-        alpha = _expr.const(-float(inputs[1]), dtype=dtype)
-        return alpha * _op.nn.relu(_expr.const(1, dtype=dtype) - _op.exp(data)) + _op.nn.relu(data)
+        disable_elu_handle_inf = bool(int(os.environ.get("PYBUDA_DISABLE_ELU_HANDLE_INF", 0)))
+        if disable_elu_handle_inf:
+            alpha = _expr.const(-float(inputs[1]), dtype=dtype)
+            return alpha * _op.nn.relu(_expr.const(1, dtype=dtype) - _op.exp(data)) + _op.nn.relu(data)
+        alpha = _expr.const(float(inputs[1]), dtype=dtype)
+        data_shape = self.infer_shape(data)
+        one_const = _expr.Constant(tvm.nd.array(np.ones(data_shape).astype(dtype)))
+        zero_const = _expr.Constant(tvm.nd.array(np.zeros(data_shape).astype(dtype)))
+
+        # Calculate the exponential of values less than 0 in 'data' to avoid 'inf' values for higher numbers.
+        exp = _op.exp(_op.where(_op.less(data, zero_const), data, zero_const))
+
+        # Exponential Linear Unit (ELU) function:
+        #       ELU(data) =
+        #           - If data > 0: data
+        #           - If data <= 0: alpha * (exp(data) - 1)
+        subtract = _op.subtract(exp, one_const)
+        multiply = _op.multiply(alpha, subtract)
+        return _op.where(_op.greater(data, zero_const), data, multiply)
 
     def celu(self, inputs, input_types):
         data = inputs[0]
@@ -3318,17 +3335,42 @@ class PyTorchOpConverter:
             mask = _expr.const(_infer_value(mask, {}))
         mask = _op.cast(mask, "float32")
 
+        disable_masked_fill_v2 = bool(int(os.environ.get("PYBUDA_DISABLE_MASKED_FILL_V2", 0)))
+        if disable_masked_fill_v2:
+            value = _op.cast(_wrap_const(inputs[2]), input_types[0])
+            value = _op.broadcast_to_like(value, mask)
+
+            one_const = _expr.const(1, dtype="float32")
+            return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
+
+        # Pybuda will convert all cast ops to Identity. This can be an issue.
+        # In pytorch, when the mask has float values, it treats 0 as False and 
+        # everything else as True. We cannot assume that mask will contain only
+        # zeroes and ones, as multiplication with the mask will yeild incorrect
+        # results.
+        mask = _op.abs(mask)
+        mask = _op.clip(mask, 0, 1.0)
+
+        # In the event some values actually lie between 0 and 1 we use greater
+        # to ceil those all to 1.
+        # NOTE: The cast here is just to stop TVM from complaining. It will be
+        # replaced with the identity function further down the line
+        mask = _op.cast(_op.greater(mask, _expr.const(0, "float32")), "float32")
+
         value = _op.cast(_wrap_const(inputs[2]), input_types[0])
         value = _op.broadcast_to_like(value, mask)
 
         one_const = _expr.const(1, dtype="float32")
+        inverse_mask = _op.subtract(one_const, mask)
 
         # Original implementation
         # return _op.where(mask, value, inputs[0])
 
         # Implementaiton without using where operator in order to avoide numerical instability
         # for certain models caused by the future matmul (once where is decomposed)
-        return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
+        
+        # (!mask * x) + (mask*y)
+        return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
 
 
     def baddbmm(self, inputs, input_types):
@@ -4269,8 +4311,13 @@ class PyTorchOpConverter:
     def tril(self, inputs, input_types):
         x = inputs[0]
         x_shape = _infer_shape(x)
-
-        y = np.tril(np.ones(x_shape)).astype(_convert_tvm_to_np_dtype(input_types[0]))
+        diagonal = inputs[1]
+        
+        if isinstance(diagonal, tvm.relay.expr.Call):
+            diagonal = _infer_value(diagonal,{})
+            diagonal = diagonal.asnumpy().item()
+        
+        y = np.tril(np.ones(x_shape), k = diagonal).astype(_convert_tvm_to_np_dtype(input_types[0]))
         y = tvm.nd.array(y)
         y = tvm.relay.Constant(y)
 
@@ -5253,6 +5300,8 @@ def _convert_tvm_to_np_dtype(dtype):
         np_type = np.int8
     elif dtype == "uint8":
         np_type = np.uint8
+    elif dtype == "bool":
+        np_type = np.bool
     else:
         raise NotImplementedError("input_type {} is not handled yet".format(dtype))
     return np_type
