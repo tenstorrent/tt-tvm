@@ -59,22 +59,6 @@ def dense_to_matmul():
     weight_t = is_op('transpose')(weight)
     return is_op('nn.dense')(data, weight_t)
 
-def reshape_transpose_to_hslice():
-    act = wildcard()
-    act_r = is_op('reshape')(act)
-    return is_op('transpose')(act_r)
-    
-def transpose_reshape_to_hstack():
-    act = wildcard()
-    act_t = is_op("transpose")(act)
-    return is_op("reshape")(act_t)
-
-def transpose_reshape_reshape_to_hstack():
-    act = wildcard()
-    act_t = is_op("transpose")(act)
-    rshp = is_op("reshape")(act_t)
-    return is_op("reshape")(rshp)
-
 def reshape_to_vstack():
     act = wildcard()
     return is_op('reshape')(act)
@@ -147,11 +131,6 @@ def channel_last_resize():
 @register_pattern_table("forge")
 def pattern_table():
     matmul = ("forge.matmul", dense_to_matmul())
-    hslice = ("forge.hslice", reshape_transpose_to_hslice(), is_reshape_transpose_hslice)
-    hstack = [
-        ("forge.hstack", transpose_reshape_to_hstack(), is_transpose_reshape_hstack), 
-        ("forge.hstack", transpose_reshape_reshape_to_hstack(), is_transpose_reshape_reshape_hstack)
-        ]
     binary_stack = [
         ("forge.binary_stack", stack_reshape_reshape_to_binary_stack(), is_stack_reshape_reshape_to_binary_stack),
         ("forge.binary_stack", concat_reshape_reshape_to_binary_stack(), is_concat_reshape_reshape_to_binary_stack),
@@ -165,9 +144,7 @@ def pattern_table():
     # channel_last_maxpool2d = ("forge.channel_last_maxpool", channel_last_maxpool())
     channel_last_resize2d = ("forge.channel_last_resize2d", channel_last_resize())
     forge_patterns = [
-        *hstack, 
         *binary_stack, 
-        hslice, 
         adv_index, 
         matmul, 
         forge_conv2d_with_bias,
@@ -220,8 +197,6 @@ tm_cpu_fallback_ops_of_interest = [
     # Forge
     "forge.adv_index",
     "forge.binary_stack",
-    "forge.hslice",
-    "forge.hstack",
 ]
 
 # TM CPU Fallback ops which should not be included in fallback
@@ -361,31 +336,6 @@ class UnwrapForgeOpsForCPUFallback(ExprMutator):
 
                 logger.trace("CPU fallback on linear")
                 return super().visit(tvm.relay.nn.dense(arg0, arg1))
-            
-            if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "forge_cpudevice.hslice":
-                # Get hslice input
-                if isinstance(call.args[0], tvm.relay.expr.Call):
-                    arg0 = call.args[0]
-                else:
-                    return super().visit_call(call)
-
-                # Extract reshape and transpose attributes
-                if isinstance(call.op.body, tvm.relay.expr.Call) and call.op.body.op.name == "transpose" and \
-                isinstance(call.op.body.args[0], tvm.relay.expr.Call) and call.op.body.args[0].op.name == "reshape":
-                    transpose = call.op.body
-                    transpose_axes = transpose.attrs.axes
-                    reshape = call.op.body.args[0]
-                    reshape_new_shape = reshape.attrs.newshape
-                else:
-                    return super().visit_call(call)
-                
-                # Unwrap hslice function into composite ops
-                ops = tvm.relay.reshape(arg0, reshape_new_shape)
-                ops = tvm.relay.transpose(ops, transpose_axes)
-
-                logger.trace("CPU fallback on hslice")
-                return ops
-            
             if "Composite" in call.op.attrs and call.op.attrs["Composite"] == "forge_cpudevice.binary_stack" and "PartitionedFromPattern" in call.op.attrs and call.op.attrs["PartitionedFromPattern"] == "Tuple_stack_reshape_":
                 # Get binary_stack input
                 arg0 = call.args[0] if len(call.args) > 0 else None
