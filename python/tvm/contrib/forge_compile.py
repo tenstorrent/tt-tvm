@@ -40,7 +40,7 @@ from jax.experimental import jax2tf
 from jax.tools.jax_to_ir import tf_wrap_with_input_names
 import collections
 from transformers.utils.generic import ModelOutput
-from tvm.contrib.pybuda_utils import (
+from tvm.contrib.forge_utils import (
     extract_framework_model_outputs, 
     extract_flatten_inputs, 
     construct_tvm_ir,
