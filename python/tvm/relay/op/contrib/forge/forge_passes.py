@@ -3987,7 +3987,23 @@ class RemoveDenseInputSqueeze(DFPatternCallback):
         
         return tvm.relay.nn.dense(act, dense.args[1])
 
+class ExpandMultipleDims(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.act = wildcard()
+        self.pattern = is_op('expand_dims')(self.act)
 
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        num_newaxis = int(post.attrs.num_newaxis)
+        axis = int(post.attrs.axis)
+        if num_newaxis > 1:
+            assert axis >= 0, f"Error: Axis is negative. axis: {axis}"
+            while num_newaxis:
+                act = tvm.relay.expand_dims(act, axis=axis)
+                num_newaxis-=1
+            return act
+        return post
 
 
 def _get_callback_name(callback):
@@ -4037,6 +4053,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
     return run_pattern_callbacks(
         relay_module,
         [
+            ExpandMultipleDims(),
             DecomposeReverse(),
             ConvertLayout(),
             ResolveConvChannels(),
