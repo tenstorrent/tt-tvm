@@ -1862,11 +1862,26 @@ class LowerAdaptiveMaxPool(DFPatternCallback):
             padding=padding,
         )
 
+class DecomposeMultiDimSqueeze(DFPatternCallback):
+    def __init__(self):
+        super().__init__(require_type=True)
+        self.act = wildcard()
+        self.pattern = is_op('squeeze')(self.act)
+
+    def callback(self, pre, post, node_map):
+        act = node_map[self.act][0]
+        axis = post.attrs.axis
+        input_shape = [int(dim) for dim in pre.args[0].checked_type.shape]
+        adjusted_axes = [(ax - len(input_shape)) if ax >= 0 else ax for ax in axis]
+        assert all(ax < 0 for ax in adjusted_axes), "Invalid squeeze dimension: all axes must be negative."
+        for ax in sorted(adjusted_axes):
+            act = tvm.relay.squeeze(act, axis=[ax])
+        return act
+    
 class LowerSqueezeToReshape(DFPatternCallback):
     def __init__(self):
         super().__init__(require_type=True, rewrite_once=True)
         self.input_tensor = wildcard()
-
         self.pattern = is_op('squeeze')(wildcard())
 
     def callback(self, pre, post, node_map):
@@ -4058,6 +4073,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             LowerAdaptiveAvgPool(),
             LowerAdaptiveMaxPool(),
             SimplifyTransposeReshape(),
+            DecomposeMultiDimSqueeze(),
             # LowerSqueezeToReshape(),
             PopulateTransposeAxes(),
             PopulateStridedSliceAxes(),
