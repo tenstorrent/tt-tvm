@@ -153,22 +153,19 @@ class FuseConvAndPoolPadding(DFPatternCallback):
            return
 
         pad_width = pad.attrs.pad_width
-        padding = list(pad_width[-2]) + list(pad_width[-3]) # left, right, top, bottom
         op_attrs = {**conv_pool.attrs}
-        op_attrs["padding"] = padding
 
         if conv_pool.op.name == "nn.conv2d":
             weight = node_map[self.weight][0]
+            op_attrs["padding"] = list(pad_width[-2]) + list(pad_width[-3]) # left, right, top, bottom
             return tvm.relay.op.nn.conv2d(
                 act,
                 weight,
                 **op_attrs
             )
         else:
-            return tvm.relay.op.nn.max_pool2d(
-                act,
-                **op_attrs
-            )
+            op_attrs["padding"] = [pw[-1] for pw in pad_width]
+            return tvm.relay.op.nn.max_pool2d(act, **op_attrs)
 
 class DecomposeRoll(DFPatternCallback):
     def __init__(self):
