@@ -147,13 +147,18 @@ class FuseConvAndPoolPadding(DFPatternCallback):
         act = node_map[self.act][0]
         conv_pool = node_map[self.pattern][0]
         pad = node_map[self.pad][0]
+
         if not all(conv_pool.attrs.padding[i] == 0 for i in range(len(conv_pool.attrs.padding))) \
            or not isinstance(pad.args[1], tvm.relay.Constant) or not pad.args[1].data.shape == () \
            or not int(pad.args[1].data.numpy()) == 0:
            return
 
         pad_width = pad.attrs.pad_width
-        padding = list(pad_width[-2]) + list(pad_width[-3]) # left, right, top, bottom
+        top_pad, bottom_pad = pad_width[-2]
+        left_pad, right_pad = pad_width[-1]
+
+        padding = [top_pad, left_pad, bottom_pad, right_pad]
+
         op_attrs = {**conv_pool.attrs}
         op_attrs["padding"] = padding
 
