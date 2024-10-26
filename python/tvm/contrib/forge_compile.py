@@ -1330,6 +1330,7 @@ def generate_op_tests_from_module(mod, params):
                 "embedding": "F.embedding(inputs[0].long(), param_inputs[0])",
                 "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
                 "reshape": "inputs[0].view({})",  # Added reshape operation
+                "nn.dense": "F.linear(inputs[0], getattr(self, 'weight')) + getattr(self, 'bias')",  # Added dense operation
             }
 
         def create_torch_module_files(self):
@@ -1352,7 +1353,7 @@ def generate_op_tests_from_module(mod, params):
                 print(f"Generated file: {file_name}")
 
         def _generate_module_content(self, class_name, op_name, used_params, attrs):
-            param_initialization = self._generate_param_initialization(used_params)
+            param_initialization = self._generate_param_initialization(used_params, op_name)
             param_retrieval = self._generate_param_retrieval(used_params)
 
             dtype_line = ""
@@ -1378,9 +1379,9 @@ import pytest
 
 import forge
 
-class {class_name}(nn.Module):
+class Sample(nn.Module):
     def __init__(self):
-        super({class_name}, self).__init__()
+        super(Sample, self).__init__()
         {param_initialization}
         {dtype_line}
 
@@ -1389,21 +1390,30 @@ class {class_name}(nn.Module):
         out = {op_function}
         return out
 
-def test_{class_name.lower()}():
+def test_run():
     inputs = {self._generate_sample_inputs(op_name)}
 
-    framework_model = {class_name}()
+    framework_model = Sample()
     fw_out = framework_model(inputs)
 
     compiled_model = forge.compile(framework_model, sample_inputs=inputs)
     # co_out = compiled_model(*inputs)
 """
 
-        def _generate_param_initialization(self, used_params):
+        def _generate_param_initialization(self, used_params, op_name):
             init_code = []
             for param_name in used_params:
-                param_shape = self.model_info["param_details"][param_name]["shape"]
-                init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({param_shape}, dtype=torch.float32))')
+                if op_name == "nn.dense" and param_name in ["weight", "bias"]:
+                    # Dense layer parameters
+                    input_dim = self.model_info["param_details"][param_name]["input_dim"]
+                    output_dim = self.model_info["param_details"][param_name]["output_dim"]
+                    if param_name == "weight":
+                        init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({output_dim}, {input_dim}, dtype=torch.float32))')
+                    elif param_name == "bias":
+                        init_code.append(f'self.{param_name} = nn.Parameter(torch.zeros({output_dim}, dtype=torch.float32))')
+                else:
+                    param_shape = self.model_info["param_details"][param_name]["shape"]
+                    init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({param_shape}, dtype=torch.float32))')
             return "\n        ".join(init_code)
 
         def _generate_param_retrieval(self, used_params):
@@ -1425,6 +1435,8 @@ def test_{class_name.lower()}():
                 return "[torch.randn(1, 3, 64, 64)]"  # Example for cast
             elif op_name == "reshape":
                 return "[torch.randn(1, 3, 64, 64)]"  # Example for reshape
+            elif op_name == "nn.dense":
+                return "[torch.randn(1, 10)]"  # Example for dense with input shape (1, 10)
             return "[]"
 
         def _get_reshape_shape(self, attrs):
