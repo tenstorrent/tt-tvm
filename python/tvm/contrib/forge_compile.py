@@ -370,7 +370,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    generate_op_tests = False
+    generate_op_tests = True
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     if generate_op_tests:
         convert_params = True
@@ -1190,131 +1190,12 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework):
 
 
 def generate_op_tests_from_module(mod, params):
-    import os
+    from tvm.contrib.unique_op_gen import get_op_info_0
 
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
+    model_info = get_op_info_0(mod["main"], params=params)
+    print(model_info)
+    import pdb; pdb.set_trace()
     
-    from tvm import relay
-    from tvm.relay.expr_functor import ExprVisitor
-    from tvm.relay.frontend.pytorch import _infer_type as infer_type
-
-    def get_model_details(expr, params=None):
-        class ModelInspector(ExprVisitor):
-            def __init__(self, params):
-                super().__init__()
-                self.inputs = []
-                self.params = []
-                self.constants = []
-                self.ops = []
-                self.returns = None
-                self.call_details = []
-                self.params_dict = params or {}  # Dictionary of parameters
-                self.param_details = {}  # To store detailed info on parameters
-                self.param_usage = {}  # Track which params are used by each op
-                
-                # Populate initial parameter details from params dictionary
-                for param_name, param_value in self.params_dict.items():
-                    self.param_details[param_name] = {
-                        "shape": param_value.shape,
-                        "dtype": param_value.dtype
-                    }
-                    self.param_usage[param_name] = []
-
-            def visit_var(self, var):
-                # Check if variable is a parameter using params dictionary
-                if var.name_hint in self.params_dict:
-                    self.params.append(var.name_hint)
-                else:
-                    self.inputs.append(var.name_hint)
-                super().visit_var(var)
-            
-            def visit_constant(self, const):
-                # Add constant as model constant
-                self.constants.append(const.data.asnumpy())
-                super().visit_constant(const)
-            
-            def visit_call(self, call):
-                # Extract operator details
-                op_name = call.op.name if hasattr(call.op, "name") else str(call.op)
-                
-                # Extract input shapes and check parameter usage
-                input_shapes = []
-                used_params = []
-                for arg in call.args:
-                    if isinstance(arg, relay.expr.Expr):
-                        try:
-                            inferred_type = infer_type(arg)
-                            shape = inferred_type.checked_type.shape
-                            input_shapes.append(tuple(int(dim) for dim in shape))
-                        except Exception:
-                            input_shapes.append("Unknown")
-                        
-                        # Track if this argument is a parameter
-                        if hasattr(arg, "name_hint") and arg.name_hint in self.params_dict:
-                            used_params.append(arg.name_hint)
-                            self.param_usage[arg.name_hint].append(op_name)
-                
-                # Extract attributes if available
-                attrs = {}
-                if hasattr(call, "attrs") and call.attrs is not None:
-                    try:
-                        if hasattr(call.attrs, "keys"):
-                            for attr_name in call.attrs.keys():
-                                attrs[attr_name] = call.attrs[attr_name]
-                        else:
-                            for attr_name in dir(call.attrs):
-                                if not attr_name.startswith("_"):
-                                    attrs[attr_name] = getattr(call.attrs, attr_name)
-                    except Exception as e:
-                        print(f"Could not retrieve attributes for {op_name}: {e}")
-                
-                # Append all operator calls with details
-                call_entry = {
-                    "Operator": op_name,
-                    "Input Shapes": input_shapes,
-                    "Attributes": dict(attrs),
-                    "Used Params": used_params
-                }
-                self.call_details.append(call_entry)
-                
-                # Record the operation for summary purposes
-                self.ops.append(op_name)
-
-                super().visit_call(call)
-            
-            def visit_function(self, func):
-                # Extract model inputs and output/return information
-                for param in func.params:
-                    self.visit(param)
-                if func.body is not None:
-                    inferred_return_type = infer_type(func.body)
-                    self.returns = inferred_return_type.checked_type
-                super().visit_function(func)
-            
-            def get_model_info(self):
-                # Return a comprehensive dictionary of model details
-                return {
-                    "inputs": self.inputs,
-                    "params": self.params,
-                    "constants": self.constants,
-                    "ops": self.ops,
-                    "return_type": self.returns,
-                    "call_details": self.call_details,
-                    "param_details": self.param_details,  # Detailed parameter info
-                    "param_usage": self.param_usage        # Which ops use each param
-                }
-
-        # Run inspection
-        inspector = ModelInspector(params)
-        inspector.visit(expr)
-
-        # Return the gathered details
-        return inspector.get_model_info()
-
-    model_info = get_model_details(mod["main"], params=params)
-
     class TorchModuleGenerator:
         def __init__(self, model_info, output_dir='torch_modules'):
             self.model_info = model_info
