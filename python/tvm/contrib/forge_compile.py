@@ -370,7 +370,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    generate_op_tests = True
+    generate_op_tests = False
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     if generate_op_tests:
         convert_params = True
@@ -1329,7 +1329,7 @@ def generate_op_tests_from_module(mod, params):
                 "multiply": "inputs[0] * inputs[1]",
                 "embedding": "F.embedding(inputs[0].long(), param_inputs[0])",
                 "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
-                "reshape": "inputs[0].view({})",  # Added reshape operation
+                "reshape": "inputs[0].reshape(({}))",  # Added reshape operation
                 "nn.dense": "F.linear(inputs[0], getattr(self, 'weight')) + getattr(self, 'bias')",  # Added dense operation
                 "transpose": "inputs[0].transpose({}, {})",  # Added transpose operation
             }
@@ -1447,7 +1447,12 @@ def test_run():
 
         def _get_reshape_shape(self, attrs):
             # Convert attributes to a shape tuple
-            new_shape = attrs.get("new_shape", [])
+            new_shape = []
+            shape = attrs.get("newshape", [])
+            
+            for el in shape:
+                new_shape.append(int(el))
+            
             if isinstance(new_shape, list):
                 return ", ".join(map(str, new_shape))
             raise ValueError("New shape for reshape operation must be a list.")
