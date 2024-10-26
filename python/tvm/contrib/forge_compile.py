@@ -370,7 +370,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    generate_op_tests = False
+    generate_op_tests = True
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     if generate_op_tests:
         convert_params = True
@@ -1314,75 +1314,6 @@ def generate_op_tests_from_module(mod, params):
         return inspector.get_model_info()
 
     model_info = get_model_details(mod["main"], params=params)
-    
-    def create_torch_module_for_ops(model_info):
-        module_dict = {}  # Store generated modules for each op
-
-        # Iterate through each operation call in model_info
-        for idx, call_detail in enumerate(model_info["call_details"]):
-            op_name = call_detail["Operator"]
-            input_shapes = call_detail["Input Shapes"]
-            attrs = call_detail["Attributes"]
-            used_params = call_detail["Used Params"]
-
-            # Define a new PyTorch Module for this specific operation
-            class SingleOpModule(nn.Module):
-                def __init__(self):
-                    super(SingleOpModule, self).__init__()
-                    
-                    # Add parameters if used in this op
-                    for param_name in used_params:
-                        param_shape = model_info["param_details"][param_name]["shape"]
-                        dtype = model_info["param_details"][param_name]["dtype"]
-                        # Initialize parameter with random values for demonstration
-                        param = nn.Parameter(torch.randn(*param_shape, dtype=torch.float32))
-                        setattr(self, param_name, param)
-
-                def forward(self, *inputs):
-                    # Retrieve parameters by name
-                    param_inputs = [getattr(self, name) for name in used_params]
-                    
-                    # Map Relay ops to equivalent PyTorch functions
-                    if op_name == "nn.conv2d":
-                        out = F.conv2d(inputs[0], *param_inputs, **attrs)
-                    elif op_name == "nn.relu":
-                        out = F.relu(inputs[0])
-                    elif op_name == "add":
-                        out = inputs[0] + inputs[1]
-                    elif op_name == "multiply":
-                        out = inputs[0] * inputs[1]
-                    elif op_name == "embedding":
-                        # For embedding, we need an input for indices and a parameter for weights
-                        out = F.embedding(inputs[0].long(), param_inputs[0])
-                    elif op_name == "cast":
-                        # Cast to specified dtype (attrs should contain 'dtype')
-                        target_dtype = attrs.get("dtype", torch.float32)
-                        
-                        if target_dtype == "int32":
-                            target_dtype = torch.int32
-                        
-                        out = inputs[0].to(target_dtype)
-                    else:
-                        raise NotImplementedError(f"Operation '{op_name}' not implemented.")
-                    
-                    return out
-
-            # Store the dynamically created module in a dictionary with an index-based name
-            module_name = f"{op_name}_module_{idx}"
-            module_dict[module_name] = SingleOpModule()
-
-        return module_dict
-
-    module_dict = create_torch_module_for_ops(model_info)
-
-    for module_name, module in module_dict.items():
-        print(f"Running {module_name}:")
-
-        call_detail = model_info["call_details"][int(module_name.split("_")[-1])]
-        sample_inputs = [torch.randn(*shape) for shape in call_detail["Input Shapes"]]
-        
-        output = module(*sample_inputs)
-        print(f"Output from {module_name}: {output.shape}")
 
     class TorchModuleGenerator:
         def __init__(self, model_info, output_dir='torch_modules'):
