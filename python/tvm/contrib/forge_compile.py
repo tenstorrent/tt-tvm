@@ -331,6 +331,8 @@ class ConvertEmulatedDtypes:
 
 def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
     training_mode = torchmod.training
+    
+    import torch
 
     with ConvertEmulatedDtypes(torchmod, inputs):
         # Extract framework model outputs
@@ -368,7 +370,11 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
+    generate_op_tests = False
     convert_params = compiler_cfg.convert_framework_params_to_tvm
+    if generate_op_tests:
+        convert_params = True
+
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure, do_convert_params=convert_params)
     logger.trace("From PyTorch")
     logger.trace(mod.functions)
@@ -381,6 +387,11 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         params=params,
         compiler_cfg=compiler_cfg,
     )
+
+    if generate_op_tests:
+        generate_op_tests_from_module(mod, params)
+        logger.info("Generated op tests")
+        os._exit(0)
 
     # Construct NumPy inputs
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
@@ -1176,3 +1187,306 @@ def serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework):
         file.write(serilized_str)
 
     logger.info(f"Successfully stored serilized TVM graph to {store_path} path")
+
+
+def generate_op_tests_from_module(mod, params):
+    import os
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    
+    from tvm import relay
+    from tvm.relay.expr_functor import ExprVisitor
+    from tvm.relay.frontend.pytorch import _infer_type as infer_type
+
+    def get_model_details(expr, params=None):
+        class ModelInspector(ExprVisitor):
+            def __init__(self, params):
+                super().__init__()
+                self.inputs = []
+                self.params = []
+                self.constants = []
+                self.ops = []
+                self.returns = None
+                self.call_details = []
+                self.params_dict = params or {}  # Dictionary of parameters
+                self.param_details = {}  # To store detailed info on parameters
+                self.param_usage = {}  # Track which params are used by each op
+                
+                # Populate initial parameter details from params dictionary
+                for param_name, param_value in self.params_dict.items():
+                    self.param_details[param_name] = {
+                        "shape": param_value.shape,
+                        "dtype": param_value.dtype
+                    }
+                    self.param_usage[param_name] = []
+
+            def visit_var(self, var):
+                # Check if variable is a parameter using params dictionary
+                if var.name_hint in self.params_dict:
+                    self.params.append(var.name_hint)
+                else:
+                    self.inputs.append(var.name_hint)
+                super().visit_var(var)
+            
+            def visit_constant(self, const):
+                # Add constant as model constant
+                self.constants.append(const.data.asnumpy())
+                super().visit_constant(const)
+            
+            def visit_call(self, call):
+                # Extract operator details
+                op_name = call.op.name if hasattr(call.op, "name") else str(call.op)
+                
+                # Extract input shapes and check parameter usage
+                input_shapes = []
+                used_params = []
+                for arg in call.args:
+                    if isinstance(arg, relay.expr.Expr):
+                        try:
+                            inferred_type = infer_type(arg)
+                            shape = inferred_type.checked_type.shape
+                            input_shapes.append(tuple(int(dim) for dim in shape))
+                        except Exception:
+                            input_shapes.append("Unknown")
+                        
+                        # Track if this argument is a parameter
+                        if hasattr(arg, "name_hint") and arg.name_hint in self.params_dict:
+                            used_params.append(arg.name_hint)
+                            self.param_usage[arg.name_hint].append(op_name)
+                
+                # Extract attributes if available
+                attrs = {}
+                if hasattr(call, "attrs") and call.attrs is not None:
+                    try:
+                        if hasattr(call.attrs, "keys"):
+                            for attr_name in call.attrs.keys():
+                                attrs[attr_name] = call.attrs[attr_name]
+                        else:
+                            for attr_name in dir(call.attrs):
+                                if not attr_name.startswith("_"):
+                                    attrs[attr_name] = getattr(call.attrs, attr_name)
+                    except Exception as e:
+                        print(f"Could not retrieve attributes for {op_name}: {e}")
+                
+                # Append all operator calls with details
+                call_entry = {
+                    "Operator": op_name,
+                    "Input Shapes": input_shapes,
+                    "Attributes": dict(attrs),
+                    "Used Params": used_params
+                }
+                self.call_details.append(call_entry)
+                
+                # Record the operation for summary purposes
+                self.ops.append(op_name)
+
+                super().visit_call(call)
+            
+            def visit_function(self, func):
+                # Extract model inputs and output/return information
+                for param in func.params:
+                    self.visit(param)
+                if func.body is not None:
+                    inferred_return_type = infer_type(func.body)
+                    self.returns = inferred_return_type.checked_type
+                super().visit_function(func)
+            
+            def get_model_info(self):
+                # Return a comprehensive dictionary of model details
+                return {
+                    "inputs": self.inputs,
+                    "params": self.params,
+                    "constants": self.constants,
+                    "ops": self.ops,
+                    "return_type": self.returns,
+                    "call_details": self.call_details,
+                    "param_details": self.param_details,  # Detailed parameter info
+                    "param_usage": self.param_usage        # Which ops use each param
+                }
+
+        # Run inspection
+        inspector = ModelInspector(params)
+        inspector.visit(expr)
+
+        # Return the gathered details
+        return inspector.get_model_info()
+
+    model_info = get_model_details(mod["main"], params=params)
+    
+    def create_torch_module_for_ops(model_info):
+        module_dict = {}  # Store generated modules for each op
+
+        # Iterate through each operation call in model_info
+        for idx, call_detail in enumerate(model_info["call_details"]):
+            op_name = call_detail["Operator"]
+            input_shapes = call_detail["Input Shapes"]
+            attrs = call_detail["Attributes"]
+            used_params = call_detail["Used Params"]
+
+            # Define a new PyTorch Module for this specific operation
+            class SingleOpModule(nn.Module):
+                def __init__(self):
+                    super(SingleOpModule, self).__init__()
+                    
+                    # Add parameters if used in this op
+                    for param_name in used_params:
+                        param_shape = model_info["param_details"][param_name]["shape"]
+                        dtype = model_info["param_details"][param_name]["dtype"]
+                        # Initialize parameter with random values for demonstration
+                        param = nn.Parameter(torch.randn(*param_shape, dtype=torch.float32))
+                        setattr(self, param_name, param)
+
+                def forward(self, *inputs):
+                    # Retrieve parameters by name
+                    param_inputs = [getattr(self, name) for name in used_params]
+                    
+                    # Map Relay ops to equivalent PyTorch functions
+                    if op_name == "nn.conv2d":
+                        out = F.conv2d(inputs[0], *param_inputs, **attrs)
+                    elif op_name == "nn.relu":
+                        out = F.relu(inputs[0])
+                    elif op_name == "add":
+                        out = inputs[0] + inputs[1]
+                    elif op_name == "multiply":
+                        out = inputs[0] * inputs[1]
+                    elif op_name == "embedding":
+                        # For embedding, we need an input for indices and a parameter for weights
+                        out = F.embedding(inputs[0].long(), param_inputs[0])
+                    elif op_name == "cast":
+                        # Cast to specified dtype (attrs should contain 'dtype')
+                        target_dtype = attrs.get("dtype", torch.float32)
+                        
+                        if target_dtype == "int32":
+                            target_dtype = torch.int32
+                        
+                        out = inputs[0].to(target_dtype)
+                    else:
+                        raise NotImplementedError(f"Operation '{op_name}' not implemented.")
+                    
+                    return out
+
+            # Store the dynamically created module in a dictionary with an index-based name
+            module_name = f"{op_name}_module_{idx}"
+            module_dict[module_name] = SingleOpModule()
+
+        return module_dict
+
+    module_dict = create_torch_module_for_ops(model_info)
+
+    for module_name, module in module_dict.items():
+        print(f"Running {module_name}:")
+
+        call_detail = model_info["call_details"][int(module_name.split("_")[-1])]
+        sample_inputs = [torch.randn(*shape) for shape in call_detail["Input Shapes"]]
+        
+        output = module(*sample_inputs)
+        print(f"Output from {module_name}: {output.shape}")
+
+    class TorchModuleGenerator:
+        def __init__(self, model_info, output_dir='torch_modules'):
+            self.model_info = model_info
+            self.output_dir = output_dir
+            os.makedirs(self.output_dir, exist_ok=True)  # Create the output directory if it doesn't exist
+
+            # Mapping of operation names to PyTorch functions
+            self.op_mapping = {
+                "nn.conv2d": "F.conv2d",
+                "nn.relu": "F.relu",
+                "add": "inputs[0] + inputs[1]",
+                "multiply": "inputs[0] * inputs[1]",
+                "embedding": "F.embedding(inputs[0].long(), param_inputs[0])",
+                "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
+            }
+
+        def create_torch_module_files(self):
+            for idx, call_detail in enumerate(self.model_info["call_details"]):
+                op_name = call_detail["Operator"]
+                used_params = call_detail["Used Params"]
+                attrs = call_detail["Attributes"]
+
+                # Define the module class name and file name
+                class_name = f"{op_name.capitalize()}Module"
+                file_name = f"{idx}.py"  # Using an integer counter for file names
+
+                # Create the content of the module
+                module_content = self._generate_module_content(class_name, op_name, used_params, attrs)
+
+                # Write the module content to a file
+                with open(os.path.join(self.output_dir, file_name), 'w') as f:
+                    f.write(module_content.strip())
+
+                print(f"Generated file: {file_name}")
+
+        def _generate_module_content(self, class_name, op_name, used_params, attrs):
+            param_initialization = self._generate_param_initialization(used_params)
+            param_retrieval = self._generate_param_retrieval(used_params)
+
+            dtype_line = ""
+            if op_name == "cast":
+                dtype_line = f"self.target_dtype = torch.float32  # Default dtype\n"  # Now set as a class variable
+
+            op_function = self.op_mapping.get(op_name)
+            if not op_function:
+                raise NotImplementedError(f"Operation '{op_name}' not implemented.")
+
+            # Using a simple template for the class
+            return \
+f"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import pytest
+
+import forge
+
+class {class_name}(nn.Module):
+    def __init__(self):
+        super({class_name}, self).__init__()
+        {param_initialization}
+        {dtype_line}
+
+    def forward(self, inputs):
+        param_inputs = [{param_retrieval}]
+        out = {op_function}
+        return out
+
+def test_{class_name.lower()}():
+    inputs = {self._generate_sample_inputs(op_name)}
+
+    framework_model = {class_name}()
+    fw_out = framework_model(inputs)
+
+    compiled_model = forge.compile(framework_model, sample_inputs=inputs)
+    # co_out = compiled_model(*inputs)
+    """
+
+        def _generate_param_initialization(self, used_params):
+            init_code = []
+            for param_name in used_params:
+                param_shape = self.model_info["param_details"][param_name]["shape"]
+                init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({param_shape}, dtype=torch.float32))')
+            return "\n        ".join(init_code)
+
+        def _generate_param_retrieval(self, used_params):
+            return ", ".join([f"getattr(self, '{name}')" for name in used_params])
+
+        def _generate_sample_inputs(self, op_name):
+            # Generate sample inputs based on the operation type
+            if op_name == "nn.conv2d":
+                return "[torch.randn(1, 3, 64, 64), torch.randn(16, 3, 3, 3)]"  # Example for conv2d
+            elif op_name == "nn.relu":
+                return "[torch.randn(1, 3, 64, 64)]"  # Example for relu
+            elif op_name == "add":
+                return "[torch.randn(1, 3, 64, 64), torch.randn(1, 3, 64, 64)]"  # Example for add
+            elif op_name == "multiply":
+                return "[torch.randn(1, 3, 64, 64), torch.randn(1, 3, 64, 64)]"  # Example for multiply
+            elif op_name == "embedding":
+                return "[torch.randint(0, 32000, (10, 3))]"  # Example for embedding
+            elif op_name == "cast":
+                return "[torch.randn(1, 3, 64, 64)]"  # Example for cast
+            return "[]"
+
+    generator = TorchModuleGenerator(model_info)
+    generator.create_torch_module_files()
