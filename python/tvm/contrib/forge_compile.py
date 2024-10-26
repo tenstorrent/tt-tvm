@@ -370,7 +370,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    generate_op_tests = True
+    generate_op_tests = False
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     if generate_op_tests:
         convert_params = True
@@ -1330,7 +1330,7 @@ def generate_op_tests_from_module(mod, params):
                 "embedding": "F.embedding(inputs[0].long(), param_inputs[0])",
                 "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
                 "reshape": "inputs[0].reshape(({}))",  # Added reshape operation
-                "nn.dense": "F.linear(inputs[0], getattr(self, 'weight')) + getattr(self, 'bias')",  # Added dense operation
+                "nn.dense": "F.linear(inputs[0], inputs[1])",  # Adjusted to use inputs for weight and bias
                 "transpose": "inputs[0].transpose({}, {})",  # Added transpose operation
             }
 
@@ -1407,20 +1407,16 @@ def test_run():
             init_code = []
             for param_name in used_params:
                 if op_name == "nn.dense" and param_name in ["weight", "bias"]:
-                    # Dense layer parameters
-                    input_dim = self.model_info["param_details"][param_name]["shape"][1]
-                    output_dim = self.model_info["param_details"][param_name]["shape"][0]
-                    if param_name == "weight":
-                        init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({output_dim}, {input_dim}, dtype=torch.float32))')
-                    elif param_name == "bias":
-                        init_code.append(f'self.{param_name} = nn.Parameter(torch.zeros({output_dim}, dtype=torch.float32))')
+                    # In this case, we don't initialize weight and bias as they are passed in as inputs
+                    continue  # Skip initializing weight and bias
                 else:
                     param_shape = self.model_info["param_details"][param_name]["shape"]
                     init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({param_shape}, dtype=torch.float32))')
             return "\n        ".join(init_code)
 
         def _generate_param_retrieval(self, used_params):
-            return ", ".join([f"getattr(self, '{name}')" for name in used_params])
+            # Returns the parameters to be used in the forward function
+            return ", ".join([f"inputs[{i}]" for i, name in enumerate(used_params)])
 
         def _generate_sample_inputs(self, call_detail):
             # Retrieve input shapes from the call detail
