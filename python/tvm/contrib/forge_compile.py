@@ -1331,6 +1331,7 @@ def generate_op_tests_from_module(mod, params):
                 "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
                 "reshape": "inputs[0].view({})",  # Added reshape operation
                 "nn.dense": "F.linear(inputs[0], getattr(self, 'weight')) + getattr(self, 'bias')",  # Added dense operation
+                "transpose": "inputs[0].transpose({}, {})",  # Added transpose operation
             }
 
         def create_torch_module_files(self):
@@ -1360,11 +1361,14 @@ def generate_op_tests_from_module(mod, params):
             if op_name == "cast":
                 dtype_line = f"self.target_dtype = torch.float32  # Default dtype\n"  # Now set as a class variable
 
-            # Handle reshape operation separately
+            # Handle reshape and transpose operations separately
             op_function = self.op_mapping.get(op_name)
             if op_name == "reshape":
                 new_shape = self._get_reshape_shape(attrs)
                 op_function = op_function.format(new_shape)  # Insert the new shape into the op_function
+            elif op_name == "transpose":
+                dim0, dim1 = self._get_transpose_dimensions(attrs)
+                op_function = op_function.format(dim0, dim1)  # Insert dimensions for transpose
 
             if not op_function:
                 raise NotImplementedError(f"Operation '{op_name}' not implemented.")
@@ -1397,7 +1401,7 @@ def test_run():
     fw_out = framework_model(inputs)
 
     compiled_model = forge.compile(framework_model, sample_inputs=inputs)
-    # co_out = compiled_model(*inputs)
+    co_out = compiled_model(*inputs)
 """
 
         def _generate_param_initialization(self, used_params, op_name):
@@ -1437,6 +1441,8 @@ def test_run():
                 return "[torch.randn(1, 3, 64, 64)]"  # Example for reshape
             elif op_name == "nn.dense":
                 return "[torch.randn(1, 10)]"  # Example for dense with input shape (1, 10)
+            elif op_name == "transpose":
+                return "[torch.randn(2, 3)]"  # Example for transpose with input shape (2, 3)
             return "[]"
 
         def _get_reshape_shape(self, attrs):
@@ -1445,6 +1451,19 @@ def test_run():
             if isinstance(new_shape, list):
                 return ", ".join(map(str, new_shape))
             raise ValueError("New shape for reshape operation must be a list.")
+
+        def _get_transpose_dimensions(self, attrs):
+            # Extract dimensions for transpose operation
+            dims = attrs.get("dims", [0, 1])  # Default transpose dimensions
+            if isinstance(dims, list) and len(dims) == 2:
+                return dims[0], dims[1]
+            raise ValueError("Transpose dimensions must be a list of two integers.")
+
+    # Example usage
+    # model_info should be defined with call_details and param_details
+    # generator = TorchModuleGenerator(model_info)
+    # generator.create_torch_module_files()
+
     
     generator = TorchModuleGenerator(model_info)
     generator.create_torch_module_files()
