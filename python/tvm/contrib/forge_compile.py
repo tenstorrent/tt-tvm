@@ -1329,6 +1329,7 @@ def generate_op_tests_from_module(mod, params):
                 "multiply": "inputs[0] * inputs[1]",
                 "embedding": "F.embedding(inputs[0].long(), param_inputs[0])",
                 "cast": "inputs[0].to(self.target_dtype)",  # Now using self.target_dtype
+                "reshape": "inputs[0].view({})",  # Added reshape operation
             }
 
         def create_torch_module_files(self):
@@ -1358,7 +1359,12 @@ def generate_op_tests_from_module(mod, params):
             if op_name == "cast":
                 dtype_line = f"self.target_dtype = torch.float32  # Default dtype\n"  # Now set as a class variable
 
+            # Handle reshape operation separately
             op_function = self.op_mapping.get(op_name)
+            if op_name == "reshape":
+                new_shape = self._get_reshape_shape(attrs)
+                op_function = op_function.format(new_shape)  # Insert the new shape into the op_function
+
             if not op_function:
                 raise NotImplementedError(f"Operation '{op_name}' not implemented.")
 
@@ -1391,7 +1397,7 @@ def test_{class_name.lower()}():
 
     compiled_model = forge.compile(framework_model, sample_inputs=inputs)
     # co_out = compiled_model(*inputs)
-    """
+"""
 
         def _generate_param_initialization(self, used_params):
             init_code = []
@@ -1417,7 +1423,16 @@ def test_{class_name.lower()}():
                 return "[torch.randint(0, 32000, (10, 3))]"  # Example for embedding
             elif op_name == "cast":
                 return "[torch.randn(1, 3, 64, 64)]"  # Example for cast
+            elif op_name == "reshape":
+                return "[torch.randn(1, 3, 64, 64)]"  # Example for reshape
             return "[]"
 
+        def _get_reshape_shape(self, attrs):
+            # Convert attributes to a shape tuple
+            new_shape = attrs.get("new_shape", [])
+            if isinstance(new_shape, list):
+                return ", ".join(map(str, new_shape))
+            raise ValueError("New shape for reshape operation must be a list.")
+    
     generator = TorchModuleGenerator(model_info)
     generator.create_torch_module_files()
