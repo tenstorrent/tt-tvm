@@ -370,7 +370,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         return cached_graphs, flattened_inputs
 
     # Generate TVM module
-    generate_op_tests = False
+    generate_op_tests = True
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     if generate_op_tests:
         convert_params = True
@@ -1345,7 +1345,7 @@ def generate_op_tests_from_module(mod, params):
                 file_name = f"{idx}.py"  # Using an integer counter for file names
 
                 # Create the content of the module
-                module_content = self._generate_module_content(class_name, op_name, used_params, attrs)
+                module_content = self._generate_module_content(class_name, op_name, used_params, attrs, call_detail)
 
                 # Write the module content to a file
                 with open(os.path.join(self.output_dir, file_name), 'w') as f:
@@ -1353,7 +1353,7 @@ def generate_op_tests_from_module(mod, params):
 
                 print(f"Generated file: {file_name}")
 
-        def _generate_module_content(self, class_name, op_name, used_params, attrs):
+        def _generate_module_content(self, class_name, op_name, used_params, attrs, call_detail):
             param_initialization = self._generate_param_initialization(used_params, op_name)
             param_retrieval = self._generate_param_retrieval(used_params)
 
@@ -1378,14 +1378,13 @@ def generate_op_tests_from_module(mod, params):
 f"""
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import pytest
+from torch.nn import functional as F
 
 import forge
 
-class Sample(nn.Module):
+class OpSample(nn.Module):
     def __init__(self):
-        super(Sample, self).__init__()
+        super(OpSample, self).__init__()
         {param_initialization}
         {dtype_line}
 
@@ -1395,9 +1394,9 @@ class Sample(nn.Module):
         return out
 
 def test_run():
-    inputs = {self._generate_sample_inputs(op_name)}
-
-    framework_model = Sample()
+    inputs = {self._generate_sample_inputs(call_detail)}
+    
+    framework_model = OpSample()
     fw_out = framework_model(inputs)
 
     compiled_model = forge.compile(framework_model, sample_inputs=inputs)
@@ -1409,8 +1408,8 @@ def test_run():
             for param_name in used_params:
                 if op_name == "nn.dense" and param_name in ["weight", "bias"]:
                     # Dense layer parameters
-                    input_dim = self.model_info["param_details"][param_name]["input_dim"]
-                    output_dim = self.model_info["param_details"][param_name]["output_dim"]
+                    input_dim = self.model_info["param_details"][param_name]["shape"][1]
+                    output_dim = self.model_info["param_details"][param_name]["shape"][0]
                     if param_name == "weight":
                         init_code.append(f'self.{param_name} = nn.Parameter(torch.randn({output_dim}, {input_dim}, dtype=torch.float32))')
                     elif param_name == "bias":
@@ -1423,27 +1422,17 @@ def test_run():
         def _generate_param_retrieval(self, used_params):
             return ", ".join([f"getattr(self, '{name}')" for name in used_params])
 
-        def _generate_sample_inputs(self, op_name):
-            # Generate sample inputs based on the operation type
-            if op_name == "nn.conv2d":
-                return "[torch.randn(1, 3, 64, 64), torch.randn(16, 3, 3, 3)]"  # Example for conv2d
-            elif op_name == "nn.relu":
-                return "[torch.randn(1, 3, 64, 64)]"  # Example for relu
-            elif op_name == "add":
-                return "[torch.randn(1, 3, 64, 64), torch.randn(1, 3, 64, 64)]"  # Example for add
-            elif op_name == "multiply":
-                return "[torch.randn(1, 3, 64, 64), torch.randn(1, 3, 64, 64)]"  # Example for multiply
-            elif op_name == "embedding":
-                return "[torch.randint(0, 32000, (10, 3))]"  # Example for embedding
-            elif op_name == "cast":
-                return "[torch.randn(1, 3, 64, 64)]"  # Example for cast
-            elif op_name == "reshape":
-                return "[torch.randn(1, 3, 64, 64)]"  # Example for reshape
-            elif op_name == "nn.dense":
-                return "[torch.randn(1, 10)]"  # Example for dense with input shape (1, 10)
-            elif op_name == "transpose":
-                return "[torch.randn(2, 3)]"  # Example for transpose with input shape (2, 3)
-            return "[]"
+        def _generate_sample_inputs(self, call_detail):
+            # Retrieve input shapes from the call detail
+            input_shapes = call_detail["Input Shapes"]
+            inputs = []
+
+            for shape in input_shapes:
+                # Create a sample tensor with the given shape
+                tensor_shape = f"({', '.join(map(str, shape))})"
+                inputs.append(f"torch.randn{tensor_shape}")
+
+            return f"[{', '.join(inputs)}]"
 
         def _get_reshape_shape(self, attrs):
             # Convert attributes to a shape tuple
@@ -1459,16 +1448,16 @@ def test_run():
 
         def _get_transpose_dimensions(self, attrs):
             # Extract dimensions for transpose operation
-            dims = attrs.get("dims", [0, 1])  # Default transpose dimensions
-            if isinstance(dims, list) and len(dims) == 2:
-                return dims[0], dims[1]
+            dims = attrs.get("axes", None)  # Default transpose dimensions
+            
+            new_dims = []
+            for el in dims:
+                new_dims.append(int(el))
+            
+            if isinstance(new_dims, list) and len(new_dims) == 2:
+                return new_dims[0], new_dims[1]
             raise ValueError("Transpose dimensions must be a list of two integers.")
 
-    # Example usage
-    # model_info should be defined with call_details and param_details
-    # generator = TorchModuleGenerator(model_info)
-    # generator.create_torch_module_files()
-
-    
+    # Usage
     generator = TorchModuleGenerator(model_info)
     generator.create_torch_module_files()
