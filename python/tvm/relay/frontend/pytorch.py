@@ -4622,7 +4622,7 @@ class PyTorchOpConverter:
             "aten::floor_divide": self.make_elemwise("floor_divide"),
             "aten::true_divide": self.make_elemwise("divide"),
             "aten::fmod": self.make_elemwise("trunc_mod"),
-            "aten::remainder": self.make_elemwise("floor_mod"),
+            "aten::remainder": self.make_elemwise("mod"),
             "aten::addcdiv": self.addcdiv,
             "aten::addcmul": self.addcmul,
             "aten::ones": self.ones,
