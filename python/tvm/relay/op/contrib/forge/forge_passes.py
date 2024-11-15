@@ -618,9 +618,16 @@ class DecomposePower(DFPatternCallback):
 
         if not exponent.is_integer():
             dec = exponent - int(exponent)
-            assert dec == 0.5 , "Only support a single sqrt for now"
-            op = tvm.relay.sqrt(op)
-            exponent -= dec
+            if dec == 0.5:
+                op = tvm.relay.sqrt(op)
+                exponent -= dec
+            elif dec == 0.75:
+                op = tvm.relay.sqrt(op)             
+                op = tvm.relay.multiply(op, act)    
+                op = tvm.relay.sqrt(op)             
+                exponent -= dec
+            else:
+                assert False, f"Exponent value {dec} is not yet supported."
 
         if exponent.is_integer():
             original_op = op
