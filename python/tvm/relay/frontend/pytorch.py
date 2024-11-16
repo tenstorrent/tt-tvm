@@ -973,21 +973,6 @@ class PyTorchOpConverter:
 
         return out
 
-    def new_zeros(self, inputs, input_types):
-        data = inputs[1]
-
-        import torch
-
-        if not isinstance(data, (_expr.Expr, list, tuple, torch.Size)):
-            msg = f"Data type {type(data)} could not be parsed in new_zeros op"
-            raise AssertionError(msg)
-
-        if inputs[2] is not None:
-            dtype = _convert_dtype_value(inputs[2])
-        else:
-            # if dtype is None, use the dtype of the input tensor
-            dtype = self.infer_type(inputs[0]).dtype
-        return self.full_impl(data, 0, dtype)
 
     def fill(self, inputs, input_type):
         data = inputs[0]
@@ -999,7 +984,11 @@ class PyTorchOpConverter:
             msg = "Data type %s could not be parsed in full op" % (type(data))
             raise AssertionError(msg)
 
-        dtype = self.default_dtype
+        if inputs[2] is not None:
+            dtype = _convert_dtype_value(inputs[2])
+        else:
+            # if dtype is None, use the dtype of the input tensor
+            dtype = self.infer_type(inputs[0]).dtype
 
         return self.full_impl(self.infer_shape(data), fill_value, dtype)
 

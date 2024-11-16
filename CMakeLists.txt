@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16)
 project(tvm C CXX)
 
 # Utility functions
@@ -641,6 +642,7 @@ add_library(tvm_objs OBJECT ${COMPILER_SRCS})
 add_library(tvm_runtime_objs OBJECT ${RUNTIME_SRCS})
 add_library(tvm_libinfo_objs OBJECT ${LIBINFO_FILE})
 
+include(GNUInstallDirs)
 include(GNUInstallDirs)
 if(NOT BUILD_DUMMY_LIBTVM)
   add_library(tvm SHARED
