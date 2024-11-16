@@ -97,7 +97,7 @@ TVM_REGISTER_GLOBAL("relay.ir.Constant").set_body_typed([](runtime::NDArray data
 TVM_REGISTER_GLOBAL("relay.ir.ConstantWithFields")
     .set_body_typed([](Constant constant, Optional<runtime::NDArray> opt_data,
                        Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span,
-                       Optional<Bool> opt_is_param, Optional<String> opt_name, 
+                       Optional<tvm::Bool> opt_is_param, Optional<String> opt_name, 
                        Optional<String> opt_framework_dtype, Optional<Integer> opt_id) {
       return WithFields(constant, opt_data, opt_virtual_device, opt_span, opt_is_param, opt_name, opt_framework_dtype, opt_id);
     });
@@ -125,12 +125,12 @@ TensorType ConstantNode::tensor_type() const {
 
 Constant WithFields(Constant constant, Optional<runtime::NDArray> opt_data,
                     Optional<VirtualDevice> opt_virtual_device, Optional<Span> opt_span,
-                    Optional<Bool> opt_is_param, Optional<String> opt_name, 
+                    Optional<tvm::Bool> opt_is_param, Optional<String> opt_name, 
                     Optional<String> opt_framework_dtype, Optional<Integer> opt_id) {
   runtime::NDArray data = opt_data.value_or(constant->data);
   VirtualDevice virtual_device = opt_virtual_device.value_or(constant->virtual_device());
   Span span = opt_span.value_or(constant->span);
-  bool is_param = bool(opt_is_param.value_or(Bool(constant->is_param)));
+  bool is_param = bool(opt_is_param.value_or(tvm::Bool(constant->is_param)));
   std::string name = opt_name.value_or("_const_").c_str();
   std::string framework_dtype = opt_framework_dtype.value_or(String(constant->framework_dtype)).c_str();
   Integer id = opt_id.value_or(constant->id);

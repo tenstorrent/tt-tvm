@@ -3423,14 +3423,6 @@ class PyTorchOpConverter:
         # (!mask * x) + (mask*y)
         return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
 
-
-    def baddbmm(self, inputs, input_types):
-        bmm = _op.nn.batch_matmul(inputs[1], inputs[2], out_dtype=input_types[0], transpose_a=False, transpose_b=False)
-        bmm_mul = _op.multiply(tvm.relay.const(tvm.nd.array([np.float32(inputs[4]),]), dtype=input_types[0]), bmm)
-        beta_input = _op.multiply(tvm.relay.const(tvm.nd.array([np.float32(inputs[3]),]), dtype=input_types[0]), inputs[0])
-        final_add = _op.add(bmm_mul, beta_input)
-        return final_add
-
     def __or__(self, inputs, input_types):
         return _op.bitwise_or(inputs[0], inputs[1])
 
@@ -3483,45 +3475,6 @@ class PyTorchOpConverter:
             )
             unique_sliced = _op.strided_slice(unique, begin=[0], end=num_uniq, slice_mode="size")
             return (unique_sliced, inverse_indices)
-
-    def l1_loss(self, inputs, input_types):
-        assert len(inputs) == 3
-        [input, targets, reduction] = inputs
-        if reduction == 0:
-            reduction = "none"
-        elif reduction == 1:
-            reduction = "mean"
-        else:
-            reduction = "sum"
-
-        from loguru import logger
-        logger.warning("Abs not supported yet, running L1Loss without it. It won't match 'real' values.")
-        diff = _op.subtract(input, targets)
-        # diff = _op.abs(_op.subtract(input, targets))
-        if reduction == "none":
-            return diff
-        elif reduction == "mean":
-            return _op.mean(diff, keepdims=True)
-        else:
-            return _op.sum(diff, keepdims=True)
-
-    def mse_loss(self, inputs, input_types):
-        assert len(inputs) == 3
-        [input, targets, reduction] = inputs
-        if reduction == 0:
-            reduction = "none"
-        elif reduction == 1:
-            reduction = "mean"
-        else:
-            reduction = "sum"
-
-        diff = _op.power(_op.subtract(input, targets), _expr.const(2, input_types[0]))
-        if reduction == "none":
-            return diff
-        elif reduction == "mean":
-            return _op.mean(diff, keepdims=True)
-        else:
-            return _op.sum(diff, keepdims=True)
 
     def nll_loss(self, inputs, input_types):
         assert len(inputs) == 5
@@ -4312,14 +4265,6 @@ class PyTorchOpConverter:
             reci_order,
         )
         return weight_g * (weight_v / norm_v)
-    def new_empty(self, inputs, input_types):
-        shape = inputs[1]
-
-        for i, val in enumerate(shape):
-            if isinstance(val, _expr.Call):
-                shape[i] = int(_infer_value(inputs[1][i], {}).numpy())
-
-        return _op.zeros(shape, _convert_dtype_value(inputs[2]))
 
     def new_zeros(self, inputs, input_types):
         data = inputs[1]
@@ -4340,23 +4285,6 @@ class PyTorchOpConverter:
                 data[i] = _expr.const(dim, dtype=dtype)
 
         return self.full_impl(data, 0, dtype)
-
-
-    def new_ones(self, inputs, input_types):
-        data = inputs[1]
-
-        import torch
-
-        if not isinstance(data, (_expr.Expr, list, torch.Tensor, np.ndarray)):
-            msg = "Data type %s could not be parsed in zeros op" % (type(data))
-            raise AssertionError(msg)
-
-        if inputs[2] is not None:
-            dtype = _convert_dtype_value(inputs[2])
-        else:
-            dtype = self.default_dtype
-
-        return self.full_impl(data, 1, dtype)
 
 
     def tril(self, inputs, input_types):
@@ -4668,23 +4596,6 @@ class PyTorchOpConverter:
         return _op.tile(data, reps)
 
 
-    def weight_norm(self, inputs, input_types):
-        weight_v = inputs[0]
-        weight_g = inputs[1]
-        dim = inputs[2]
-
-        # Axis on which to reduce
-        axes = list(range(len(self.infer_shape(weight_v))))
-        axes.remove(dim)
-
-        # Euclidean normalization
-        v_euc_norm = _op.sqrt(_op.reduce.sum((weight_v * weight_v), axis=axes, keepdims=True))
-
-        # Weight normalization
-        weight_norm = weight_v * (weight_g / v_euc_norm)
-
-        return weight_norm
-
     def dim(self, inputs, input_types):
         if isinstance(inputs[0], _expr.Constant):
             return len(inputs[0].data.shape)
@@ -4722,160 +4633,6 @@ class PyTorchOpConverter:
 
         return self.full_impl(shape, 0, dtype)
 
-    def linalg_vector_norm(self, inputs, input_types):
-        data = inputs[0]
-        dtype = input_types[0]
-        ord = inputs[1]
-        dim = inputs[2]
-        keepdim = inputs[3]
-
-        assert dtype == "float32" or dtype == "float64"
-
-        if ord == 0:
-            return _op.reduce.sum(
-                _op.cast(_op.not_equal(data, _expr.const(0, dtype=dtype)), dtype=dtype),
-                axis=dim,
-                keepdims=keepdim,
-            )
-        elif ord == np.inf:
-            return _op.reduce.max(_op.abs(data), axis=dim, keepdims=keepdim)
-        elif ord == np.NINF:
-            return _op.reduce.min(_op.abs(data), axis=dim, keepdims=keepdim)
-        reci_ord = _expr.const(1.0 / ord, dtype=dtype)
-        ord = _expr.const(ord, dtype=dtype)
-        return _op.power(
-            _op.reduce.sum(_op.power(_op.abs(data), ord), axis=dim, keepdims=keepdim),
-            reci_ord,
-        )
-
-    def scaled_dot_product_attention(self, inputs, input_types):
-        query = inputs[0]
-        key = inputs[1]
-        value = inputs[2]
-        attn_mask = inputs[3]
-        dropout_p = inputs[4]
-        is_causal = inputs[5]
-
-        # Explicit scale can be used from torch>=2.1.0
-        if len(inputs) == 7:
-            scale = inputs[6]
-        else:
-            scale = None
-
-        assert (
-            input_types[0] == input_types[1] == input_types[2]
-        ), "Expected query, key, and value to have the same dtype"
-
-        dtype = input_types[0]
-        assert dtype == "float32" or dtype == "float64", "Data type can be float32 or float64"
-
-        query_shape = self.infer_shape_with_prelude(query)
-        key_shape = self.infer_shape_with_prelude(key)
-        value_shape = self.infer_shape_with_prelude(value)
-        assert 3 <= len(query_shape) <= 4, "Only 3D or 4D query supported"
-        assert 3 <= len(key_shape) <= 4, "Only 3D or 4D key supported"
-        assert 3 <= len(value_shape) <= 4, "Only 3D or 4D value supported"
-
-        assert dropout_p == 0.0, "Only dropout_p==0.0 supported"
-
-        L, S = query_shape[-2], key_shape[-2]
-
-        enable_flash_attention = bool(int(os.environ.get("FORGE_ENABLE_FLASH_ATTENTION", 0)))
-
-        if enable_flash_attention:
-            # Return a scaled_dot_product_attention op to Forge
-            assert scale is None, "Must not provide a scale factor"
-            assert attn_mask is not None, "Explicit attn_mask should be set when is_causal=False"
-            assert not is_causal, "Not supporting is_causal=True yet since we would need to generate causal mask."
-
-            scale_factor = _expr.const(1 / math.sqrt(query_shape[-1]), dtype=dtype)
-            scale_factor = _op.broadcast_to(scale_factor, shape=tuple(1 for _ in range(len(query_shape))))
-
-            # Early out if not decomposing
-            return _op.nn.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask,
-            scale_factor,
-            is_causal=is_causal
-            )
-
-
-        if scale is None:
-            scale_factor = _expr.const(1 / math.sqrt(query_shape[-1]), dtype=dtype)
-        else:
-            scale_factor = _expr.const(scale, dtype=dtype)
-
-        attn_bias = _op.full(_expr.const(0.0, dtype=dtype), (L, S))
-
-        if is_causal:
-            assert attn_mask is None, "Explicit attn_mask shouldn't be set when is_causal=True"
-            temp_mask = _op.full(_expr.const(True), [L, S], dtype="bool")
-            temp_mask = _op.trilu(temp_mask, 0, upper=False)
-            temp_mask = _op.cast(temp_mask, dtype="bool")
-            temp_mask = _op.logical_not(temp_mask)
-            fill_value = _op.cast(_expr.const(float("-inf")), dtype=dtype)
-            attn_bias = _op.where(temp_mask, fill_value, attn_bias)
-            attn_bias = _op.cast(attn_bias, dtype)
-
-        if attn_mask is not None:
-            if input_types[3] == "bool":
-                attn_mask = _op.logical_not(attn_mask)
-                fill_value = _op.cast(_expr.const(float("-inf")), dtype=dtype)
-                attn_bias = _op.where(attn_mask, fill_value, attn_bias)
-            else:
-                attn_bias = _op.add(attn_bias, attn_mask)
-
-        if len(query_shape) < len(key_shape):
-            batch_size = key_shape[0]
-        else:
-            batch_size = query_shape[0]
-
-        if len(query_shape) == 4 and len(key_shape) == 4:
-            query = _op.reshape(query, newshape=[-3, -2])
-            key = _op.reshape(key, newshape=[-3, -2])
-        if len(query_shape) == 3 and len(key_shape) == 4:
-            query = _op.broadcast_to(query, shape=(batch_size,) + query_shape)
-            query = _op.reshape(query, newshape=[-3, -2])
-            key = _op.reshape(key, newshape=[-3, -2])
-        if len(query_shape) == 4 and len(key_shape) == 3:
-            query = _op.reshape(query, newshape=[-3, -2])
-            key = _op.broadcast_to(key, shape=(batch_size,) + key_shape)
-            key = _op.reshape(key, newshape=[-3, -2])
-
-        attn_weight = _op.nn.batch_matmul(query, key)
-        if len(query_shape) == 4 or len(key_shape) == 4:
-            attn_weight = _op.reshape(attn_weight, newshape=[-4, batch_size, -1, -2])
-        attn_weight = _op.squeeze(attn_weight, axis=[])
-
-        attn_weight = _op.multiply(attn_weight, scale_factor)
-        attn_weight = _op.add(attn_weight, attn_bias)
-        attn_weight = _op.nn.softmax(attn_weight)
-        attn_weight = _op.nn.dropout(attn_weight, rate=dropout_p)
-
-        aw_shape = self.infer_shape_with_prelude(attn_weight)
-        if len(aw_shape) < len(value_shape):
-            batch_size = value_shape[0]
-        else:
-            batch_size = aw_shape[0]
-        if len(aw_shape) == 4 and len(value_shape) == 4:
-            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
-            value = _op.reshape(value, newshape=[-3, -2])
-        if len(aw_shape) == 3 and len(value_shape) == 4:
-            attn_weight = _op.broadcast_to(attn_weight, shape=(batch_size,) + aw_shape)
-            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
-            value = _op.reshape(value, newshape=[-3, -2])
-        if len(aw_shape) == 4 and len(value_shape) == 3:
-            attn_weight = _op.reshape(attn_weight, newshape=[-3, -2])
-            value = _op.broadcast_to(value, shape=(batch_size,) + value_shape)
-            value = _op.reshape(value, newshape=[-3, -2])
-        attn_weight = _op.nn.batch_matmul(attn_weight, value, transpose_b=False)
-        if len(aw_shape) == 4 or len(value_shape) == 4:
-            attn_weight = _op.reshape(attn_weight, newshape=[-4, batch_size, -1, -2])
-
-        return attn_weight
-
     # Operator mappings
     def create_convert_map(self):
         self.convert_map = {
@@ -4896,7 +4653,6 @@ class PyTorchOpConverter:
             "aten::lerp": self.lerp,
             "aten::arange": self.arange,
             "aten::meshgrid": self.meshgrid,
-            "aten::multinomial": self.multinomial,
             "aten::div": self.make_elemwise("divide"),
             "aten::floor_divide": self.make_elemwise("floor_divide"),
             "aten::true_divide": self.make_elemwise("divide"),
@@ -5129,8 +4885,6 @@ class PyTorchOpConverter:
             "aten::argsort": self.argsort,
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
-            "aten::l1_loss": self.l1_loss,
-            "aten::mse_loss": self.mse_loss,
             "aten::nll_loss": self.nll_loss,
             "aten::nll_loss2d": self.nll_loss,
             "aten::nll_loss_nd": self.nll_loss,
@@ -5144,7 +4898,7 @@ class PyTorchOpConverter:
             "aten::lstm": self.lstm,
             "aten::all": functools.partial(self.all_any_common, _op.all),
             "aten::any": functools.partial(self.all_any_common, _op.any),
-            "aten::searchsorted": self.searchsorted,
+            "aten::searchsoaten::copy_rted": self.searchsorted,
             "aten::bucketize": self.bucketize,
             "aten::roll": self.roll,
             "aten::einsum": self.einsum,
@@ -5163,26 +4917,16 @@ class PyTorchOpConverter:
             "aten::linalg_vector_norm": self.linalg_vector_norm,
             "aten::scaled_dot_product_attention": self.scaled_dot_product_attention,
             "aten::tile": self.tile,
-            "aten::copy_": self.identity,
-            "aten::new_empty": self.new_empty,
             "aten::new_zeros": self.new_zeros,
-            "aten::new_ones": self.new_ones,
-            "aten::tril": self.tril,
-            "aten::triu": self.triu,
             "aten::as_strided": self.as_strided,
-            "aten::_weight_norm": self.weight_norm,
-            "aten::new_full": self.new_full,
             "aten::dim": self.dim,
             "aten::__is__": self.is_impl,
             "aten::conv2d": self.conv2d,
             "aten::as_tensor": self.as_tensor,
             "aten::format": self.format,
             "aten::warn": self.warn,
-            "aten::baddbmm": self.baddbmm,
             "aten::__or__": self.__or__,
             "aten::alias": self.alias,
-            "aten::linalg_vector_norm": self.linalg_vector_norm,
-            "aten::scaled_dot_product_attention": self.scaled_dot_product_attention,
             "aten::lift_fresh": self.identity,
         }
 
@@ -6416,8 +6160,6 @@ def from_pytorch(
             break
 
     _run_jit_passes(graph, enable_lower_all_tuples)
-    _redirect_inplace_output(graph) # Potentially redundant
-
 
     if custom_convert_map:
         converter.update_convert_map(custom_convert_map)
