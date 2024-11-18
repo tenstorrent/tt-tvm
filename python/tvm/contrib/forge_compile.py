@@ -338,7 +338,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
             framework="pytorch",
             model=torchmod,
             inputs=inputs,
-            verify_cfg=verify_cfg,
+            verify_tvm_compile=verify_cfg.verify_tvm_compile,
         )
 
         # (Temporary): Remove when forge supports dropout
@@ -548,7 +548,7 @@ def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, ve
         framework="onnx",
         model=onnx_mod,
         inputs=inputs,
-        verify_cfg=verify_cfg,
+        verify_tvm_compile=verify_cfg.verify_tvm_compile,
         path=path,
         input_dict=input_dict,
     )
@@ -590,7 +590,7 @@ def compile_tflite_for_forge(module, path, *inputs, graph_name, compiler_cfg, ve
         framework="tflite",
         model=module,
         inputs=inputs,
-        verify_cfg=verify_cfg,
+        verify_tvm_compile=verify_cfg.verify_tvm_compile,
         path=path,
     )
 
@@ -689,7 +689,7 @@ def compile_jax_for_forge(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cf
         framework="jax",
         model=jaxmodel,
         inputs=inputs,
-        verify_cfg=verify_cfg,
+        verify_tvm_compile=verify_cfg.verify_tvm_compile,
     )
 
     if compiler_cfg.enable_tvm_jax_freeze_large_model:
@@ -775,7 +775,7 @@ def compile_tf_for_forge(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=No
         framework="tensorflow",
         model=tfmod,
         inputs=inputs,
-        verify_cfg=verify_cfg,
+        verify_tvm_compile=verify_cfg.verify_tvm_compile,
     )
 
     # Trace module & get graph definition
