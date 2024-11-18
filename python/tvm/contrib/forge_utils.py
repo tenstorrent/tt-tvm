@@ -13,7 +13,6 @@ from transformers.modeling_outputs import ModelOutput
 
 import tvm
 from tvm.relay import ExprVisitor
-from forge.verify.config import VerifyConfig
 from forge.config import CompilerConfig
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 from forge.tensor import to_pt_tensors
@@ -24,13 +23,13 @@ def extract_framework_model_outputs(
     framework: str, 
     model, 
     inputs, 
-    verify_cfg: VerifyConfig, 
+    verify_tvm_compile: bool = False, 
     path=None,
     input_dict={},
 ):
     framework_outputs = []
 
-    if verify_cfg is None or not verify_cfg.verify_tvm_compile:
+    if verify_tvm_compile:
         return framework_outputs
 
     if framework == "pytorch":
