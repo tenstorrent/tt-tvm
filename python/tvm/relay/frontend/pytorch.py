@@ -2746,11 +2746,9 @@ class PyTorchOpConverter:
         indices = inputs[1]
         # Cover case when first row is selected as whole in Python style using ':' (e.g. x[:, mask])
         # while second is selected using a boolean mask
-        if indices[0] == None:
+        if len(_infer_shape(data)) == 2 and len(indices) == 1 and indices[0] == None:
             # Remove first None argument (represents ':')
             indices.pop(0)
-
-            assert len(_infer_shape(data)) == 2 and len(indices) == 1, "Currently supportes only 2D tensors with single mask"
 
             indices = indices[0]
             if len(_analysis.free_vars(indices)) == 0:
@@ -2832,6 +2830,18 @@ class PyTorchOpConverter:
             indices = _op.squeeze(indices, _expr.const([0])) if len(_infer_shape(indices)) == 2 and _infer_shape(indices)[0] == 1 else indices
             res = _op.adv_index([data, indices])
 
+            return res
+        
+        elif len(_infer_shape(data)) > 2 :
+            axis = None
+            index_expr = None
+            for i, idx in enumerate(indices):
+                if idx is not None:  
+                    axis = i
+                    index_expr = idx
+                    break
+                
+            res = _op.take(data, index_expr, axis=axis)
             return res
 
         return _op.adv_index([data] + indices)
