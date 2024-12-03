@@ -2832,7 +2832,7 @@ class PyTorchOpConverter:
 
             return res
         
-        elif len(_infer_shape(data)) > 2 :
+        elif len(_infer_shape(data)) > 2 and sum(idx is not None for idx in indices) == 1:
             axis = None
             index_expr = None
             for i, idx in enumerate(indices):
