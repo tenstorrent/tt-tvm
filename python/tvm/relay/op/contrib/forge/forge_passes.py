@@ -3947,6 +3947,36 @@ class ExpandMultipleDims(DFPatternCallback):
             return act
         return post
 
+class CastMaxPool2DInputToBFloat16(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True)
+        self.input = wildcard()
+        self.max_pool2d = is_op("nn.max_pool2d")(self.input)
+        self.pattern = self.max_pool2d
+
+    def callback(self, pre, post, node_map):
+        # Extract the matched input and max_pool2d operation
+        input_node = node_map[self.input][0]
+        max_pool2d_node = node_map[self.max_pool2d][0]
+
+        # Check the input dtype
+        if input_node.checked_type.dtype == "float32":
+            # Cast the input to bfloat16
+            casted_input = tvm.relay.cast(input_node, "bfloat16")
+
+            # Recreate the max_pool2d operation with the casted input
+            new_max_pool2d = tvm.relay.op.nn.max_pool2d(
+                casted_input,
+                pool_size=max_pool2d_node.attrs.pool_size,
+                strides=max_pool2d_node.attrs.strides,
+                padding=max_pool2d_node.attrs.padding,
+                layout=max_pool2d_node.attrs.layout,
+                ceil_mode=max_pool2d_node.attrs.ceil_mode,
+            )
+            return tvm.relay.cast(new_max_pool2d, "float32")
+        else:
+            # Return the original node if no casting is needed
+            return post
 
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
@@ -4088,6 +4118,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             SimplifyVITOnnxAttention(),
             GQABroadcastReshape(),
             RemoveDenseInputSqueeze(),
+            CastMaxPool2DInputToBFloat16(),
         ],
         params=params,
         inputs=inputs,
