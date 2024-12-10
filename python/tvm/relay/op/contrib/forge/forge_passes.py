@@ -1890,6 +1890,9 @@ class DecomposeMultiDimSqueeze(DFPatternCallback):
     def callback(self, pre, post, node_map):
         act = node_map[self.act][0]
         axis = post.attrs.axis
+        # Skip removal of squeeze which contain dynamic shapes
+        if any([isinstance(dim, tvm.tir.expr.Any) for dim in pre.checked_type.shape]):
+            return post
         input_shape = [int(dim) for dim in pre.args[0].checked_type.shape]
         if axis is None:
             # PyTorch's `squeeze_()` removes all dimensions of size 1.
