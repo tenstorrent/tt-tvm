@@ -293,7 +293,7 @@ class ConvertEmulatedDtypes:
     def __init__(self, model, inputs):
         self.model = model
         self.inputs = inputs
-        self.emulated_dfs = [torch.bfloat16]
+        self.emulated_dfs = []
         self.fallback = torch.float32
     
     def flatten_object(self, obj):
