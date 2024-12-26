@@ -353,13 +353,13 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         traced_model = torch.jit.trace(torchmod, inputs, strict=False)
 
     # Extract flatten inputs
-    flattened_inputs, flattened_input_names, flattened_name_map, input_structure = extract_flatten_inputs(
+    flattened_inputs, flattened_input_names, flattened_name_map, input_structure,input_structure_with_tensor = extract_flatten_inputs(
         framework="pytorch",
         model=traced_model,
         inputs=inputs,
         input_names=input_names,
     )
-
+    
     graph_string = traced_model.graph.str().encode('utf-8')
     m = hashlib.sha256()
     m.update(graph_string)
@@ -369,7 +369,8 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 
     # Generate TVM module
     convert_params = compiler_cfg.convert_framework_params_to_tvm
-    mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure, do_convert_params=convert_params)
+    mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure,input_structure_with_tensor, do_convert_params=convert_params)
+
     logger.trace("From PyTorch")
     logger.trace(mod.functions)
     mod = tvm.relay.op.contrib.flatten_IO(mod, flattened_name_map)

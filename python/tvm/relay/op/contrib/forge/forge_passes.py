@@ -1891,6 +1891,8 @@ class DecomposeMultiDimSqueeze(DFPatternCallback):
         act = node_map[self.act][0]
         axis = post.attrs.axis
         input_shape = [int(dim) for dim in pre.args[0].checked_type.shape]
+        if axis is None:
+            axis = [i for i, dim in enumerate(input_shape) if dim == 1]
         adjusted_axes = [(ax - len(input_shape)) if ax >= 0 else ax for ax in axis]
         assert all(ax < 0 for ax in adjusted_axes), "Invalid squeeze dimension: all axes must be negative."
         for ax in sorted(adjusted_axes):

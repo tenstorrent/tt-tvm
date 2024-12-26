@@ -155,9 +155,32 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
                 for k, v in inputs.items():
                     input_structure[k] = (tuple(v.shape), str(input.dtype).replace("torch.", ""))
             return input_structure
+        def get_input_structure_with_tensor(inputs, input_names):
+                input_structure = {}
+
+                if isinstance(inputs, (list, tuple)):
+                    for i in range(len(inputs)):
+                        input = inputs[i]
+                        if isinstance(input, (list, tuple)):
+                            sub_names = [input_names[i] + "_" + str(ii) for ii in range(len(input))]
+                            structure = get_input_structure(input, sub_names)
+                            input_structure[input_names[i]] = structure
+                        elif isinstance(input, dict):
+                            input_structure[input_names[i]] = {
+                                k: (v, tuple(v.shape), str(v.dtype).replace("torch.", ""))
+                                for k, v in input.items()
+                            }
+                        else:
+                            input_structure[input_names[i]] = (input, tuple(input.shape), str(input.dtype).replace("torch.", ""))
+                else:
+                    # Case where 'inputs' is a dict
+                    for k, v in inputs.items():
+                        input_structure[k] = (v, tuple(v.shape), str(v.dtype).replace("torch.", ""))
+
+                return input_structure
         
         input_structure = get_input_structure(inputs, input_names)
-        
+        input_structure_with_tensor = get_input_structure_with_tensor(inputs,input_names)
         flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(
             inputs, input_names
         )
@@ -179,7 +202,7 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
     else:
         raise RuntimeError("Unsupported framework type: {}".format(framework))
 
-    return flattened_inputs, flattened_input_names, flattened_name_map, input_structure
+    return flattened_inputs, flattened_input_names, flattened_name_map, input_structure,input_structure_with_tensor
 
 
 def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: CompilerConfig):
