@@ -3257,10 +3257,13 @@ class ConvertIsNaN(DFPatternCallback):
         
         data = pre_node_map[self.data][0]
         
-        cond = tvm.relay.equal(data, tvm.relay.const(np.nan, dtype="float32"))
-        where = tvm.relay.where(cond, tvm.relay.const(True), tvm.relay.const(False))
+        # NaN (Not a Number) is the only value in floating-point arithmetic that is not equal to itself.
+        # So, comparing data with itself will return True if data is NaN, and False otherwise.
+        # This condition is used to identify NaN values in the data tensor.
         
-        return where
+        cond = tvm.relay.not_equal(data, data)
+        
+        return cond 
     
     
 class RemoveRedundantBinaryStacks(DFPatternCallback):
