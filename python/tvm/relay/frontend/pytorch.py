@@ -3395,6 +3395,69 @@ class PyTorchOpConverter:
         
         # (!mask * x) + (mask*y)
         return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
+    
+
+    def masked_scatter(self, inputs, input_types):
+        data = inputs[0]  
+        mask = inputs[1]  
+        source = inputs[2] 
+        mask = _op.cast(mask, dtype="float32")
+
+        mask_shape = _infer_shape(mask)
+        source_shape = _infer_shape(source)
+        data_shape = _infer_shape(data)
+        assert len(mask_shape) == len(data_shape), \ 
+        "broadcast tensors should both be same-dimension"
+        
+        for i in range(len(mask_shape)):
+            assert mask_shape[i] == data_shape[i] or mask_shape[i] == 1 or data_shape[i] == 1, \ 
+            "tensor shapes do not fit for broadcasting"
+            
+        data = _op.broadcast_to(data, mask_shape)
+
+
+        pad_sizes_data = []  
+        pad_sizes_source = [] 
+        for i in range(len(mask_shape)):
+            if mask_shape[i] != data_shape[i]:
+                diff = mask_shape[i] - data_shape[i]
+                pad_sizes_data.append(diff)
+            else:
+                pad_sizes_data.append(0)
+            
+            if mask_shape[i] != source_shape[i]:
+                diff = mask_shape[i] - source_shape[i]
+                pad_sizes_source.append(diff)
+            else:
+                pad_sizes_source.append(0)
+
+        for i, pad_size in enumerate(pad_sizes_data):
+            if pad_size > 0:  
+                pad_shape = list(data_shape)  
+                pad_shape[i] = pad_size 
+                constant_zero = _expr.const(0, dtype='float32')
+                broadcasted_zero = _op.broadcast_to(constant_zero, pad_shape)
+                data = _op.concatenate([data, broadcasted_zero], axis=i)
+        for i, pad_size in enumerate(pad_sizes_source):
+            if pad_size > 0: 
+                pad_shape = list(source_shape)  
+                pad_shape[i] = pad_size
+                constant_zero = _expr.const(0, dtype='float32')
+                broadcasted_zero = _op.broadcast_to(constant_zero, pad_shape)
+                source = _op.concatenate([source, broadcasted_zero], axis=i)
+                
+
+        flattened_mask = _op.reshape(mask, newshape=(-1,))
+        cumsum_result = _op.cumsum(flattened_mask, axis=0,exclusive=False)
+        source_idx = _op.subtract(cumsum_result ,_expr.const(1, dtype="float32"))
+        source_idx = _op.cast(source_idx, dtype="int32")
+        self_flat = _op.reshape(data, newshape=(-1,))
+        mask_flat = _op.reshape(mask, newshape=(-1,))
+        source_flat = _op.reshape(source, newshape=(-1,))
+        result = _op.transform.take(source_flat, source_idx, axis=0, mode="wrap")
+        result = _op.where(mask_flat, result, self_flat)
+        result = _op.reshape(result, newshape=_infer_shape(inputs[1]))
+        return result
 
 
     def baddbmm(self, inputs, input_types):
@@ -4867,6 +4930,7 @@ class PyTorchOpConverter:
             "aten::cumsum": self.cumsum,
             "aten::masked_fill": self.masked_fill,
             "aten::masked_select": self.masked_select,
+            "aten:masked_scatter":self.masked_scatter,
             "aten::argsort": self.argsort,
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
