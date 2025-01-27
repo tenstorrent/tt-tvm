@@ -2700,10 +2700,7 @@ class PyTorchOpConverter:
             #  exposes a few bugs in tt-mlir https://github.com/tenstorrent/tt-mlir/issues/1215
             logger.warning("Casting input indices of embedding op from {} to int32", indicies_dtype)
             indices = tvm.relay.cast(indices, "int32")
-        # cast the weight to bfloat16 if it is float32
-        if weight.type_annotation.dtype == "float32":
-            weight = tvm.relay.cast(weight, "bfloat16")
-        return tvm.relay.cast(_op.embedding(weight, indices, axis=0), "float32")
+        return _op.embedding(weight, indices, axis=0)
 
     def embedding_bag(self, inputs, input_types):
 
