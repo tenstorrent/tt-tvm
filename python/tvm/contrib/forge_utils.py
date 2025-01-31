@@ -34,8 +34,9 @@ def extract_framework_model_outputs(
 
     if framework == "pytorch":
         assert model.training == False
+        sample_inputs = [create_copy(input) for input in inputs]
 
-        framework_outputs = model(*inputs)
+        framework_outputs = model(*sample_inputs)
         if isinstance(framework_outputs, ModelOutput):
             framework_outputs = framework_outputs.to_tuple()
 
@@ -61,6 +62,7 @@ def extract_framework_model_outputs(
         framework_outputs = [x.detach().numpy() for x in framework_outputs]
 
     elif framework == "tensorflow":
+        sample_inputs = [create_copy(input) for input in inputs]
         kwargs = {}
         import inspect 
         arg_names = inspect.getfullargspec(model.call).args
@@ -70,7 +72,7 @@ def extract_framework_model_outputs(
         if "training" in arg_names:
             kwargs["training"] = False
     
-        framework_outputs = model(*inputs, **kwargs)
+        framework_outputs = model(*sample_inputs, **kwargs)
 
         # TODO ref sha: 1fe78625c809e6ca887a8da5fdde44836830f990
         # Figure out how to sort dictionary outputs:
@@ -90,7 +92,10 @@ def extract_framework_model_outputs(
 
     elif framework == "jax":
         import jax.numpy as jnp
-        args = [jnp.asarray(x.numpy(),) for x in inputs]
+        
+        # Creating a copy of input in order to avoid modifying the input tensors if the model has in-place operations
+        args = sample_jax_inputs(inputs)
+
         framework_outputs = model(*args)
         if isinstance(framework_outputs, HFModelOutput):
             framework_outputs = list(framework_outputs.values())
@@ -111,13 +116,17 @@ def extract_framework_model_outputs(
         so.inter_op_num_threads = 2
         so.intra_op_num_threads = 2
         ort_sess = ort.InferenceSession(path, sess_options=so)
-        framework_outputs = ort_sess.run(output_names, input_dict)
+
+        sample_input_dict = {name: create_copy(tensor) for name, tensor in input_dict}
+        framework_outputs = ort_sess.run(output_names, sample_input_dict)
 
     elif framework == "tflite":
         input_details = model.get_input_details()
         output_details = model.get_output_details()
         model.allocate_tensors()
-        model.set_tensor(input_details[0]['index'], *inputs)
+
+        sample_inputs = [create_copy(input) for input in inputs] 
+        model.set_tensor(input_details[0]['index'], *sample_inputs)
         model.invoke()
         framework_outputs = model.get_tensor(output_details[0]['index'])
 
@@ -325,7 +334,7 @@ def has_op(module, opname, attrs={}):
             if call.op.name == opname:
                 self.has_op = True
                 for key in attrs.keys():
-                     self.has_op &= key in call.attrs.keys() and call.attrs[key] == attrs[key]
+                    self.has_op &= key in call.attrs.keys() and call.attrs[key] == attrs[key]
                 if self.has_op:
                     return
             super().visit_call(call)
@@ -333,3 +342,44 @@ def has_op(module, opname, attrs={}):
     visitor = Visitor()
     visitor.visit(module)
     return visitor.has_op
+
+def sample_jax_inputs(inputs):
+    import jax.numpy as jnp
+
+    detached_inputs = []
+    for input in inputs:
+        if isinstance(input, jnp.ndarray):  # JAX array
+            detached_inputs.append(jnp.array(input))  # Creates a new JAX array (copy)
+        elif isinstance(input, np.ndarray):  # NumPy array
+            detached_inputs.append(np.copy(input))  # Creates a new NumPy array (copy)
+        else:
+            raise TypeError(f"Unsupported type {type(input)}. Expected jax.Array or numpy.ndarray.")
+
+    # Ensure everything is a JAX tensor
+    args = [jnp.asarray(x) for x in detached_inputs]
+    return args
+
+
+def to_numpy(tensor):
+    if isinstance(tensor, np.ndarray):
+        return tensor
+    elif isinstance(tensor, torch.Tensor):
+        return tensor.detach().numpy()
+    elif isinstance(tensor, (tf.Tensor, tf.Variable)):
+        return tensor.numpy()
+    elif tensor is None:
+        return None
+    else:
+        raise RuntimeError(f"Unsupported tensor type: {type(tensor)}")
+    
+def create_copy(tensor):
+    if isinstance(tensor, np.ndarray):
+        return np.copy(tensor)
+    elif isinstance(tensor, torch.Tensor):
+        return tensor.detach().clone()
+    elif isinstance(tensor, (tf.Tensor, tf.Variable)):
+        return tf.stop_gradient(tf.identity(tensor))
+    elif tensor is None:
+        return None
+    else:
+        raise RuntimeError(f"Unsupported tensor type: {type(tensor)}")

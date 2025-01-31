@@ -48,6 +48,9 @@ from tvm.contrib.forge_utils import (
     trace_to_origin,
     has_op
 )
+
+from .forge_utils import to_numpy, create_copy
+
 import hashlib
 
 dev_json_graph = {"functions": {}, "graph" : "", "param_names": {}, "device" : "tt"}
@@ -348,9 +351,12 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
         if isinstance(torchmod, torch.jit.ScriptModule):
             torchmod.eval()
             torchmod = torch.jit.freeze(torchmod)
+
+        # Creating a copy of inputs in order to avoid modifying the input tensors if the model has in-place operations
+        sample_inputs = [create_copy(input) for input in inputs]
         
         # Trace framework model
-        traced_model = torch.jit.trace(torchmod, inputs, strict=False)
+        traced_model = torch.jit.trace(torchmod, sample_inputs, strict=False)
 
     # Extract flatten inputs
     flattened_inputs, flattened_input_names, flattened_name_map, input_structure = extract_flatten_inputs(
@@ -384,7 +390,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 
     # Construct NumPy inputs
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
-    np_inputs = {name:inp.detach().numpy() for name, inp in zip(flattened_input_names, flattened_inputs_as_float)}
+    np_inputs = {name: to_numpy(input) for name, input in zip(flattened_input_names, flattened_inputs_as_float)}
     
     # Compile TVM for Forge
     partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=flattened_input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
@@ -400,7 +406,11 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 
 def compile_tvm_for_forge(mod, params, inputs, golden_outputs, graph_name, input_names = [], return_params=False, compiler_cfg=None, verify_cfg=None):
     target = "llvm"
-    verify_args = {'inputs': inputs, 'framework_outputs': golden_outputs, 'verify_cfg': verify_cfg}
+    # Inputs are expected to be dictionary {name:np.array}
+    # Creating a copy of input in order to avoid modifying the input tensors if the model has in-place operations
+    sample_inputs = {name:create_copy(input) for name, input in inputs.items()}
+
+    verify_args = {'inputs': sample_inputs, 'framework_outputs': golden_outputs, 'verify_cfg': verify_cfg}
     mod, params = tvm.relay.op.contrib.compile_for_forge(mod, target=target, params=params, graph_name=graph_name, **verify_args)
 
     if verify_cfg is not None and verify_cfg.verify_tvm_compile:
@@ -410,7 +420,9 @@ def compile_tvm_for_forge(mod, params, inputs, golden_outputs, graph_name, input
         if skip_verify:
             logger.warning("Module contains a channel-last nn.conv2d_transpose op, this is not supported in TVM (but may be supported in Forge). Skipping verification...")
         else:
-            verify_tvm_compile(mod, params, inputs, target, golden_outputs, "compile_for_forge", verify_cfg=verify_cfg)
+            # Again copying inputs to avoid modifying the input tensors
+            verify_inputs = {name:create_copy(input) for name, input in inputs.items()}
+            verify_tvm_compile(mod, params, verify_inputs, target, golden_outputs, "compile_for_forge", verify_cfg=verify_cfg)
 
     # Reconstruct Ops + export forge graph
     mod, forge_params = tvm.relay.op.contrib.forge.partition_for_forge(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
@@ -570,6 +582,9 @@ def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, ve
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
+    # convert inputs to numpy
+    input_dict = {name: to_numpy(tensor) for name, tensor in input_dict.items()}
+
     partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     weight_names = [weight.name for weight in onnx_mod.graph.initializer]
@@ -636,6 +651,9 @@ def compile_tflite_for_forge(module, path, *inputs, graph_name, compiler_cfg, ve
         propped_params = {k: (v, True) for k, v in params.items()}
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], propped_params))
 
+    # convert inputs to numpy
+    input_dict = {name: to_numpy(tensor) for name, tensor in input_dict.items()}
+
     partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, input_dict, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, [], graph_hash=m.hexdigest())
@@ -692,14 +710,17 @@ def compile_jax_for_forge(jaxmodel, *inputs, graph_name, compiler_cfg, verify_cf
         verify_tvm_compile=verify_cfg.verify_tvm_compile,
     )
 
+    # Copying the inputs to avoid modifying them if the model has in-place operations
+    sample_inputs = [create_copy(input) for input in inputs]
+    
     if compiler_cfg.enable_tvm_jax_freeze_large_model:
-        graph_def, tf_func = get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *inputs,)
+        graph_def, tf_func = get_frozen_graph_for_large_jax_model(jaxmodel, compiler_cfg, *sample_inputs,)
     else:
         # Convert model from Jax to TensorFlow
         tf_model = jax2tf.convert(jaxmodel, enable_xla=compiler_cfg.enable_xla_jax_convert)
         tf_func = tf.function(tf_model, autograph=False, jit_compile=True)
         # Get graph definition
-        tf_func = tf_func.get_concrete_function(*inputs)
+        tf_func = tf_func.get_concrete_function(*sample_inputs)
         graph_def = tf_func.graph.as_graph_def(add_shapes=True)
 
     # Extract flatten inputs
@@ -791,7 +812,10 @@ def compile_tf_for_forge(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=No
             kwargs["training"] = False
         return tfmod(*inputs, **kwargs)
 
-    full_model = trace.get_concrete_function(*inputs)
+    # Creating a copy of input in order to avoid modifying the input tensors if the model has in-place operations
+    sample_inputs = [create_copy(input) for input in inputs]
+
+    full_model = trace.get_concrete_function(*sample_inputs)
     frozen_func = convert_variables_to_constants_v2(full_model)
     graph_def = frozen_func.graph.as_graph_def(add_shapes=True)
 
@@ -838,6 +862,7 @@ def compile_tf_for_forge(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=No
 # TODO: Verify graphdef output vs. TVM output
 def compile_tf_graphdef_for_forge(graph_def, *inputs, graph_name, compiler_cfg,):
     output_list_ = compiler_cfg.framework_model_output_names
+    # TODO: We should create a copy of input in order to avoid modifying the input tensors if the model has in-place operations
     # framework_outputs = tfmod(*inputs)
     # if not isinstance(framework_outputs, (list, tuple)):
     #     framework_outputs = [framework_outputs]
@@ -894,7 +919,10 @@ def compile_tf_graphdef_for_forge(graph_def, *inputs, graph_name, compiler_cfg,)
 def compile_mxnet_for_forge(module, *inputs, graph_name, compiler_cfg, verify_cfg=None):
     framework_outputs = []
     if verify_cfg is not None and verify_cfg.verify_tvm_compile:
-        framework_outputs = module(*inputs)
+        # Creating a copy of input in order to avoid modifying the input tensors if the model has in-place operations
+        sample_inputs = [create_copy(input) for input in inputs]
+
+        framework_outputs = module(*sample_inputs)
         if not isinstance(framework_outputs, (list, tuple)):
             framework_outputs = [framework_outputs]
 
@@ -921,7 +949,7 @@ def compile_mxnet_for_forge(module, *inputs, graph_name, compiler_cfg, verify_cf
     if cached_graphs is not None:
         return cached_graphs
 
-    input_name_to_tensor = {name : tensor.asnumpy() for name, tensor in zip(input_dict.keys(), inputs)}
+    input_name_to_tensor = {name : to_numpy(tensor) for name, tensor in zip(input_dict.keys(), inputs)}
     mod, params = relay.frontend.from_mxnet(module, shape=input_dict)
 
     if not compiler_cfg.enable_tvm_constant_prop:
