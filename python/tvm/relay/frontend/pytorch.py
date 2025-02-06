@@ -3409,38 +3409,95 @@ class PyTorchOpConverter:
         indices = self.nonzero([mask], input_types, is_numpy_style=True)
         return _op.adv_index([inputs[0]] + [indices[i] for i in range(indices.size)])
 
-        def masked_scatter(self, inputs, input_types):
+    def masked_scatter(self, inputs, input_types):
+        """
+        Performs a masked scatter operation on the input tensor `data`, replacing values where 
+        the `mask` is True with corresponding values from the `source` tensor.
+
+        This implementation follows the decomposition of the PyTorch `aten::masked_scatter` operation:
+        "aten::masked_scatter": https://github.com/pytorch/pytorch/blob/f95bdf5e6c8ea482ba6f64d655513b6a191ac142/torch/_inductor/decomposition.py#L830
+
+        The masked scatter requires `aten::unsafe_masked_index`, which is implemented in our TVM 
+        decomposition based on the following PyTorch function:
+        "aten::unsafe_masked_index": https://github.com/pytorch/pytorch/blob/f95bdf5e6c8ea482ba6f64d655513b6a191ac142/aten/src/ATen/native/TensorAdvancedIndexing.cpp#L773
+
+        The unsafe masked index is adapted from PyTorch's TensorAdvancedIndexing.
+
+        Args:
+            inputs (list): A list containing the input tensors:
+                - `data`: The tensor to be updated.
+                - `mask`: A boolean tensor, where True values indicate positions to scatter the `source` tensor.
+                - `source`: The tensor with values to scatter into `data` where `mask` is True.
+            input_types (list): A list of the types of input tensors (not used in this implementation).
+
+        Returns:
+            Tensor: The updated tensor, with values from `source` scattered into `data` at positions where `mask` is True.
+        """
         data = inputs[0]  
         mask = inputs[1]  
         source = inputs[2]
+
+        # Count the number of True values in the mask
+        mask_true_count = _op.sum(_op.cast(mask, "int32"))
+        source_size = _op.prod(_op.shape_of(source))
+        assert _op.less_equal(mask_true_count, source_size), "Source tensor must have at least as many elements as ones in mask (source size: %s, mask true count: %s)" % (source_size, mask_true_count)
+        
         mask = _op.cast(mask, dtype="float32")
-        mask_shape = _infer_shape(mask)
-        source_shape = _infer_shape(source)
+
+        def broadcast_tensors(mask,data):
+            mask_shape = _infer_shape(mask)
+            data_shape = _infer_shape(data)
+            shape1 = [1] * (len(data_shape) - len(mask_shape)) + list(mask_shape)
+            shape2 = [1] * (len(mask_shape) - len(data_shape)) + list(data_shape)
+            common_shape = []
+            for dim1, dim2 in zip(shape1, shape2):
+                if dim1 == dim2:
+                    common_shape.append(dim1)
+                elif dim1 == 1:
+                    common_shape.append(dim2)
+                elif dim2 == 1:
+                    common_shape.append(dim1)
+                else:
+                    raise ValueError(f"Cannot broadcast shapes: {shape1} and {shape2}")
+            common_shape = tuple(common_shape)
+            mask = _op.broadcast_to(mask, common_shape)
+            data = _op.broadcast_to(data, common_shape)
+            return mask,data
+
+        mask,data = broadcast_tensors(mask,data)
+
+
         data_shape = _infer_shape(data)
 
-        if _infer_shape(_op.reshape(mask, newshape=(-1)))[0] < _infer_shape(_op.reshape(data, newshape=(-1)))[0]:
-            mask =  _op.broadcast_to(mask, data_shape)    
-        if _infer_shape(_op.reshape(data, newshape=(-1)))[0] < _infer_shape(_op.reshape(mask, newshape=(-1)))[0]:
-            data =  _op.broadcast_to(data, mask_shape)  
-
-        shape_fin = _infer_shape(data)
+        # Flatten the mask and compute the cumulative sum for indexing
         flattened_mask = _op.reshape(mask, newshape=(-1))
         cumsum_result = _op.cumsum(flattened_mask, axis=0, exclusive=False)
+
+        # Calculate the indices for the source tensor, shifted by 1
         source_idx = _op.subtract(cumsum_result, _expr.const(1, dtype="float32"))
-        source_idxd = _op.cast(source_idx, dtype="int32")
+        source_idx = _op.cast(source_idx, dtype="int32")
+
+        # Flatten data and source for easier manipulation
         data_flat = _op.reshape(data, newshape=(-1))
         source_flat = _op.reshape(source, newshape=(-1))
-        shape = _infer_shape(source_flat)
+        source_flat_shape = _infer_shape(source_flat)
+
+        # Clamp the indices to ensure they are within bounds
         clamped_indices = _op.minimum(
-        _op.maximum(source_idxd, _expr.const(0, dtype="int32")),  # Clamp min to 0
-        _op.subtract(_op.const([shape],dtype="int32"), _expr.const(1, dtype="int32"))  # Clamp max to shape-1
+            _op.maximum(source_idx, _expr.const(0, dtype="int32")),
+            _op.subtract(_op.const([source_flat_shape], dtype="int32"), _expr.const(1, dtype="int32"))
         )
-        result = _op.transform.take(source_flat, clamped_indices, axis=0,mode ='wrap')
-        fills = _op.full_like(result, _expr.const(0,dtype='int64'))
-        maresult = _op.where(flattened_mask, result, fills)
-        resulto = _op.where(flattened_mask, maresult, data_flat)
-        result = _op.reshape(resulto, newshape=shape_fin)
+
+        # Perform the scatter operation
+        result = _op.transform.take(source_flat, _op.reshape(clamped_indices,(-1)), axis=0, mode='wrap')
+        fills = _op.full_like(result, _expr.const(0, dtype='int64'))
+        result = _op.where(flattened_mask, _op.reshape(result,(-1)), _op.reshape(fills,(-1)))
+        result = _op.where(flattened_mask, result, data_flat)
+
+        # Reshape the result back to the original data shape
+        result = _op.reshape(result, newshape=data_shape)
         return result
+
 
     def sort(self, inputs, input_types):
         data = inputs[0]
@@ -4974,7 +5031,7 @@ class PyTorchOpConverter:
             "aten::cumsum": self.cumsum,
             "aten::masked_fill": self.masked_fill,
             "aten::masked_select": self.masked_select,
-            "aten::masked_scatter":self.masked_scatter,
+            "aten::masked_scatter": self.masked_scatter,
             "aten::argsort": self.argsort,
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
