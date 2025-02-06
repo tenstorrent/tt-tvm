@@ -3409,6 +3409,39 @@ class PyTorchOpConverter:
         indices = self.nonzero([mask], input_types, is_numpy_style=True)
         return _op.adv_index([inputs[0]] + [indices[i] for i in range(indices.size)])
 
+        def masked_scatter(self, inputs, input_types):
+        data = inputs[0]  
+        mask = inputs[1]  
+        source = inputs[2]
+        mask = _op.cast(mask, dtype="float32")
+        mask_shape = _infer_shape(mask)
+        source_shape = _infer_shape(source)
+        data_shape = _infer_shape(data)
+
+        if _infer_shape(_op.reshape(mask, newshape=(-1)))[0] < _infer_shape(_op.reshape(data, newshape=(-1)))[0]:
+            mask =  _op.broadcast_to(mask, data_shape)    
+        if _infer_shape(_op.reshape(data, newshape=(-1)))[0] < _infer_shape(_op.reshape(mask, newshape=(-1)))[0]:
+            data =  _op.broadcast_to(data, mask_shape)  
+
+        shape_fin = _infer_shape(data)
+        flattened_mask = _op.reshape(mask, newshape=(-1))
+        cumsum_result = _op.cumsum(flattened_mask, axis=0, exclusive=False)
+        source_idx = _op.subtract(cumsum_result, _expr.const(1, dtype="float32"))
+        source_idxd = _op.cast(source_idx, dtype="int32")
+        data_flat = _op.reshape(data, newshape=(-1))
+        source_flat = _op.reshape(source, newshape=(-1))
+        shape = _infer_shape(source_flat)
+        clamped_indices = _op.minimum(
+        _op.maximum(source_idxd, _expr.const(0, dtype="int32")),  # Clamp min to 0
+        _op.subtract(_op.const([shape],dtype="int32"), _expr.const(1, dtype="int32"))  # Clamp max to shape-1
+        )
+        result = _op.transform.take(source_flat, clamped_indices, axis=0,mode ='wrap')
+        fills = _op.full_like(result, _expr.const(0,dtype='int64'))
+        maresult = _op.where(flattened_mask, result, fills)
+        resulto = _op.where(flattened_mask, maresult, data_flat)
+        result = _op.reshape(resulto, newshape=shape_fin)
+        return result
+
     def sort(self, inputs, input_types):
         data = inputs[0]
         dim = inputs[1]
@@ -4941,6 +4974,7 @@ class PyTorchOpConverter:
             "aten::cumsum": self.cumsum,
             "aten::masked_fill": self.masked_fill,
             "aten::masked_select": self.masked_select,
+            "aten::masked_scatter":self.masked_scatter,
             "aten::argsort": self.argsort,
             "aten::sort": self.sort,
             "aten::_unique2": self.unique,
