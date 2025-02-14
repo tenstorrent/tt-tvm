@@ -32,7 +32,7 @@ def extract_framework_model_outputs(
     if verify_tvm_compile:
         return framework_outputs
 
-    if framework == "pytorch":
+    if framework == "pytorch" or framework == "paddle":
         assert model.training == False
 
         framework_outputs = model(*inputs)
@@ -161,7 +161,12 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
         flattened_inputs, flattened_input_names, flattened_name_map = flatten_inputs(
             inputs, input_names
         )
-
+    elif framework == "paddle":
+        flattened_inputs, _, _ = flatten_inputs(inputs)
+        flattened_input_names = None
+        flattened_name_map = None
+        input_structure = None
+        
     elif framework == "tensorflow":
         # The tensorflow trace automatically flattens inputs
         flattened_inputs, _, _ = flatten_inputs(inputs)
@@ -183,7 +188,7 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
 
 
 def construct_tvm_ir(framework: str, model, tvm_mod, params, compiler_cfg: CompilerConfig):
-    if framework == "pytorch":
+    if framework == "pytorch" or framework == "paddle":
         param_name_lookup = {}
 
         if not compiler_cfg.enable_tvm_constant_prop:

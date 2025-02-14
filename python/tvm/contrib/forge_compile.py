@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
+import inspect
 from forge.tensor import to_tf_tensors, to_pt_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
+import paddle
 import torch
 
 import numpy as np
@@ -105,7 +107,8 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
 
     json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, input_names=input_names, path=path, verify_cfg=verify_cfg, framework=framework)
     
-    flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
+    # flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
+    flattened_pytorch_inputs, weights = flattened_inputs, {}
 
     serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework=framework)
 
@@ -144,6 +147,8 @@ def compile_tvm_graph(inputs, module, compiler_cfg, graph_name, input_names=[], 
   
     if framework == "pytorch":
         json_graphs, inputs = compile_pytorch_for_forge(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
+    elif framework == "paddle":
+        json_graphs, inputs = compile_paddle_for_forge(module, *inputs, graph_name=graph_name, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg, input_names=input_names)
     elif framework == "tensorflow":
         # convert pytorch tensors to tf tensors
         tf_inputs = to_tf_tensors(inputs)
@@ -188,7 +193,7 @@ def save_nid_to_input_idx(traced_model_inputs, json_graph):
 
     json_graph["nid_to_input_idx"] = nid_to_input_idx
 
-def extract_graphs(partitioned_mod, forge_params, input_names, weight_names, param_name_lookup={}, graph_hash=""):
+def extract_graphs(partitioned_mod, forge_params, input_names, weight_names=None, param_name_lookup={}, graph_hash=""):
     mod = partitioned_mod["main"]
     main_graph = str(mod.astext())
     cpu_json_graph["hash"] = graph_hash
@@ -394,6 +399,60 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 
     # Extract Graphs (TT, CPU, ...)
     json_graphs = extract_graphs(partitioned_mod, forge_params, flattened_input_names, torchmod.state_dict().keys(), graph_hash=m.hexdigest())
+
+    return json_graphs, flattened_inputs
+
+
+def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
+
+    if not input_names:
+        input_names = list(inspect.signature(paddlemod.forward).parameters.keys())
+    
+    framework_outputs = paddlemod(*inputs)
+
+    input_spec = [
+        paddle.static.InputSpec(shape=inp.shape, dtype=inp.numpy().dtype)
+        for inp in inputs
+    ]
+
+    traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
+
+    flattened_inputs = [inp for inp in inputs]
+
+    # hope there is a better way to do this
+    model_save_path = "traced_model"
+    paddle.jit.save(traced_model, model_save_path)
+    loaded_model = paddle.jit.load("traced_model")
+
+    # clean up
+    for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
+        file = f"{model_save_path}{ext}"
+        if os.path.exists(file):
+            os.remove(file)
+
+
+    # input names must match with the ones in the forward method
+    named_inputs = {name: inp.shape for name, inp in zip(input_names, inputs)}
+    mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) # no spans
+
+    # the rest is same as for pytorch
+    mod, _ = construct_tvm_ir(
+        framework="paddle", 
+        model=paddlemod,
+        tvm_mod=mod,
+        params=params,
+        compiler_cfg=compiler_cfg,
+    )
+
+     # Construct NumPy inputs
+    flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
+    np_inputs = {name:inp.detach().numpy() for name, inp in zip(input_names, flattened_inputs_as_float)}
+    
+    # Compile TVM for Forge
+    partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
+
+    # Extract Graphs (TT, CPU, ...)
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names)
 
     return json_graphs, flattened_inputs
 
