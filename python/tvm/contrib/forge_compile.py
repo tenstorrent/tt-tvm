@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import inspect
-from forge.tensor import to_tf_tensors, to_pt_tensors
+from forge.tensor import to_tf_tensors, to_pt_tensors, pt_to_paddle_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 import paddle
 import torch
@@ -107,8 +107,7 @@ def load_tvm_graph(inputs, module, compiler_cfg, graph_name, framework, path=Non
 
     json_graphs, flattened_inputs = compile_tvm_graph(inputs, module, compiler_cfg, graph_name=graph_name, input_names=input_names, path=path, verify_cfg=verify_cfg, framework=framework)
     
-    # flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
-    flattened_pytorch_inputs, weights = flattened_inputs, {}
+    flattened_pytorch_inputs, weights = format_tvm_graph_weights(flattened_inputs, module, compiler_cfg, framework=framework)
 
     serialize_and_store_tvm_graph(json_graphs, compiler_cfg, framework=framework)
 
@@ -405,16 +404,18 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 
 def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
 
+    paddle_inputs = pt_to_paddle_tensors(inputs)
     if not input_names:
         input_names = list(inspect.signature(paddlemod.forward).parameters.keys())
     
-    framework_outputs = paddlemod(*inputs)
+    framework_outputs = paddlemod(*paddle_inputs)
 
     input_spec = [
-        paddle.static.InputSpec(shape=inp.shape, dtype=inp.numpy().dtype)
-        for inp in inputs
+        paddle.static.InputSpec(shape=inp.shape, dtype=inp.dtype)
+        for inp in paddle_inputs
     ]
 
+    # this also sets input_spec of original paddle model 
     traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
 
     flattened_inputs = [inp for inp in inputs]
@@ -432,7 +433,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
 
 
     # input names must match with the ones in the forward method
-    named_inputs = {name: inp.shape for name, inp in zip(input_names, inputs)}
+    named_inputs = {name: inp.shape for name, inp in zip(input_names, paddle_inputs)}
     mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) # no spans
 
     # the rest is same as for pytorch
@@ -1035,6 +1036,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         torch_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
+    elif framework == "paddle":
+        weights = {}
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
