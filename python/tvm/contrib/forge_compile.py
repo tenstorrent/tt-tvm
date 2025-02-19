@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from forge.tensor import to_tf_tensors, to_pt_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
+from forge.execution_tracker import ExecutionStage, record_execution_phase_and_stage
 import torch
 
 import numpy as np
@@ -370,9 +371,13 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
     # Generate TVM module
     convert_params = compiler_cfg.convert_framework_params_to_tvm
     mod, params = tvm.relay.frontend.from_pytorch(traced_model, input_structure, do_convert_params=convert_params)
+    record_execution_phase_and_stage(ExecutionStage.TVM_GENERATE_RELAY_IRMODULE)
     logger.trace("From PyTorch")
     logger.trace(mod.functions)
+
     mod = tvm.relay.op.contrib.flatten_IO(mod, flattened_name_map)
+    record_execution_phase_and_stage(ExecutionStage.TVM_FLATTEN_IO)
+
     # Construct TVM IR
     mod, _ = construct_tvm_ir(
         framework="pytorch",
@@ -415,6 +420,7 @@ def compile_tvm_for_forge(mod, params, inputs, golden_outputs, graph_name, input
     # Reconstruct Ops + export forge graph
     mod, forge_params = tvm.relay.op.contrib.forge.partition_for_forge(mod, graph_name=graph_name, compiler_cfg=compiler_cfg, input_names=input_names)
     tvm.relay.build_module.build(mod, target=target, params=params)
+    record_execution_phase_and_stage(ExecutionStage.TVM_GRAPH_PARTITIONING)
 
     if return_params:
         return mod, forge_params
@@ -562,6 +568,7 @@ def compile_onnx_for_forge(onnx_mod, path, *inputs, graph_name, compiler_cfg, ve
 
     mod, params = relay.frontend.from_onnx(onnx_mod, input_shape_dict, freeze_params=False)
     mod = relay.transform.DynamicToStatic()(mod)
+    record_execution_phase_and_stage(ExecutionStage.TVM_GENERATE_RELAY_IRMODULE)
 
     if not compiler_cfg.enable_tvm_constant_prop:
         mod = tvm.IRModule.from_expr(tvm.relay.build_module.bind_params_by_name(mod["main"], {}))
@@ -626,6 +633,7 @@ def compile_tflite_for_forge(module, path, *inputs, graph_name, compiler_cfg, ve
     mod, params = relay.frontend.from_tflite(
         tflite_model, shape_dict=input_shape_dict,
     )
+    record_execution_phase_and_stage(ExecutionStage.TVM_GENERATE_RELAY_IRMODULE)
 
     assert len(input_names) == len(inputs), "Number of input names must match number of inputs"
 
@@ -813,6 +821,7 @@ def compile_tf_for_forge(tfmod, *inputs, graph_name, compiler_cfg, verify_cfg=No
     outputs = [x.name for x in flattened_outputs]
     mod, params = tvm.relay.frontend.from_tensorflow(graph_def, outputs=outputs)
     mod = tvm.transform.Sequential([tvm.relay.transform.Inline()])(mod)
+    record_execution_phase_and_stage(ExecutionStage.TVM_GENERATE_RELAY_IRMODULE)
 
     # Construct TVM IR
     mod, param_name_lookup = construct_tvm_ir(
