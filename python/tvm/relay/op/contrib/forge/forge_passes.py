@@ -4192,6 +4192,35 @@ class DecomposeFloor(DFPatternCallback):
         floor_result = tvm.relay.subtract(int_part, adjustment) # Subtract adjustment to get the floor value
         return floor_result
 
+
+class DecomposeRepeat(DFPatternCallback):
+    def __init__(self):
+        super().__init__(rewrite_once=True, require_type=True)
+
+        self.act = wildcard() 
+        self.tile = is_op("tile")(self.act) 
+
+        self.pattern = self.tile  
+
+    def callback(self, pre, post, node_map):
+        pre_node_map = construct_pre_node_map(self.pattern, pre)
+        acts = node_map[self.act][0]
+
+        inp_shape = list(pre_node_map[self.act][0].checked_type.shape)
+        reps = list(post.attrs.reps)
+
+        target_shape_length = len(tuple(reps))
+        # Scenario: When the input is a 1D tensor and needs to be repeated in 2D, `ttir.repeat` 
+        # does not currently support this directly. To handle this, we first reshape 
+        # the input to ensure both the input and the repeats have the same dimensions 
+        if len(inp_shape) < target_shape_length:
+            new_shape = (1,) * (target_shape_length - len(inp_shape)) + tuple(inp_shape)
+            acts = tvm.relay.reshape(acts, newshape=new_shape)
+        
+        output  = tvm.relay.tile(acts, reps=reps)
+        return output
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -4334,6 +4363,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
             SimplifyVITOnnxAttention(),
             GQABroadcastReshape(),
             RemoveDenseInputSqueeze(),
+            DecomposeRepeat(),
         ],
         params=params,
         inputs=inputs,
