@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from collections import OrderedDict
 from collections.abc import MutableMapping
+import inspect
 
+import paddle
 import torch
 import numpy as np
 import tensorflow as tf
@@ -15,7 +17,7 @@ import tvm
 from tvm.relay import ExprVisitor
 from forge.config import CompilerConfig
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
-from forge.tensor import to_pt_tensors
+from forge.tensor import to_pt_tensors, pt_to_paddle_tensors
 from tvm.relay.op.contrib.forge.forge import extract_function_callnodes, trace_to_origin
 
 
@@ -40,7 +42,7 @@ def extract_framework_model_outputs(
             framework_outputs = framework_outputs.to_tuple()
 
         if not isinstance(framework_outputs, (list, tuple)):
-            if isinstance(framework_outputs, torch.Tensor):
+            if isinstance(framework_outputs, (torch.Tensor, paddle.Tensor)):
                 framework_outputs = [framework_outputs]
             elif isinstance(framework_outputs, OrderedDict):
                 framework_outputs = tuple(framework_outputs.values())
@@ -162,10 +164,14 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
             inputs, input_names
         )
     elif framework == "paddle":
+        paddle_inputs = pt_to_paddle_tensors(inputs)
+        input_structure = [
+            paddle.static.InputSpec(shape=inp.shape, dtype=inp.dtype)
+            for inp in paddle_inputs
+        ]
         flattened_inputs, _, _ = flatten_inputs(inputs)
-        flattened_input_names = None
+        flattened_input_names = list(inspect.signature(model.forward).parameters.keys())
         flattened_name_map = None
-        input_structure = None
         
     elif framework == "tensorflow":
         # The tensorflow trace automatically flattens inputs

@@ -405,25 +405,32 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
 
     paddle_inputs = pt_to_paddle_tensors(inputs)
-    if not input_names:
-        input_names = list(inspect.signature(paddlemod.forward).parameters.keys())
-    
-    framework_outputs = paddlemod(*paddle_inputs)
 
-    input_spec = [
-        paddle.static.InputSpec(shape=inp.shape, dtype=inp.dtype)
-        for inp in paddle_inputs
-    ]
+    with ConvertEmulatedDtypes(paddlemod, inputs):
+        framework_outputs = extract_framework_model_outputs(
+            framework="paddle",
+            model=paddlemod,
+            inputs=paddle_inputs,
+            verify_tvm_compile=verify_cfg.verify_tvm_compile,
+        )
+
+    flattened_inputs, input_names, _, input_spec = extract_flatten_inputs(
+        framework="paddle",
+        model=paddlemod,
+        inputs=inputs,
+        input_names=input_names,
+    )
 
     # this also sets input_spec of original paddle model 
     traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
-
-    flattened_inputs = [inp for inp in inputs]
-
+    
     # hope there is a better way to do this
     model_save_path = "traced_model"
     paddle.jit.save(traced_model, model_save_path)
-    loaded_model = paddle.jit.load("traced_model")
+    loaded_model = paddle.jit.load(model_save_path)
+
+    # parameter names are changed in this process
+    # loaded_model.set_state_dict(traced_model.state_dict())
 
     # clean up
     for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
@@ -435,7 +442,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
     # input names must match with the ones in the forward method
     named_inputs = {name: inp.shape for name, inp in zip(input_names, paddle_inputs)}
     mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) # no spans
-
+    
     # the rest is same as for pytorch
     mod, _ = construct_tvm_ir(
         framework="paddle", 
@@ -453,7 +460,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
     partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names)
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, paddlemod.state_dict().keys())
 
     return json_graphs, flattened_inputs
 
@@ -1037,7 +1044,13 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         named_params = dict(module.named_parameters())
         weights = {key: (value, named_params[key].requires_grad if key in named_params else False) for key, value in torch_weights.items()}
     elif framework == "paddle":
-        weights = {}
+        paddle_weights = module.state_dict()
+        named_buffers = dict(module.named_buffers())
+        paddle_weights.update(named_buffers)
+        named_params = dict(module.named_parameters())
+        
+        weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
