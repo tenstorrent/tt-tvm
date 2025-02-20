@@ -429,8 +429,10 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
     paddle.jit.save(traced_model, model_save_path)
     loaded_model = paddle.jit.load(model_save_path)
 
-    # parameter names are changed in this process
-    # loaded_model.set_state_dict(traced_model.state_dict())
+    # parameter names are changed during save and load
+    original_param_names = sorted([param.name for param in paddlemod.parameters()])
+    new_param_names = sorted([param.name for param in loaded_model.parameters()])
+    param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
 
     # clean up
     for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
@@ -460,7 +462,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
     partitioned_mod, forge_params = compile_tvm_for_forge(mod, params, np_inputs, framework_outputs, input_names=input_names, graph_name=graph_name, return_params=True, compiler_cfg=compiler_cfg, verify_cfg=verify_cfg)
 
     # Extract Graphs (TT, CPU, ...)
-    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, paddlemod.state_dict().keys())
+    json_graphs = extract_graphs(partitioned_mod, forge_params, input_names, paddlemod.state_dict().keys(), param_name_lookup=param_name_lookup, graph_hash="")
 
     return json_graphs, flattened_inputs
 
@@ -1049,7 +1051,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         paddle_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         
-        weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
 
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
