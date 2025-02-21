@@ -421,24 +421,29 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
         input_names=input_names,
     )
 
-    # this also sets input_spec of original paddle model 
-    traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
-    
-    # hope there is a better way to do this
-    model_save_path = "traced_model"
-    paddle.jit.save(traced_model, model_save_path)
-    loaded_model = paddle.jit.load(model_save_path)
+    if isinstance(paddlemod, paddle.jit.TranslatedLayer):
+        loaded_model = paddlemod
+        param_name_lookup = None
+    else:
+        # this also sets input_spec of original paddle model 
+        traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
+        
+        # hope there is a better way to do this
+        model_save_path = "traced_model"
+        paddle.jit.save(traced_model, model_save_path)
+        loaded_model = paddle.jit.load(model_save_path)
 
-    # parameter names are changed during save and load
-    original_param_names = sorted([param.name for param in paddlemod.parameters()])
-    new_param_names = sorted([param.name for param in loaded_model.parameters()])
-    param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
+        # parameter names are changed during save and load
+        # original_param_names = sorted([param.name for param in paddlemod.parameters()])
+        original_param_names = sorted([name for name, _ in paddlemod.state_dict().items()])
+        new_param_names = sorted([param.name for param in loaded_model.parameters()])
+        param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
 
-    # clean up
-    for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
-        file = f"{model_save_path}{ext}"
-        if os.path.exists(file):
-            os.remove(file)
+        # clean up
+        for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
+            file = f"{model_save_path}{ext}"
+            if os.path.exists(file):
+                os.remove(file)
 
 
     # input names must match with the ones in the forward method
@@ -1051,7 +1056,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         paddle_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         
-        weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        # weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
 
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}

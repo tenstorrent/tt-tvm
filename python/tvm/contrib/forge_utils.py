@@ -170,7 +170,10 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
             for inp in paddle_inputs
         ]
         flattened_inputs, _, _ = flatten_inputs(inputs)
-        flattened_input_names = list(inspect.signature(model.forward).parameters.keys())
+        if hasattr(model, '_input_args_names'):
+            flattened_input_names = model._input_args_names
+        else:
+            flattened_input_names = list(inspect.signature(model.forward).parameters.keys())
         flattened_name_map = None
         
     elif framework == "tensorflow":
