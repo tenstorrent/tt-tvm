@@ -435,7 +435,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
 
         # parameter names are changed during save and load
         # original_param_names = sorted([param.name for param in paddlemod.parameters()])
-        original_param_names = sorted([name for name, _ in paddlemod.state_dict().items()])
+        original_param_names = sorted([param.name for param in paddlemod.parameters()])
         new_param_names = sorted([param.name for param in loaded_model.parameters()])
         param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
 
@@ -1056,8 +1056,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         paddle_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
         
-        # weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
-        weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        # weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
 
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
