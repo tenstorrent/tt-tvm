@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -853,11 +856,44 @@ Expr PatternRewriter::DispatchVisitExpr(const Expr& pre) {
       }
       node_map.insert({kv.first, tmp});
     }
+
     // run the user callback function
-    return callback_->function(pre, post, Map<DFPattern, Array<Expr>>(node_map));
+    auto before = post->span;
+    post = callback_->function(pre, post, Map<DFPattern, Array<Expr>>(node_map));
+
+    if (not post->span.defined() or post->span->source_name->name.empty()) {
+      post->span = before;
+    }
   }
   return post;
 }
+
+Map<DFPattern, Array<Expr>> ConstructPreNodeMapImpl(const DFPattern& pattern, const Expr& pre) {
+  std::unordered_map<DFPattern, Array<Expr>, ObjectPtrHash, ObjectPtrEqual> node_map;
+
+  // Initialize class for pre-rewriting graph pattern matching
+  auto grouper = PatternGrouper();
+
+  // Groups expressions that match pattern for the pre-rewriting graph
+  std::unordered_map<int, PatternGrouper::Group> groups_ = grouper.GroupMatches(pattern, pre);
+
+  // Gets group assignments of the expressions provided to it
+  std::unordered_map<Expr, int, ObjectPtrHash, ObjectPtrEqual> gid_assignments_ = grouper.GetGIDAssignments();
+
+  // Construct pattern/expression paris in a key/value format based on pre-rewriting graph
+  auto group = groups_[gid_assignments_[pre]];
+  for (auto kv : group.matched_nodes) {
+    node_map.insert({kv.first, kv.second});
+  }
+
+  return Map<DFPattern, Array<Expr>>(node_map);
+}
+
+Map<DFPattern, Array<Expr>> ConstructPreNodeMap(const DFPattern& pattern, const Expr& pre) {
+  return ConstructPreNodeMapImpl(pattern, pre);
+}
+
+TVM_REGISTER_GLOBAL("relay.dataflow_pattern.construct_pre_node_map").set_body_typed(ConstructPreNodeMap);
 
 Expr RewritePatterns(Array<DFPatternCallback> callbacks, Expr expr, IRModule mod) {
   return PatternRewriter(mod).Rewrite(callbacks, expr);
@@ -900,7 +936,9 @@ class PatternPartitioner : protected MixedModeMutator {
         func = WithAttr(std::move(func), kv.first, kv.second);
       }
     }
-    return Call(func, args);
+    auto res = Call(func, args);
+    res->span = group.root_node->span;
+    return res;
   }
 
   Expr DispatchVisitExpr(const Expr& pre) override {
