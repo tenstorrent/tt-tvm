@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation © 2024 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -23,7 +20,6 @@ from typing import Callable, Dict, List, Optional
 
 import tvm._ffi
 from tvm.relay.expr import RelayExpr as Expr
-from tvm.relay.expr_functor import ExprVisitor
 
 from ... import _ffi as tvm_ffi
 from ... import ir as _ir
@@ -958,23 +954,3 @@ def partition(
         The Expression with matched subgraphs replaced by function calls to that subgraph
     """
     return ffi.partition(pattern, expr, attrs, check)
-
-
-def construct_pre_node_map(pattern: "DFPattern", pre: Expr) -> tvm.ir.container.Map:
-    """
-    Construct the node_map for pre graph
-
-    Parameters
-    ----------
-    pattern: tvm.relay.dataflow_pattern.DFPattern
-        The pattern to match
-    expr : tvm.relay.Expr
-        The expression on which pattern is matched
-
-    Returns
-    -------
-    result : tvm.ir.container.Map
-        The dictionary constructed of pre graph subgroups in form of 
-        pattern/expression pairs
-    """
-    return ffi.construct_pre_node_map(pattern, pre)
