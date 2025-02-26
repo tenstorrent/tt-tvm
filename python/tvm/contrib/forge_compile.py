@@ -405,7 +405,7 @@ def compile_pytorch_for_forge(torchmod, *inputs, graph_name, compiler_cfg, verif
 def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verify_cfg=None, input_names=[]):
 
     paddle_inputs = pt_to_paddle_tensors(inputs)
-
+    
     with ConvertEmulatedDtypes(paddlemod, inputs):
         framework_outputs = extract_framework_model_outputs(
             framework="paddle",
@@ -425,32 +425,33 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
         loaded_model = paddlemod
         param_name_lookup = None
     else:
-        # this also sets input_spec of original paddle model 
+        # Trace framework model. This also sets the input_spec of the original paddle model
         traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
         
-        # hope there is a better way to do this
+        # Model must be saved and loaded in order to have TranslatedLayer type which is needed for the next step
         model_save_path = "traced_model"
         paddle.jit.save(traced_model, model_save_path)
         loaded_model = paddle.jit.load(model_save_path)
 
-        # parameter names are changed during save and load
-        # original_param_names = sorted([param.name for param in paddlemod.parameters()])
+        # Parameter names are not preserved in the loaded model, so we need to map them back to the original model
         original_param_names = sorted([param.name for param in paddlemod.parameters()])
         new_param_names = sorted([param.name for param in loaded_model.parameters()])
         param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
 
-        # clean up
+        # Clean up
         for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
             file = f"{model_save_path}{ext}"
             if os.path.exists(file):
                 os.remove(file)
 
 
-    # input names must match with the ones in the forward method
+    # Input names must match with the ones in the forward method
     named_inputs = {name: inp.shape for name, inp in zip(input_names, paddle_inputs)}
-    mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) # no spans
+    mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) 
     
-    # the rest is same as for pytorch
+    # The rest is the same as for PyTorch
+
+    # Construct TVM IR
     mod, _ = construct_tvm_ir(
         framework="paddle", 
         model=paddlemod,
@@ -459,7 +460,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
         compiler_cfg=compiler_cfg,
     )
 
-     # Construct NumPy inputs
+    # Construct NumPy inputs
     flattened_inputs_as_float = (act.float() if torch.is_floating_point(act) else act for act in flattened_inputs)
     np_inputs = {name:inp.detach().numpy() for name, inp in zip(input_names, flattened_inputs_as_float)}
     
@@ -1055,10 +1056,8 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         named_buffers = dict(module.named_buffers())
         paddle_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
-        
         weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
-        # weights = {key: (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
-
+      
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
         if not (len(inputs) > 0 and isinstance(inputs[0], torch.Tensor)):
