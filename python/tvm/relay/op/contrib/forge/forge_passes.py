@@ -4192,6 +4192,48 @@ class DecomposeFloor(DFPatternCallback):
         floor_result = tvm.relay.subtract(int_part, adjustment) # Subtract adjustment to get the floor value
         return floor_result
 
+class DecomposeMeshgrid(DFPatternCallback):
+    def __init__(self):
+        super().__init__()
+        self.inputs = wildcard()
+        self.pattern = is_op("meshgrid")(self.inputs)
+ 
+    def callback(self, pre, post, node_map):
+        
+        assert pre.attrs.indexing == 'ij', f"Indexing type {pre.attrs.indexing} is not supported yet"
+        
+        from tvm.relay.frontend.common import infer_shape
+        inputs = node_map[self.inputs][0]
+ 
+        # Determine the number of input tensors
+        num_dims = len(inputs)
+ 
+        # Get the shape (length) of each input tensor
+        lengths = [infer_shape(t)[0] for t in inputs]
+        all_ones = all(length == 1 for length in lengths)
+        assert not all_ones, "Meshgrid requires all input tensors to be 1D"
+ 
+        # Create expanded versions of each input tensor for proper broadcasting
+        expanded_inputs = []
+        for i, tensor in enumerate(inputs):
+            expanded = tensor  # Start with the original tensor
+            
+            # Expand dimensions along all axes except the current one
+            for axis in range(num_dims):
+                if axis != i:
+                    expanded = tvm.relay.expand_dims(expanded, axis=axis)
+            
+            expanded_inputs.append(expanded)  # Store the expanded tensor
+ 
+        # Broadcast each expanded tensor to match the full meshgrid shape   
+        broadcasted_grids = [
+            tvm.relay.broadcast_to(expanded_inputs[i], shape=tuple(lengths))
+            for i in range(num_dims)
+        ]
+ 
+        return tvm.relay.Tuple(broadcasted_grids)
+
+
 def _get_callback_name(callback):
     if isinstance(callback, DFPatternCallback):
         return type(callback).__name__
@@ -4239,6 +4281,7 @@ def run_forge_compile_passes(relay_module, params=None, inputs=None, target=None
     return run_pattern_callbacks(
         relay_module,
         [
+            DecomposeMeshgrid(),
             DecomposeGridSample(),
             DecomposeFloor(),
             ExpandMultipleDims(),
