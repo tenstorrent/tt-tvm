@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import inspect
-from forge.tensor import to_tf_tensors, to_pt_tensors, pt_to_paddle_tensors
+from forge.tensor import to_tf_tensors, to_pt_tensor, to_pt_tensors, pt_to_paddle_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 import paddle
 import torch
@@ -1056,7 +1056,7 @@ def format_tvm_graph_weights(inputs, module, compiler_cfg, framework=None):
         named_buffers = dict(module.named_buffers())
         paddle_weights.update(named_buffers)
         named_params = dict(module.named_parameters())
-        weights = {(named_params[key].name if key in named_params else key): (value, named_params[key].trainable if key in named_params else False) for key, value in paddle_weights.items()}
+        weights = {value.name : (to_pt_tensor(value), value.trainable if key in named_params else False) for key, value in paddle_weights.items()}
       
     elif framework == "tensorflow":
         weights = {weight.name: (torch.Tensor((tf.cast(weight.value(), tf.float32) if weight.value().dtype.is_floating else weight.value()).numpy()), True) for weight in module.weights}
