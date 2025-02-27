@@ -2848,7 +2848,8 @@ class PyTorchOpConverter:
 
     def meshgrid(self, inputs, input_types):
         data = inputs[0]
-        return _op.meshgrid(data, indexing="ij")
+        indexing = inputs[1] if len(inputs) > 1 else "ij"
+        return _op.meshgrid(data,indexing)
 
     def nms(self, inputs, input_types):
         boxes = inputs[0]
