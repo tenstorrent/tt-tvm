@@ -4,6 +4,7 @@
 from collections import OrderedDict
 from collections.abc import MutableMapping
 import inspect
+import os
 
 import paddle
 import torch
@@ -169,12 +170,13 @@ def extract_flatten_inputs(framework: str, model, inputs, input_names=[]):
             paddle.static.InputSpec(shape=inp.shape, dtype=inp.dtype)
             for inp in paddle_inputs
         ]
-        flattened_inputs, _, _ = flatten_inputs(inputs)
+        
         if hasattr(model, '_input_args_names'):
             flattened_input_names = model._input_args_names
         else:
             flattened_input_names = list(inspect.signature(model.forward).parameters.keys())
-        flattened_name_map = None
+            
+        flattened_inputs, _, flattened_name_map = flatten_inputs(inputs, flattened_input_names)
         
     elif framework == "tensorflow":
         # The tensorflow trace automatically flattens inputs
@@ -347,3 +349,29 @@ def has_op(module, opname, attrs={}):
     visitor = Visitor()
     visitor.visit(module)
     return visitor.has_op
+
+def paddle_trace(paddlemod, input_spec):
+    """
+    Converts paddle.nn.Layer to paddle.nn.TranslatedLayer needed for TVM compilation.
+    """
+    traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
+        
+    # Model must be saved and loaded in order to have TranslatedLayer type which is needed for the next step
+    model_save_path = "traced_model"
+    paddle.jit.save(traced_model, model_save_path)
+    loaded_model = paddle.jit.load(model_save_path)
+
+    # Parameter names are not preserved in the loaded model, so we need to map them back to the original model
+    original_param_names = sorted([param.name for param in paddlemod.parameters()])
+    new_param_names = sorted([param.name for param in loaded_model.parameters()])
+    param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
+
+    # Clean up
+    for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
+        file = f"{model_save_path}{ext}"
+        if os.path.exists(file):
+            os.remove(file)
+
+    return loaded_model, param_name_lookup
+
+    

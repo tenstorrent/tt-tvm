@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-import inspect
 from forge.tensor import to_tf_tensors, to_pt_tensor, to_pt_tensors, pt_to_paddle_tensors
 from forge.tvm_utils import flatten_inputs, flatten_structured_output
 import paddle
@@ -47,6 +46,7 @@ from tvm.contrib.forge_utils import (
     extract_flatten_inputs, 
     construct_tvm_ir,
     extract_function_callnodes,
+    paddle_trace,
     trace_to_origin,
     has_op
 )
@@ -414,7 +414,7 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
             verify_tvm_compile=verify_cfg.verify_tvm_compile,
         )
 
-    flattened_inputs, input_names, _, input_spec = extract_flatten_inputs(
+    flattened_inputs, input_names, flattened_name_map, input_spec = extract_flatten_inputs(
         framework="paddle",
         model=paddlemod,
         inputs=inputs,
@@ -422,34 +422,17 @@ def compile_paddle_for_forge(paddlemod, *inputs, graph_name, compiler_cfg, verif
     )
 
     if isinstance(paddlemod, paddle.jit.TranslatedLayer):
-        loaded_model = paddlemod
-        param_name_lookup = None
+        traced_model, param_name_lookup = paddlemod, None
     else:
-        # Trace framework model. This also sets the input_spec of the original paddle model
-        traced_model = paddle.jit.to_static(paddlemod, input_spec=input_spec, full_graph=True)
-        
-        # Model must be saved and loaded in order to have TranslatedLayer type which is needed for the next step
-        model_save_path = "traced_model"
-        paddle.jit.save(traced_model, model_save_path)
-        loaded_model = paddle.jit.load(model_save_path)
-
-        # Parameter names are not preserved in the loaded model, so we need to map them back to the original model
-        original_param_names = sorted([param.name for param in paddlemod.parameters()])
-        new_param_names = sorted([param.name for param in loaded_model.parameters()])
-        param_name_lookup = {new: old for new, old in zip(new_param_names, original_param_names)}
-
-        # Clean up
-        for ext in [".pdiparams", ".pdiparams.info", ".pdmodel"]:
-            file = f"{model_save_path}{ext}"
-            if os.path.exists(file):
-                os.remove(file)
+        traced_model, param_name_lookup = paddle_trace(paddlemod, input_spec)
 
 
     # Input names must match with the ones in the forward method
     named_inputs = {name: inp.shape for name, inp in zip(input_names, paddle_inputs)}
-    mod, params = tvm.relay.frontend.from_paddle(loaded_model, named_inputs) 
-    
-    # The rest is the same as for PyTorch
+
+    # Generate TVM module
+    mod, params = tvm.relay.frontend.from_paddle(traced_model, named_inputs) 
+    mod = tvm.relay.op.contrib.flatten_IO(mod, flattened_name_map)
 
     # Construct TVM IR
     mod, _ = construct_tvm_ir(
