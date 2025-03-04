@@ -952,6 +952,8 @@ class PyTorchOpConverter:
             dtype = _convert_dtype_value(inputs[1])
         else:
             dtype = self.default_dtype
+            
+        data = data[0] if isinstance(data, list) else data
         return self.full_impl(data, 0, dtype)
 
     def zero_(self, inputs, input_types):
@@ -960,16 +962,10 @@ class PyTorchOpConverter:
 
     def zeros_like(self, inputs, input_types):
         data = inputs[0]
-        out = _op.zeros_like(data)
-
-        # If the input and the output datatype is different, do a cast
-        if inputs[1] is not None:
-            dtype = _convert_dtype_value(inputs[1])
-        else:
-            dtype = self.default_dtype
-        if input_types[0] not in dtype:
-            out = _op.cast(out, dtype)
-
+        
+        inputs = [[_infer_shape(data)], inputs[1]]
+        out = self.zeros(inputs, input_types[0])
+        
         return out
 
 
