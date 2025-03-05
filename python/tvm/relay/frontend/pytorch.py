@@ -34,7 +34,6 @@ import os
 import numpy as np
 import tvm
 from tvm.ir import IRModule
-from tvm.ir.type import DictType
 from tvm.topi.utils import get_const_tuple
 
 from .. import analysis as _analysis
@@ -2606,18 +2605,6 @@ class PyTorchOpConverter:
         return _op.logical_xor(lhs, rhs)
 
     def getitem(self, inputs, input_types):
-        if input_types[0] == 'DictType':
-            keys = inputs[0].type_annotation.keys
-            values = inputs[0].type_annotation.values
-            name = inputs[0].name_hint
-
-            index = 0
-            for key in keys:
-                if key == inputs[1]:
-                    break
-                index += 1
-            return _expr.var(f"{name}_{inputs[1]}", values[index])
-        else:
             return self.prelude.nth(inputs[0], _wrap_const(inputs[1]))
 
     def list_len(self, inputs, input_types):
@@ -5682,8 +5669,6 @@ def _get_pytorch_value_type(typ, default_dtype="float32"):
 
     elif kind == "ListType":
         return "ListType"
-    elif kind == "DictType":
-        return "DictType"
     elif kind in ["IntType", "FloatType", "BoolType", "StringType", "OptionalType"]:
         pt_dtype = str(typ).lower()
         dtype = pt_dtype if kind == "OptionalType" else _convert_data_type(pt_dtype)
@@ -5879,13 +5864,6 @@ def _get_relay_input_vars(graph, input_infos, prelude, is_module=True, default_d
                 raise RuntimeError(msg)
             rlist, _, _ = prelude.mod.get_type("List")
             return rlist(elem_tys[0])
-        elif pt_type.kind() == "DictType":
-            pt_elemtype = pt_type.getValueType()
-            keys, values = [], []
-            for k, v in ishape.items():
-                keys.append(k)
-                values.append(get_relay_ty(v, itype, pt_elemtype))
-            return DictType(keys, values)
         elif pt_type.kind() == "OptionalType":
             # we do not support None yet, so we fill in the type
             return get_relay_ty(ishape, itype, pt_type.getElementType())
