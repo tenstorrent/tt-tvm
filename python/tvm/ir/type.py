@@ -174,20 +174,6 @@ class TupleType(Type):
     def __init__(self, fields):
         self.__init_handle_by_constructor__(_ffi_api.TupleType, fields)
 
-@tvm._ffi.register_object("DictType")
-class DictType(Type):
-    """The type of dict values.
-
-    Parameters
-    ----------
-    keys : List[str]
-        The keys in the dict
-    values : List[Type]
-        The values in the dict
-    """
-
-    def __init__(self, keys, values):
-        self.__init_handle_by_constructor__(_ffi_api.DictType, keys, values)
 
 @tvm._ffi.register_object("TypeConstraint")
 class TypeConstraint(Type):
