@@ -2831,16 +2831,16 @@ class PyTorchOpConverter:
             res = _op.adv_index([data, indices])
 
             return res
-        
+
         elif len(_infer_shape(data)) > 2 and sum(idx is not None for idx in indices) == 1:
             axis = None
             index_expr = None
             for i, idx in enumerate(indices):
-                if idx is not None:  
+                if idx is not None:
                     axis = i
                     index_expr = idx
                     break
-                
+
             res = _op.take(data, index_expr, axis=axis)
             return res
 
@@ -3366,7 +3366,7 @@ class PyTorchOpConverter:
             return _op.add(_op.multiply(inputs[0], _op.subtract(one_const, mask)), _op.multiply(value, mask))
 
         # Pybuda will convert all cast ops to Identity. This can be an issue.
-        # In pytorch, when the mask has float values, it treats 0 as False and 
+        # In pytorch, when the mask has float values, it treats 0 as False and
         # everything else as True. We cannot assume that mask will contain only
         # zeroes and ones, as multiplication with the mask will yeild incorrect
         # results.
@@ -3390,7 +3390,7 @@ class PyTorchOpConverter:
 
         # Implementaiton without using where operator in order to avoide numerical instability
         # for certain models caused by the future matmul (once where is decomposed)
-        
+
         # (!mask * x) + (mask*y)
         return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
 
@@ -3412,13 +3412,13 @@ class PyTorchOpConverter:
 
     def masked_scatter(self, inputs, input_types):
         """
-        Performs a masked scatter operation on the input tensor `data`, replacing values where 
+        Performs a masked scatter operation on the input tensor `data`, replacing values where
         the `mask` is True with corresponding values from the `source` tensor.
 
         This implementation follows the decomposition of the PyTorch `aten::masked_scatter` operation:
         "aten::masked_scatter": https://github.com/pytorch/pytorch/blob/f95bdf5e6c8ea482ba6f64d655513b6a191ac142/torch/_inductor/decomposition.py#L830
 
-        The masked scatter requires `aten::unsafe_masked_index`, which is implemented in our TVM 
+        The masked scatter requires `aten::unsafe_masked_index`, which is implemented in our TVM
         decomposition based on the following PyTorch function:
         "aten::unsafe_masked_index": https://github.com/pytorch/pytorch/blob/f95bdf5e6c8ea482ba6f64d655513b6a191ac142/aten/src/ATen/native/TensorAdvancedIndexing.cpp#L773
 
@@ -3434,15 +3434,15 @@ class PyTorchOpConverter:
         Returns:
             Tensor: The updated tensor, with values from `source` scattered into `data` at positions where `mask` is True.
         """
-        data = inputs[0]  
-        mask = inputs[1]  
+        data = inputs[0]
+        mask = inputs[1]
         source = inputs[2]
 
         # Count the number of True values in the mask
         mask_true_count = _op.sum(_op.cast(mask, "int32"))
         source_size = _op.prod(_op.shape_of(source))
         assert _op.less_equal(mask_true_count, source_size), "Source tensor must have at least as many elements as ones in mask (source size: %s, mask true count: %s)" % (source_size, mask_true_count)
-        
+
         mask = _op.cast(mask, dtype="float32")
 
         def broadcast_tensors(mask,data):
@@ -4424,11 +4424,11 @@ class PyTorchOpConverter:
         x = inputs[0]
         x_shape = _infer_shape(x)
         diagonal = inputs[1]
-        
+
         if isinstance(diagonal, tvm.relay.expr.Call):
             diagonal = _infer_value(diagonal,{})
             diagonal = diagonal.asnumpy().item()
-        
+
         y = np.tril(np.ones(x_shape), k = diagonal).astype(_convert_tvm_to_np_dtype(input_types[0]))
         y = tvm.nd.array(y)
         y = tvm.relay.Constant(y)
@@ -4708,15 +4708,15 @@ class PyTorchOpConverter:
             attn_weight = _op.reshape(attn_weight, newshape=[-4, batch_size, -1, -2])
 
         return attn_weight
-    
-     
+
+
     def nan_to_num(self, inputs, input_types):
-        
+
         """
         Mimics the behavior of torch.nan_to_num (https://pytorch.org/docs/stable/generated/torch.nan_to_num.html).
         """
-        
-        # Extract input tensor and replacement values 
+
+        # Extract input tensor and replacement values
         data = inputs[0]
         nan_value = inputs[1]
         posinf = inputs[2]
@@ -4734,25 +4734,25 @@ class PyTorchOpConverter:
         nan_tensor = tvm.relay.const(nan_value if nan_value is not None else 0.0, dtype)
         posinf_tensor = tvm.relay.const(posinf if posinf is not None else dtype_max, dtype)
         neginf_tensor = tvm.relay.const(neginf if neginf is not None else dtype_min, dtype)
-        
+
         # Replace NaN values with the specified or default value
         data= tvm.relay.where(_op.isnan(data)  , nan_tensor, data)
-        
+
         # Replace positive infinity with the specified or greatest finite value representable by input’s dtype
         data = tvm.relay.where(tvm.relay.greater(data, posinf_tensor),posinf_tensor, data)
-        
+
         # Replace negative infinity with the specified or least finite value representable by input’s dtype
         result = tvm.relay.where(tvm.relay.less(data, neginf_tensor),  neginf_tensor, data)
-       
+
         return result
 
-        
+
     def atan2(self, inputs, input_types):
-        
+
         """
         Mimics the behavior of torch.atan2 (https://pytorch.org/docs/stable/generated/torch.atan2.html).
         """
-        
+
         data_1 = inputs[1]  # x (denominator)
         data_2 = inputs[0]  # y (numerator)
 
@@ -4783,7 +4783,69 @@ class PyTorchOpConverter:
 
         # Add the correction term to the arctangent result.
         result = tvm.relay.add(atan_res, correction)
-        
+
+        return result
+
+    def eye(self, inputs, input_types):
+
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.eye.html"
+
+        n = inputs[0]
+        m = inputs[1] if len(inputs) > 1 else n
+
+        dtype = "float32"
+        if len(inputs) > 2:
+            dtype = inputs[2] if isinstance(inputs[2], str) else dtype
+
+        if isinstance(n, int):
+            n = _expr.const(n, dtype="int32")
+        elif isinstance(n, _expr.Expr):
+            n = _op.cast(n, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `n`: {type(n)}")
+
+        if isinstance(m, int):
+            m = _expr.const(m, dtype="int32")
+        elif isinstance(m, _expr.Expr):
+            m = _op.cast(m, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `m`: {type(m)}")
+
+        # Generate row and column indices for identity matrix creation.
+        row_indices = _op.arange(_expr.const(0, "int32"), n, dtype="int32")
+        col_indices = _op.arange(_expr.const(0, "int32"), m, dtype="int32")
+
+        # Expand row and column indices to create a 2D comparison.
+        row_expanded = _op.expand_dims(row_indices, axis=1)
+        col_expanded = _op.expand_dims(col_indices, axis=0)
+
+        # Create an identity matrix mask where row index matches column index.
+        identity_mask = _op.equal(row_expanded, col_expanded)
+        identity_matrix = _op.cast(identity_mask, dtype)
+
+        return identity_matrix
+
+    def index_add(self, inputs, input_types):
+
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.Tensor.index_add.html"
+
+        data = inputs[0]
+        indices = inputs[1]
+        updates = inputs[2]
+        axis = inputs[3] if len(inputs) > 3 else 0
+
+        # Ensure `axis` is an integer or cast it if it's an expression.
+        if not isinstance(axis, int):
+            if isinstance(axis, _expr.Expr):
+                axis = _op.cast(axis, "int32")
+            else:
+                raise TypeError(f"Unsupported type for `axis`: {type(axis)}")
+
+        # Expand indices to match the shape of updates.
+        indices_expanded = _op.broadcast_to(indices, _op.shape_of(updates))
+        # Perform scatter add operation along the specified axis.
+        result = _op.scatter_elements(data, indices_expanded, updates, axis=axis, reduction="add")
+
         return result
 
     # Operator mappings
@@ -5089,6 +5151,8 @@ class PyTorchOpConverter:
             "aten::lift_fresh": self.identity,
             "aten::nan_to_num": self.nan_to_num,
             "aten::atan2": self.atan2,
+            "aten::index_add_": self.index_add,
+            "aten::eye": self.eye,
         }
 
     def update_convert_map(self, custom_map):
