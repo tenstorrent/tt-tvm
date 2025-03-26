@@ -1166,8 +1166,9 @@ def convert_lookup_table(g, op, block):
     weights = g.get_node(op.input("W")[0])
     if padding_idx != -1:
         if op.input("W")[0] in g.get_params():
-            weights = g.get_params(op.input("W")[0])
-            weights[padding_idx] = 0.0
+            weights_np = g.get_params(op.input("W")[0]).asnumpy()
+            weights_np[padding_idx] = 0.0
+            weights = tvm.nd.array(weights_np)
             weights = _expr.const(weights)
         else:
             shape, infered = try_infer_value(shape_of(weights), g.get_params())
