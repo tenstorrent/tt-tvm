@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: © 2019-2023 The Apache Software Foundation © 2024 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -114,22 +111,6 @@ TVM_REGISTER_NODE_TYPE(TupleTypeNode);
 
 TVM_REGISTER_GLOBAL("ir.TupleType").set_body_typed([](Array<Type> fields) {
   return TupleType(fields);
-});
-
-DictType::DictType(Array<String> keys, Array<Type> values, Span span) {
-  ObjectPtr<DictTypeNode> n = make_object<DictTypeNode>();
-  n->keys = std::move(keys);
-  n->values = std::move(values);
-  n->span = std::move(span);
-  data_ = std::move(n);
-}
-
-DictType DictType::Empty() { return DictType(Array<String>(), Array<Type>()); }
-
-TVM_REGISTER_NODE_TYPE(DictTypeNode);
-
-TVM_REGISTER_GLOBAL("ir.DictType").set_body_typed([](Array<String> keys, Array<Type> values) {
-  return DictType(keys, values);
 });
 
 IncompleteType::IncompleteType(TypeKind kind, Span span) {
