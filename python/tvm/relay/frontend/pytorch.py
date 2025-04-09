@@ -2051,12 +2051,13 @@ class PyTorchOpConverter:
             keepdims = False
 
             if len(inputs) > 2:  # default, torch have only data, axis=None, keepdims=False
-                if isinstance(inputs[1], int):
-                    axis = int(inputs[1])
-                elif _is_int_seq(inputs[1]):
-                    axis = inputs[1]
-                else:
-                    axis = list(self.infer_shape(inputs[1]))
+                if inputs[1] is not None:
+                    if isinstance(inputs[1], int):
+                        axis = int(inputs[1])
+                    elif _is_int_seq(inputs[1]):
+                        axis = inputs[1]
+                    elif inputs[1]:
+                        axis = list(self.infer_shape(inputs[1]))
                 keepdims = bool(inputs[2])
 
             return get_relay_op(name)(data, axis=axis, keepdims=keepdims)
