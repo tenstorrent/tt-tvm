@@ -1166,6 +1166,8 @@ def convert_lookup_table(g, op, block):
     weights = g.get_node(op.input("W")[0])
     if padding_idx != -1:
         if op.input("W")[0] in g.get_params():
+            # TVM NDArray does not support item assignment like weights[padding_idx] = 0.0,
+            # so we convert to numpy, modify the values, then convert back to TVM NDArray.
             weights_np = g.get_params(op.input("W")[0]).asnumpy()
             weights_np[padding_idx] = 0.0
             weights = tvm.nd.array(weights_np)
