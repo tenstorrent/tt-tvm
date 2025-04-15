@@ -44,8 +44,10 @@ from .common import (
     shape_of,
     try_infer_value,
     new_var,
+    infer_type,
 )
 
+from loguru import logger
 __all__ = ["from_paddle"]
 
 
@@ -1162,8 +1164,9 @@ def convert_lookup_table(g, op, block):
     """Operator converter for lookup_table_v2."""
 
     indices = g.get_node(op.input("Ids")[0])
-    padding_idx = op.attr("padding_idx")
     weights = g.get_node(op.input("W")[0])
+    padding_idx = op.attr("padding_idx")
+    
     if padding_idx != -1:
         if op.input("W")[0] in g.get_params():
             # TVM NDArray does not support item assignment like weights[padding_idx] = 0.0,
@@ -1183,7 +1186,18 @@ def convert_lookup_table(g, op, block):
             filters[padding_idx] = 0.0
             filters = _expr.const(filters)
             weights = weights * filters
-    out = _op.take(weights, indices.astype("int32"), axis=0)
+            
+    indicies_dtype = infer_type(indices).checked_type.dtype
+    if indicies_dtype != "int32" and indicies_dtype != "int64":
+        # Cast indices to int32 if they are not already.
+        # Note: If indices are int64, they will be automatically cast to int32 during
+        # the lowering process from Torch to Forge, as Forge doesn't support int64.
+        # Therefore, explicitly casting int64 to int32 here is unnecessary and may
+        # introduce redundant operations or unexpected behavior.
+        logger.warning("Casting input indices of embedding op from {} to int32", indicies_dtype)
+        indices = tvm.relay.cast(indices, "int32")
+    
+    out = _op.embedding(weights, indices, axis=0)
     g.add_node(op.output("Out")[0], out)
 
 
