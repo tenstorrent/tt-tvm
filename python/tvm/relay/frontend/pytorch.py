@@ -1652,11 +1652,31 @@ class PyTorchOpConverter:
         input_shape = self.infer_type(data).shape
         axis = len(input_shape) - 1
         assert ndims == 1, "Support only normalization over last one dimension."
-
+        
+        # When elementwise_affine=False in PyTorch LayerNorm, weight and bias are None.
+        # However, TVM's layer_norm op expects gamma and beta to be valid Relay expressions.
+        # So we explicitly create constant expressions: gamma=1.0, beta=0.0 to mimic no affine transform.
+        
+        if inputs[2] is None and inputs[3] is None:
+            normalized_shape = input_shape[-1]
+            dtype = self.infer_type(data).dtype
+    
+            # Create constant gamma = 1.0
+            gamma = _expr.const(1.0, dtype)
+            gamma = _op.full(gamma, [normalized_shape], dtype)
+            
+            # Create constant beta = 0.0
+            beta = _expr.const(0.0, dtype)
+            beta = _op.full(beta, [normalized_shape], dtype)
+    
+        else:
+            gamma = inputs[2]
+            beta = inputs[3]
+    
         return _op.layernorm(
             data,
-            gamma=inputs[2],
-            beta=inputs[3],
+            gamma=gamma,
+            beta=beta,
             axis=axis,
             eps=float(inputs[4]),
         )
