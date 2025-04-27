@@ -4804,6 +4804,43 @@ class PyTorchOpConverter:
         # Returning the input directly is appropriate for resolve_neg.
         return inputs
         
+    
+    def unflatten(self, inputs, input_types):
+        
+        """
+        Mimics the behavior of torch.unflatten (https://pytorch.org/docs/stable/generated/torch.unflatten.html).
+        """
+        data = inputs[0]
+        dim = int(inputs[1])
+        unflattened_size = tuple(inputs[2])
+        dshape = get_const_tuple(self.infer_shape_with_prelude(data))
+
+        # Handle negative dimension
+        dim = dim if dim >= 0 else len(dshape) + dim
+        assert len(dshape) > dim >= 0
+
+        # Ensure at most one inferred dimension (-1)
+        assert unflattened_size.count(-1) <= 1
+        
+        # Helper to convert each element of unflattened_size to a valid int
+        def extract_int(val):
+            if isinstance(val, _expr.Constant):
+                # Extract integer from relay Constant
+                return int(val.data.numpy().item())
+            elif isinstance(val, int):
+                # Already a plain Python int
+                return val
+            else:
+                raise TypeError(f"Unsupported shape type in unflatten: {type(val)} with value {val}")
+
+        # Convert the unflattened size tuple into a pure tuple of Python ints
+        unflattened_shape = tuple(extract_int(v) for v in unflattened_size)
+        
+        # Construct the new shape by replacing the target dim with unflattened_shape
+        new_shape = dshape[:dim] + unflattened_shape + dshape[dim + 1 :]
+        
+        out = _op.reshape(data, new_shape)
+        return out
 
     # Operator mappings
     def create_convert_map(self):
@@ -5111,6 +5148,7 @@ class PyTorchOpConverter:
             "aten::atan2": self.atan2,
             "aten::resolve_conj": self.resolve_conj,
             "aten::resolve_neg": self.resolve_neg,
+            "aten::unflatten": self.unflatten,
         }
 
     def update_convert_map(self, custom_map):
