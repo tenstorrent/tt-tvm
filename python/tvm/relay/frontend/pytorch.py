@@ -4817,6 +4817,7 @@ class PyTorchOpConverter:
             "aten::multinomial": self.multinomial,
             "aten::div": self.make_elemwise("divide"),
             "aten::floor_divide": self.make_elemwise("floor_divide"),
+            "aten::floordiv": self.make_elemwise("floor_divide"),
             "aten::true_divide": self.make_elemwise("divide"),
             "aten::fmod": self.make_elemwise("trunc_mod"),
             "aten::remainder": self.make_elemwise("floor_mod"),
