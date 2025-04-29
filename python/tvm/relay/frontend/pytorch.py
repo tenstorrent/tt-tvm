@@ -46,6 +46,8 @@ from ..loops import while_loop
 from ..prelude import Prelude, StaticTensorArrayOps
 from ..ty import Any, TensorType, TupleType
 from . import qnn_torch
+from tvm.relay.op import random as _random
+from tvm import relay
 from .common import AttrCvt, get_relay_op, gru_cell, logger, rnn_cell
 from .common import infer_type as _infer_type
 from .common import infer_shape as _infer_shape
@@ -57,7 +59,6 @@ from .pytorch_utils import is_version_greater_than, getattr_attr_name
 
 from loguru import logger
 __all__ = ["from_pytorch"]
-
 
 # This returns a "subgraph" which puts variables whenever
 # the type is known. It also records things to map the input
@@ -4367,6 +4368,36 @@ class PyTorchOpConverter:
         output = _op.random.multinomial(key, probs, num_samples)
         _, indices = _expr.TupleWrapper(output, 2)
         return indices
+    
+    # def bernoulli(self, inputs, input_types):
+    #     probs = inputs[0]  # The input probabilities tensor
+        
+    #     # Use the provided seed instead of generating a new one each time
+    #     seed = 42
+    #     key = _op.random.threefry_key(seed)
+        
+    #     # Generate a uniform random tensor using the synchronized seed
+    #     uniform_tensor = _op.random.uniform(key, self.infer_shape(probs), "float32")
+
+    #     # Decompose into sampled tensor and output
+    #     _, sampled_tensor = relay.TupleWrapper(uniform_tensor, 2)
+    #     output = _op.cast(_op.less(sampled_tensor, probs), dtype="float32")
+
+    #     return output
+    
+    def bernoulli(self, inputs, input_types):
+        prob_tensor = inputs[0]
+        key = _random.threefry_key(0)  # Using a fixed seed
+        shape = self.infer_shape(prob_tensor)
+ 
+        # Generate normal random values
+        rand_normal = relay.random.normal(key=key, shape=shape, dtype="float32")
+ 
+        # Extract only the sampled values from the tuple (ignore updated key for now)
+        _, sampled_tensor = relay.TupleWrapper(rand_normal, 2)
+        # Apply a threshold (probability) to simulate Bernoulli sampling
+        output = _op.cast(_op.less(sampled_tensor, prob_tensor), dtype="float32")
+        return output
 
     def weight_norm(self, inputs, input_types):
         weight_v, weight_g = inputs[0], inputs[1]
@@ -4409,7 +4440,6 @@ class PyTorchOpConverter:
                 data[i] = _expr.const(dim, dtype=dtype)
 
         return self.full_impl(data, 0, dtype)
-
 
     def new_ones(self, inputs, input_types):
         data = inputs[1]
@@ -4827,6 +4857,7 @@ class PyTorchOpConverter:
             "aten::zeros": self.zeros,
             "aten::zero_": self.zero_,
             "aten::zeros_like": self.zeros_like,
+            "aten::bernoulli": self.bernoulli,
             "aten::new_ones": self.new_ones,
             "aten::full": self.full,
             "aten::fill": self.fill,
