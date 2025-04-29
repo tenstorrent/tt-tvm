@@ -955,7 +955,15 @@ class PyTorchOpConverter:
 
     def zero_(self, inputs, input_types):
         data = inputs[0]
-        return self.full_impl(self.infer_shape(data), 0, input_types[0])
+        shape = self.infer_shape(data)
+        
+        # Check if any shape dimension is symbolic (not an int)
+        is_symbolic = any(not isinstance(dim, int) for dim in shape)
+        if is_symbolic:
+            return _op.full_like(data, fill_value=_expr.const(0))
+        else:
+            return self.full_impl(shape, 0, input_types[0])
+
 
     def zeros_like(self, inputs, input_types):
         data = inputs[0]
