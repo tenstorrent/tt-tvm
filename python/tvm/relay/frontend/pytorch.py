@@ -4793,6 +4793,17 @@ class PyTorchOpConverter:
         result = tvm.relay.add(atan_res, correction)
         
         return result
+    
+    def resolve_conj(self, inputs, input_types):
+        # TVM doesn't track conjugate/negate flags; input is already materialized.
+        # Returning the input directly is appropriate for resolve_conj.
+        return inputs
+    
+    def resolve_neg(self, inputs, input_types):
+        # TVM doesn't track conjugate/negate flags; input is already materialized.
+        # Returning the input directly is appropriate for resolve_neg.
+        return inputs
+        
 
     # Operator mappings
     def create_convert_map(self):
@@ -5098,6 +5109,8 @@ class PyTorchOpConverter:
             "aten::lift_fresh": self.identity,
             "aten::nan_to_num": self.nan_to_num,
             "aten::atan2": self.atan2,
+            "aten::resolve_conj": self.resolve_conj,
+            "aten::resolve_neg": self.resolve_neg,
         }
 
     def update_convert_map(self, custom_map):
