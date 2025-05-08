@@ -4804,6 +4804,106 @@ class PyTorchOpConverter:
         # Returning the input directly is appropriate for resolve_neg.
         return inputs
         
+    
+    def unflatten(self, inputs, input_types):
+        
+        """
+        Mimics the behavior of torch.unflatten (https://pytorch.org/docs/stable/generated/torch.unflatten.html).
+        """
+        data = inputs[0]
+        dim = int(inputs[1])
+        unflattened_size = tuple(inputs[2])
+        dshape = get_const_tuple(self.infer_shape_with_prelude(data))
+
+        # Handle negative dimension
+        dim = dim if dim >= 0 else len(dshape) + dim
+        assert len(dshape) > dim >= 0
+
+        # Ensure at most one inferred dimension (-1)
+        assert unflattened_size.count(-1) <= 1
+        
+        # Helper to convert each element of unflattened_size to a valid int
+        def extract_int(val):
+            if isinstance(val, _expr.Constant):
+                # Extract integer from relay Constant
+                return int(val.data.numpy().item())
+            elif isinstance(val, int):
+                # Already a plain Python int
+                return val
+            else:
+                raise TypeError(f"Unsupported shape type in unflatten: {type(val)} with value {val}")
+
+        # Convert the unflattened size tuple into a pure tuple of Python ints
+        unflattened_shape = tuple(extract_int(v) for v in unflattened_size)
+        
+        # Construct the new shape by replacing the target dim with unflattened_shape
+        new_shape = dshape[:dim] + unflattened_shape + dshape[dim + 1 :]
+        
+        out = _op.reshape(data, new_shape)
+        return out
+
+    def eye(self, inputs, input_types):
+
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.eye.html"
+
+        n = inputs[0]
+        m = inputs[1] if len(inputs) > 1 else n
+
+        dtype = "float32"
+        if len(inputs) > 2:
+            dtype = inputs[2] if isinstance(inputs[2], str) else dtype
+
+        if isinstance(n, int):
+            n = _expr.const(n, dtype="int32")
+        elif isinstance(n, _expr.Expr):
+            n = _op.cast(n, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `n`: {type(n)}")
+
+        if isinstance(m, int):
+            m = _expr.const(m, dtype="int32")
+        elif isinstance(m, _expr.Expr):
+            m = _op.cast(m, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `m`: {type(m)}")
+
+        # Generate row and column indices for identity matrix creation.
+        row_indices = _op.arange(_expr.const(0, "int32"), n, dtype="int32")
+        col_indices = _op.arange(_expr.const(0, "int32"), m, dtype="int32")
+
+        # Expand row and column indices to create a 2D comparison.
+        row_expanded = _op.expand_dims(row_indices, axis=1)
+        col_expanded = _op.expand_dims(col_indices, axis=0)
+
+        # Create an identity matrix mask where row index matches column index.
+        identity_mask = _op.equal(row_expanded, col_expanded)
+        identity_matrix = _op.cast(identity_mask, dtype)
+
+        return identity_matrix
+
+    def index_add(self, inputs, input_types):
+
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.Tensor.index_add.html"
+
+        data = inputs[0]
+        indices = inputs[1]
+        updates = inputs[2]
+        axis = inputs[3] if len(inputs) > 3 else 0
+
+        # Ensure `axis` is an integer or cast it if it's an expression.
+        if not isinstance(axis, int):
+            if isinstance(axis, _expr.Expr):
+                axis = _op.cast(axis, "int32")
+            else:
+                raise TypeError(f"Unsupported type for `axis`: {type(axis)}")
+
+        # Expand indices to match the shape of updates.
+        indices_expanded = _op.broadcast_to(indices, _op.shape_of(updates))
+        
+        # Perform scatter add operation along the specified axis.
+        result = _op.scatter_elements(data, indices_expanded, updates, axis=axis, reduction="add")
+
+        return result
 
     # Operator mappings
     def create_convert_map(self):
