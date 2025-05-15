@@ -72,7 +72,7 @@ from .transform import memory_plan
 from .parser import parse, parse_expr, fromtext, SpanCheck
 
 # Required to traverse large programs
-setrecursionlimit(10000)
+setrecursionlimit(100000)
 
 # Span
 Span = base.Span
