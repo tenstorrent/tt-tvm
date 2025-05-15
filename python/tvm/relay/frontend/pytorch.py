@@ -955,7 +955,15 @@ class PyTorchOpConverter:
 
     def zero_(self, inputs, input_types):
         data = inputs[0]
-        return self.full_impl(self.infer_shape(data), 0, input_types[0])
+        shape = self.infer_shape(data)
+        
+        # Check if any shape dimension is symbolic (not an int)
+        is_symbolic = any(not isinstance(dim, int) for dim in shape)
+        if is_symbolic:
+            return _op.full_like(data, fill_value=_expr.const(0))
+        else:
+            return self.full_impl(shape, 0, input_types[0])
+
 
     def zeros_like(self, inputs, input_types):
         data = inputs[0]
@@ -4902,6 +4910,61 @@ class PyTorchOpConverter:
 
         # Perform scatter add operation along the specified axis.
         result = _op.scatter_elements(data, indices_expanded, updates, axis=axis, reduction="add")
+        
+    def block_diag(self, inputs, input_types):
+        
+        """
+        Mimics the behavior of torch.block_diag (https://docs.pytorch.org/docs/stable/generated/torch.block_diag.html).
+        """
+        
+        # Pre-check: ensure all input tensors have rank 1 or 2
+        for inp in inputs[0]:
+            shape = _infer_shape(inp)
+            if len(shape) > 2:
+                assert False, f"Input tensor rank should be <= 2, but got shape {shape}"
+        
+        shapes = []
+        new_inputs = []
+
+        # Prepare all input tensors and record their shapes
+        for inp in inputs[0]:
+            shape = _infer_shape(inp)
+            
+            if len(shape) == 1:
+                # Reshape 1D tensor to 2D (1, N) to align for block-diagonal layout
+                flat = tvm.relay.expand_dims(inp, axis=0)
+                new_inputs.append(flat)
+                shapes.append((1, shape[0]))
+            elif len(shape) == 2:
+                # Keep 2D tensors as-is
+                new_inputs.append(inp)
+                shapes.append(shape)
+
+        # Calculate the final output shape after block-diagonal stacking
+        total_rows = sum(s[0] for s in shapes)
+        total_cols = sum(s[1] for s in shapes)
+
+        blocks = []
+        row_offset = 0
+        col_offset = 0
+
+        # Pad each tensor to position it correctly in the final block-diagonal matrix
+        for inp, (rows, cols) in zip(new_inputs, shapes):
+            pad = (
+                (row_offset, total_rows - row_offset - rows),  # pad before/after rows
+                (col_offset, total_cols - col_offset - cols),  # pad before/after columns
+            )
+            padded = tvm.relay.nn.pad(inp, pad_width=pad, pad_value=tvm.relay.const(0))
+            blocks.append(padded)
+
+            # Update position for next tensor
+            row_offset += rows
+            col_offset += cols
+
+        # Add all padded tensors to get the final result
+        result = blocks[0]
+        for block in blocks[1:]:
+            result = tvm.relay.op.add(result, block)
 
         return result
 
@@ -5215,6 +5278,7 @@ class PyTorchOpConverter:
             "aten::unflatten": self.unflatten,
             "aten::index_add_": self.index_add,
             "aten::eye": self.eye,
+            "aten::block_diag":self.block_diag,
         }
 
     def update_convert_map(self, custom_map):

@@ -4290,11 +4290,29 @@ class Clip(OnnxOpConverter):
 
     @classmethod
     def _impl_v11(cls, inputs, attr, params):
-        if len(inputs) == 3 and isinstance(inputs[2], _expr.Constant):
-            attr["max"] = inputs[2].data.numpy().item()
+        
+        # Infer the dtype of the input
+        dtype = infer_type(inputs[0]).checked_type.dtype
+        # Select type info based on the dtype (float or integer)
+        type_info = np.finfo(dtype) if "float" in dtype else np.iinfo(dtype)
+
+        if len(inputs) == 3:
+            if isinstance(inputs[2], _expr.Constant):
+                attr["max"] = inputs[2].data.numpy().item()
+            # If the third input (Max) is None, use the maximum value of the dtype
+            elif inputs[2] is None:
+                attr["max"] = type_info.max
+            else:
+                assert False, f"Unsupported type for max input: {type(inputs[2])}"
             inputs = inputs[0:2]
-        if len(inputs) >= 2 and isinstance(inputs[1], _expr.Constant):
-            attr["min"] = inputs[1].data.numpy().item()
+        if len(inputs) >= 2:
+            if isinstance(inputs[1], _expr.Constant):
+                attr["min"] = inputs[1].data.numpy().item()
+            # If the second input (Min) is None, use the minimum value of the dtype
+            elif inputs[1] is None:
+                attr["min"] = type_info.min
+            else:
+                assert False, f"Unsupported type for min input: {type(inputs[1])}"
             inputs = inputs[0:1]
         if "min" in attr and "max" in attr:
             return Clip.convert_attributes(inputs, attr, params)
