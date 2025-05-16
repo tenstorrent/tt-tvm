@@ -4375,7 +4375,21 @@ class PyTorchOpConverter:
         output = _op.random.multinomial(key, probs, num_samples)
         _, indices = _expr.TupleWrapper(output, 2)
         return indices
+    
+    def bernoulli(self, inputs, input_types):
+        prob_tensor = inputs[0]
+        seed = np.random.randint(1e6)
+        key = _op.random.threefry_key(seed)  
+        shape = self.infer_shape(prob_tensor)
+        dtype = self.infer_type(prob_tensor).dtype
 
+        rand_normal = tvm.relay.random.normal(key=key, shape=shape, dtype=dtype)
+
+        _, sampled_tensor = tvm.relay.TupleWrapper(rand_normal, 2)
+        
+        output = _op.less(sampled_tensor, prob_tensor)
+        return output
+    
     def weight_norm(self, inputs, input_types):
         weight_v, weight_g = inputs[0], inputs[1]
         dim = inputs[2]
@@ -4929,6 +4943,7 @@ class PyTorchOpConverter:
             "aten::arange": self.arange,
             "aten::meshgrid": self.meshgrid,
             "aten::multinomial": self.multinomial,
+            "aten::bernoulli": self.bernoulli,
             "aten::div": self.make_elemwise("divide"),
             "aten::floor_divide": self.make_elemwise("floor_divide"),
             "aten::floordiv": self.make_elemwise("floor_divide"),
