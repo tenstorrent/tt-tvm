@@ -2261,10 +2261,13 @@ class PyTorchOpConverter:
 
             # Perform a batch matmul.
             output = _op.nn.batch_matmul(a, b)
+            
+            # Compute batch shape for final reshape operation.
+            batch_shape = tuple(max(a, b) for a, b in zip(a_shape[:-2], b_shape[:-2]))  
 
             # Reshape output to original dimensions.
             if need_reshape_output:
-                return _op.reshape(output, [*a_shape[:-2], a_shape[-2], b_shape[-1]])
+                return _op.reshape(output, [*batch_shape, a_shape[-2], b_shape[-1]])
             return output
 
         elif len(a_shape) > 2 and len(b_shape) == 1:
