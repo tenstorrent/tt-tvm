@@ -469,6 +469,8 @@ class PyTorchOpConverter:
         axis_dtype = "int64"
         index_size_limit = sys.maxsize
         data = inputs[0]
+        if isinstance(data, _expr.TupleWrapper):
+            data = data[0] 
         dshape = self.infer_shape(data)
         ndim = len(dshape)
         dim = int(inputs[1])
@@ -3144,7 +3146,76 @@ class PyTorchOpConverter:
 
         mode = "update"
         return _op.transform.scatter(in_tensor, indices, values, axis)
+    
+    def index_add(self, inputs, input_types):
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.Tensor.index_add.html"
 
+        data = inputs[0]
+        indices = inputs[1]
+        updates = inputs[2]
+        axis = inputs[3] if len(inputs) > 3 else 0
+
+        # Ensure axis is a static int
+        if isinstance(axis, _expr.Expr):
+            try:
+                axis = int(_infer_shape(axis)[0])
+            except Exception:
+                raise TypeError(f"`axis` must be a static int for scatter_elements. Got dynamic value: {axis}")
+        elif not isinstance(axis, int):
+            raise TypeError(f"`axis` must be an int. Got: {type(axis)}")
+
+        # Ensure indices is a Relay expression
+        if not isinstance(indices, _expr.Expr):
+            indices = _op.const(indices)
+
+        # Use inferred shape tuple instead of shape_of
+        updates_shape = _infer_shape(updates)
+        indices_expanded = _op.broadcast_to(indices, updates_shape)
+        
+        # Scatter add
+        result = _op.scatter_elements(data, indices_expanded, updates, axis=axis, reduction="add")
+
+        return result
+    
+    def eye(self, inputs, input_types):
+
+        "Mimics behaviour of https://pytorch.org/docs/stable/generated/torch.eye.html"
+
+        n = inputs[0]
+        m = inputs[1] if len(inputs) > 1 else n
+
+        dtype = "float32"
+        if len(inputs) > 2:
+            dtype = inputs[2] if isinstance(inputs[2], str) else dtype
+
+        if isinstance(n, int):
+            n = _expr.const(n, dtype="int32")
+        elif isinstance(n, _expr.Expr):
+            n = _op.cast(n, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `n`: {type(n)}")
+
+        if isinstance(m, int):
+            m = _expr.const(m, dtype="int32")
+        elif isinstance(m, _expr.Expr):
+            m = _op.cast(m, "int32")
+        else:
+            raise TypeError(f"Unsupported type for `m`: {type(m)}")
+
+        # Generate row and column indices for identity matrix creation.
+        row_indices = _op.arange(_expr.const(0, "int32"), n, dtype="int32")
+        col_indices = _op.arange(_expr.const(0, "int32"), m, dtype="int32")
+
+        # Expand row and column indices to create a 2D comparison.
+        row_expanded = _op.expand_dims(row_indices, axis=1)
+        col_expanded = _op.expand_dims(col_indices, axis=0)
+
+        # Create an identity matrix mask where row index matches column index.
+        identity_mask = _op.equal(row_expanded, col_expanded)
+        identity_matrix = _op.cast(identity_mask, dtype)
+
+        return identity_matrix
+    
     def scalar_tensor(self, inputs, input_types):
         data = inputs[0]
         cast_map = {6: "float32", 7: "float64", 3: "int32", 4: "int64"}
@@ -5158,6 +5229,8 @@ class PyTorchOpConverter:
             "aten::scatter_reduce": self.scatter_reduce,
             "aten::index_copy": self.index_copy,
             "aten::index_put": self.index_put,
+            "aten::index_add": self.index_add,
+            "aten::eye": self.eye,
             "aten::scalar_tensor": self.scalar_tensor,
             "aten::__interpolate": self.interpolate,
             "aten::IntImplicit": self.identity,
