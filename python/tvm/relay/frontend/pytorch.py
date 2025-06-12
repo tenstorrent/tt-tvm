@@ -475,10 +475,10 @@ class PyTorchOpConverter:
         stride = inputs[4]
 
         target_begin, is_begin_const = try_infer_value(
-            inputs[2], lambda ret: ret.astype(np.int).item(0)
+            inputs[2], lambda ret: ret.astype(int).item(0)
         )
         target_end, is_end_const = try_infer_value(
-            inputs[3], lambda ret: ret.astype(np.int).item(0)
+            inputs[3], lambda ret: ret.astype(int).item(0)
         )
 
         # A fast path when slicing is nop.
@@ -3161,7 +3161,7 @@ class PyTorchOpConverter:
             for i in [0, 1]:
                 size, _ = try_infer_value(
                     inputs[1][i],
-                    lambda ret: ret.astype(np.int),
+                    lambda ret: ret.astype(int),
                     lambda: _op.expand_dims(inputs[1][i], axis=0),
                 )
                 out_size.append(size)
@@ -5640,7 +5640,7 @@ def _convert_tvm_to_np_dtype(dtype):
     elif dtype == "uint8":
         np_type = np.uint8
     elif dtype == "bool":
-        np_type = np.bool
+        np_type = bool
     else:
         raise NotImplementedError("input_type {} is not handled yet".format(dtype))
     return np_type
