@@ -1859,6 +1859,8 @@ class PyTorchOpConverter:
 
             if num_new_dims > 1:
                 data = _op.transform.expand_dims(data, -1, num_new_dims)
+        # logger.info(f"old shape = {self.infer_shape(data)}")
+        # logger.info(f"new_shape = {new_shape}")
         return _op.transform.reshape(data, new_shape)
 
     def view_as(self, inputs, input_types):
@@ -2234,7 +2236,8 @@ class PyTorchOpConverter:
 
         inputs_0 = inputs[0]
         inputs_1 = inputs[1]
-
+        # logger.info(f"inputs_0 shape = {self.infer_shape(inputs_0)}")
+        # logger.info(f"inputs_1 shape = {self.infer_shape(inputs_1)}")
         # Need to check input shape as batch matmul must be supported.
         a_shape = self.infer_shape_with_prelude(inputs_0)
         b_shape = self.infer_shape_with_prelude(inputs_1)
@@ -3108,7 +3111,7 @@ class PyTorchOpConverter:
         # If indexes are in form of boolean mask instead of indices, use where op
         # instead of scatter_nd
         if _infer_type(index_tensor).checked_type.dtype == "bool":
-            if isinstance(values, float):
+            if isinstance(values, (int, float)):
                 values = _expr.const(values, dtype=_infer_type(in_tensor).checked_type.dtype)
 
             # Make sure that dynamic output will be 1D vector
@@ -6377,7 +6380,7 @@ def from_pytorch(
             break
 
     _run_jit_passes(graph, enable_lower_all_tuples)
-
+    # logger.info(f"graph = {graph}")
 
     if custom_convert_map:
         converter.update_convert_map(custom_convert_map)
