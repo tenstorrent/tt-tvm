@@ -4923,6 +4923,12 @@ class PyTorchOpConverter:
             result = tvm.relay.op.add(result, block)
 
         return result
+    
+    def upsample_linear1d(self, inputs, input_types):
+        data = inputs[0]
+        out_size = inputs[1]
+
+        return _op.image.resize1d(data, out_size)
 
 
     # Operator mappings
@@ -5235,6 +5241,7 @@ class PyTorchOpConverter:
             "aten::resolve_neg": self.resolve_neg,
             "aten::unflatten": self.unflatten,
             "aten::block_diag":self.block_diag,
+            "aten::upsample_linear1d":self.upsample_linear1d,
         }
 
     def update_convert_map(self, custom_map):
