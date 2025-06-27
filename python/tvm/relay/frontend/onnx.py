@@ -3554,41 +3554,35 @@ class Expand(OnnxOpConverter):
     """Operator converter for Expand."""
 
     @classmethod
-    def _impl_v8(cls, inputs, attr, params):
-        dtype = infer_type(inputs[1]).checked_type.dtype
-        in_shape = shape_of(inputs[0], dtype=dtype)
-        shape = inputs[1]
-
-        # Currently 'op.broadcast_to' expect the rank of the given 'shape'
-        # (the 2nd input) is always higher than that of the given 'input' (the 1st input)
-        # However, ONNX Expand supports multi-directional broadcasting, which allows
-        # above pattern and also some extent of 'shape' can be smaller than the corresponding
-        # extent of 'input'. In this case, the extent of 'shape' must be 1.
-        # https://github.com/onnx/onnx/blob/main/docs/Broadcasting.md
-        # In above cases, we cannot directorly apply 'op.broadcast_to' instead of 'expand'
-        # so, here we solved this problem by expanding the given 'shape' itself.
-        def expand_shape(in_shape, shape):
-            """A function expands the shape when the rank is lower than that of the given
-            intput. Also it replaces the extent of the shape with the corresponding extent
-            of the intput when it is 1.
-            """
-            in_dims = infer_shape(in_shape)[0]
-            new_dims = infer_shape(shape)[0]
-
-            if in_dims < new_dims:
-                in_shape = _op.concatenate(
-                    [_expr.const([1] * (new_dims - in_dims), dtype=dtype), in_shape], axis=0
+    def _impl_v8(cls, inputs, attr, params):        
+        def expand_with_tile(input_tensor, target_shape):
+            dtype = infer_type(input_tensor).checked_type.dtype
+            input_shape = shape_of(input_tensor, dtype=dtype)
+            
+            # Align ranks by adding 1s to the shape
+            input_dims = infer_shape(input_shape)[0]
+            target_dims = infer_shape(target_shape)[0]
+            
+            if input_dims < target_dims:
+                input_shape = _op.concatenate(
+                    [_expr.const([1] * (target_dims - input_dims), dtype=dtype), input_shape], axis=0
                 )
-            elif new_dims < in_dims:
-                shape = _op.concatenate(
-                    [_expr.const([1] * (in_dims - new_dims), dtype=dtype), shape], axis=0
+                input_tensor = _op.reshape(input_tensor, newshape=input_shape)
+            elif target_dims < input_dims:
+                target_shape = _op.concatenate(
+                    [_expr.const([1] * (input_dims - target_dims), dtype=dtype), target_shape], axis=0
                 )
-            new_shape = _op.maximum(in_shape, shape)
-            return new_shape
-
-        shape = fold_constant(expand_shape(in_shape, shape))
-        return _op.broadcast_to(inputs[0], shape=shape)
-
+            
+            # Calculate tile repeats
+            repeats = _op.where(
+                _op.equal(input_shape, _expr.const(1, dtype=dtype)),
+                target_shape,  # Only repeat when current dim is 1
+                _expr.const(1, dtype=dtype)  # Otherwise don't repeat
+            )
+            
+            return _op.tile(input_tensor, reps=repeats)
+        
+        return expand_with_tile(inputs[0], inputs[1])
 
 class RNN(OnnxOpConverter):
     """Operator converter for RNNs such as RNN, LSTM and GRU."""
