@@ -3556,8 +3556,7 @@ class Expand(OnnxOpConverter):
     @classmethod
     def _impl_v8(cls, inputs, attr, params):        
         def expand_with_tile(input_tensor, target_shape):
-            dtype = infer_type(input_tensor).checked_type.dtype
-            input_shape = shape_of(input_tensor, dtype=dtype)
+            input_shape = shape_of(input_tensor, dtype="int64")
             
             # Align ranks by adding 1s to the shape
             input_dims = infer_shape(input_shape)[0]
@@ -3565,19 +3564,19 @@ class Expand(OnnxOpConverter):
             
             if input_dims < target_dims:
                 input_shape = _op.concatenate(
-                    [_expr.const([1] * (target_dims - input_dims), dtype=dtype), input_shape], axis=0
+                    [_expr.const([1] * (target_dims - input_dims), dtype="int64"), input_shape], axis=0
                 )
                 input_tensor = _op.reshape(input_tensor, newshape=input_shape)
             elif target_dims < input_dims:
                 target_shape = _op.concatenate(
-                    [_expr.const([1] * (input_dims - target_dims), dtype=dtype), target_shape], axis=0
+                    [_expr.const([1] * (input_dims - target_dims), dtype="int64"), target_shape], axis=0
                 )
             
             # Calculate tile repeats
             repeats = _op.where(
-                _op.equal(input_shape, _expr.const(1, dtype=dtype)),
+                _op.equal(input_shape, _expr.const(1, dtype="int64")),
                 target_shape,  # Only repeat when current dim is 1
-                _expr.const(1, dtype=dtype)  # Otherwise don't repeat
+                _expr.const(1, dtype="int64")  # Otherwise don't repeat
             )
             
             return _op.tile(input_tensor, reps=repeats)
