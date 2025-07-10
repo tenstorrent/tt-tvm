@@ -3086,6 +3086,50 @@ class PyTorchOpConverter:
         ], 'reduce arg is expected from "add", "multiply" or None'
 
         return _op.scatter_elements(data, index, src, axis, reduce)
+    
+    def eye(self, inputs, input_types):
+        def _get_const_expr(val, name):
+            if isinstance(val, int):
+                return _expr.const(val, dtype="int32")
+            elif isinstance(val, _expr.Expr):
+                return _op.cast(val, "int32")
+            else:
+                raise TypeError(f"Unsupported type for `{name}`: {type(val)}")
+
+
+       # Extract n from inputs
+        n = inputs[0]
+
+        if inputs[2] is None:
+            m = n
+            raw_dtype = inputs[1]
+        else:
+            m = inputs[1]
+            raw_dtype = inputs[2]
+
+        # Determine dtype and convert PyTorch numeric type id to a torch scalar type
+        dtype = _convert_dtype_value(raw_dtype)
+
+        # Convert n and m to Relay expressions
+        n = _get_const_expr(n, "n")
+        m = _get_const_expr(m, "m")
+
+        # Build row and column index tensors
+        row_indices = _op.arange(_expr.const(0, "int32"), n, dtype="int32")  # shape (n,)
+        col_indices = _op.arange(_expr.const(0, "int32"), m, dtype="int32")  # shape (m,)
+
+        # Expand dims for broadcasting: row (n, 1), col (1, m)
+        row_expanded = _op.expand_dims(row_indices, axis=1)
+        col_expanded = _op.expand_dims(col_indices, axis=0)
+
+        # Create identity mask where row == col
+        identity_mask = _op.equal(row_expanded, col_expanded)
+
+        # Cast boolean mask to desired dtype
+        identity_matrix = _op.cast(identity_mask, dtype)
+
+        return identity_matrix
+
 
     def index_put(self, inputs, input_types):
         in_tensor = inputs[0]
@@ -5156,6 +5200,7 @@ class PyTorchOpConverter:
             "aten::scatter": self.scatter,
             "aten::scatter_add": self.scatter_add,
             "aten::scatter_reduce": self.scatter_reduce,
+            "aten::eye": self.eye,
             "aten::index_copy": self.index_copy,
             "aten::index_put": self.index_put,
             "aten::scalar_tensor": self.scalar_tensor,
