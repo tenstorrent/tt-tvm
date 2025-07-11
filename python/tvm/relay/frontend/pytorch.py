@@ -3143,7 +3143,7 @@ class PyTorchOpConverter:
         values = inputs[3]
 
         mode = "update"
-        return _op.transform.scatter(in_tensor, indices, values, axis)
+        return _op.transform.scatter_elements(in_tensor, indices, values, axis)
 
     def scalar_tensor(self, inputs, input_types):
         data = inputs[0]
@@ -5513,9 +5513,11 @@ class PyTorchOpConverter:
                     # At this point, the only possible ops that are not in convert_map are
                     # in-place variant of ops like aten::relu_
                     assert operator.endswith("_"), f"Found operator \'{operator}\'"
-                    logger.trace(
-                        f"An in-place op {operator} found, the result will not be correct "
-                        "if the model depends on side-effects by this op.",
+                    op_base = operator[:-1]
+                    logger.warning(
+                        f"In-place operator '{operator}' not found in convert_map. "
+                        f"Falling back to out-of-place equivalent '{op_base}'. "
+                        f"This may cause incorrect behavior if the model relies on side-effects of in-place mutation."
                     )
                     relay_op = self.convert_map[operator[:-1]]
                 else:
