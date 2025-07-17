@@ -45,6 +45,7 @@ from .common import (
     try_infer_value,
     new_var,
     infer_type,
+    resolve_broadcast_shape,
 )
 
 from loguru import logger
@@ -623,7 +624,7 @@ def convert_expand(g, op, block):
     if isinstance(sizes, np.ndarray):
         sizes = sizes.tolist()
 
-    out = _op.broadcast_to(x, sizes)
+    out = _op.broadcast_to(x, resolve_broadcast_shape(infer_shape(x), sizes))
     g.add_node(op.output("Out")[0], out)
 
 

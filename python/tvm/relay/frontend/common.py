@@ -1234,3 +1234,22 @@ def set_span(sym, span):
     if tvm.transform.PassContext.current().config.get("relay.frontend.fill_span", True):
         return _SpanFiller(span).fill(sym)
     return sym
+
+
+def resolve_broadcast_shape(inp_shape, tgt_shape):
+    # right‑align inp under tgt, padding with 1’s on the left
+    if len(tgt_shape) < len(inp_shape):
+        raise ValueError("target must be at least as many dims as input")
+    pad = (1,) * (len(tgt_shape) - len(inp_shape))
+    src_shape = pad + tuple(inp_shape)
+
+    out = []
+    for s, t in zip(src_shape, tgt_shape):
+        if t == -1:
+            out.append(s)
+        else:
+            # can only expand if src dim is 1 or already equals t
+            if s != 1 and s != t:
+                raise ValueError(f"cannot expand dimension {s} -> {t}")
+            out.append(t)
+    return tuple(out)
