@@ -5883,6 +5883,9 @@ def _get_constant(node):
             if len(tensor.shape) == 0:  # tensor(0.1)
                 # TODO(t-vi): When is this needed?
                 return tensor.item()
+            # Convert bfloat16 to float32 before numpy conversion since numpy doesn't support bfloat16
+            if hasattr(tensor, 'dtype') and str(tensor.dtype) == 'torch.bfloat16':
+                tensor = tensor.float()
             return _wrap_const(tensor.numpy())
         elif ty in ["DeviceObjType", "StringType"]:
             return node.s(attr_name)
