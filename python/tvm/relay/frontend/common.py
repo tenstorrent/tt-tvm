@@ -441,6 +441,8 @@ class AttrCvt(object):
         # ignore 'tvm_custom' and '_has_manual_control_dependencies' always
         self._ignores.append("tvm_custom")
         self._ignores.append("_has_manual_control_dependencies")
+        self._ignores.append("grad_b")
+        self._ignores.append("grad_a")
 
         # convert attributes
         new_attrs = {}
