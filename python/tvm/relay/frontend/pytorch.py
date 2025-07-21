@@ -4618,15 +4618,11 @@ class PyTorchOpConverter:
         query = inputs[0]
         key = inputs[1]
         value = inputs[2]
-        attn_mask = inputs[3]
-        dropout_p = inputs[4]
-        is_causal = inputs[5]
-
-        # Explicit scale can be used from torch>=2.1.0
-        if len(inputs) == 7:
-            scale = inputs[6]
-        else:
-            scale = None
+        attn_mask = inputs[3] if len(inputs) > 3 else None
+        dropout_p = inputs[4] if len(inputs) > 4 else 0.0
+        is_causal = inputs[5] if len(inputs) > 5 else False
+        scale = inputs[6] if len(inputs) > 6 else None
+        enable_gqa = inputs[7] if len(inputs) > 7 else False
 
         assert (
             input_types[0] == input_types[1] == input_types[2]
@@ -4709,6 +4705,10 @@ class PyTorchOpConverter:
             query = _op.reshape(query, newshape=[-3, -2])
             key = _op.broadcast_to(key, shape=(batch_size,) + key_shape)
             key = _op.reshape(key, newshape=[-3, -2])
+
+        if enable_gqa:
+            key = _op.transform.repeat(key, repeats=query_shape[-3] // key_shape[-3], axis=-3)
+            value = _op.transform.repeat(value, repeats=query_shape[-3] // value_shape[-3], axis=-3)
 
         attn_weight = _op.nn.batch_matmul(query, key)
         if len(query_shape) == 4 or len(key_shape) == 4:
