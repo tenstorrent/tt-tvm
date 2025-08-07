@@ -5247,6 +5247,7 @@ class PyTorchOpConverter:
             "aten::grid_sampler": self.grid_sampler,
             "aten::__ior__": self.make_elemwise("bitwise_or"),
             "aten::bitwise_or_": self.make_elemwise("bitwise_or"),
+            "aten::bitwise_and": self.make_elemwise("bitwise_and"),
             "aten::__iand__": self.make_elemwise("bitwise_and"),
             "aten::__ixor__": self.make_elemwise("bitwise_xor"),
             "aten::__lshift__": self.make_elemwise("left_shift"),
