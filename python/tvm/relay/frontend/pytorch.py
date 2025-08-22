@@ -3159,7 +3159,7 @@ class PyTorchOpConverter:
         # If indexes are in form of boolean mask instead of indices, use where op
         # instead of scatter_nd
         if _infer_type(index_tensor).checked_type.dtype == "bool":
-            if isinstance(values, float):
+            if isinstance(values, (float, int)):
                 values = _expr.const(values, dtype=_infer_type(in_tensor).checked_type.dtype)
 
             # Make sure that dynamic output will be 1D vector
