@@ -2513,7 +2513,7 @@ class PyTorchOpConverter:
 
         return out_size
 
-    def make_upsample(self, method):
+    def make_upsample(self, method, op_name):
         def upsample(inputs, input_types):
             data = inputs[0]
             out_size = self.get_upsample_out_size(inputs, method)
@@ -2531,9 +2531,16 @@ class PyTorchOpConverter:
                 coord_trans = "half_pixel"
 
             def func(x):
-                return _op.image.resize2d(
-                    x, out_size, None, "NCHW", method, coord_trans, cubic_alpha=-0.75
-                )
+                if op_name == "resize1d":
+                    return _op.image.resize1d(
+                        x, out_size, None, "NCW", method, coord_trans
+                    )
+                elif op_name == "resize2d":
+                    return _op.image.resize2d(
+                        x, out_size, None, "NCHW", method, coord_trans, cubic_alpha=-0.75
+                    )
+                else:
+                    raise ValueError(f"{op_name} is not supported")
 
             if self.is_quantized_tensor(data):
                 # input qparams are manually appended by us
@@ -3086,6 +3093,50 @@ class PyTorchOpConverter:
         ], 'reduce arg is expected from "add", "multiply" or None'
 
         return _op.scatter_elements(data, index, src, axis, reduce)
+    
+    def eye(self, inputs, input_types):
+        def _get_const_expr(val, name):
+            if isinstance(val, int):
+                return _expr.const(val, dtype="int32")
+            elif isinstance(val, _expr.Expr):
+                return _op.cast(val, "int32")
+            else:
+                raise TypeError(f"Unsupported type for `{name}`: {type(val)}")
+
+
+       # Extract n from inputs
+        n = inputs[0]
+
+        if inputs[2] is None:
+            m = n
+            raw_dtype = inputs[1]
+        else:
+            m = inputs[1]
+            raw_dtype = inputs[2]
+
+        # Determine dtype and convert PyTorch numeric type id to a torch scalar type
+        dtype = _convert_dtype_value(raw_dtype)
+
+        # Convert n and m to Relay expressions
+        n = _get_const_expr(n, "n")
+        m = _get_const_expr(m, "m")
+
+        # Build row and column index tensors
+        row_indices = _op.arange(_expr.const(0, "int32"), n, dtype="int32")  # shape (n,)
+        col_indices = _op.arange(_expr.const(0, "int32"), m, dtype="int32")  # shape (m,)
+
+        # Expand dims for broadcasting: row (n, 1), col (1, m)
+        row_expanded = _op.expand_dims(row_indices, axis=1)
+        col_expanded = _op.expand_dims(col_indices, axis=0)
+
+        # Create identity mask where row == col
+        identity_mask = _op.equal(row_expanded, col_expanded)
+
+        # Cast boolean mask to desired dtype
+        identity_matrix = _op.cast(identity_mask, dtype)
+
+        return identity_matrix
+
 
     def index_put(self, inputs, input_types):
         in_tensor = inputs[0]
@@ -4618,15 +4669,11 @@ class PyTorchOpConverter:
         query = inputs[0]
         key = inputs[1]
         value = inputs[2]
-        attn_mask = inputs[3]
-        dropout_p = inputs[4]
-        is_causal = inputs[5]
-
-        # Explicit scale can be used from torch>=2.1.0
-        if len(inputs) == 7:
-            scale = inputs[6]
-        else:
-            scale = None
+        attn_mask = inputs[3] if len(inputs) > 3 else None
+        dropout_p = inputs[4] if len(inputs) > 4 else 0.0
+        is_causal = inputs[5] if len(inputs) > 5 else False
+        scale = inputs[6] if len(inputs) > 6 else None
+        enable_gqa = inputs[7] if len(inputs) > 7 else False
 
         assert (
             input_types[0] == input_types[1] == input_types[2]
@@ -4709,6 +4756,10 @@ class PyTorchOpConverter:
             query = _op.reshape(query, newshape=[-3, -2])
             key = _op.broadcast_to(key, shape=(batch_size,) + key_shape)
             key = _op.reshape(key, newshape=[-3, -2])
+
+        if enable_gqa:
+            key = _op.transform.repeat(key, repeats=query_shape[-3] // key_shape[-3], axis=-3)
+            value = _op.transform.repeat(value, repeats=query_shape[-3] // value_shape[-3], axis=-3)
 
         attn_weight = _op.nn.batch_matmul(query, key)
         if len(query_shape) == 4 or len(key_shape) == 4:
@@ -5110,9 +5161,11 @@ class PyTorchOpConverter:
             "aten::clamp_min": self.clamp_min,
             "aten::clamp_max": self.clamp_max,
             "aten::detach": self.identity,
-            "aten::upsample_bilinear2d": self.make_upsample("linear"),
-            "aten::upsample_bicubic2d": self.make_upsample("cubic"),
-            "aten::upsample_nearest2d": self.make_upsample("nearest_neighbor"),
+            "aten::upsample_nearest1d": self.make_upsample("nearest_neighbor", "resize1d"),
+            "aten::upsample_linear1d": self.make_upsample("linear", "resize1d"),
+            "aten::upsample_bilinear2d": self.make_upsample("linear", "resize2d"),
+            "aten::upsample_bicubic2d": self.make_upsample("cubic", "resize2d"),
+            "aten::upsample_nearest2d": self.make_upsample("nearest_neighbor", "resize2d"),
             "aten::upsample_trilinear3d": self.make_upsample3d("linear"),
             "aten::upsample_nearest3d": self.make_upsample3d("nearest_neighbor"),
             "aten::expand_as": self.expand_as,
@@ -5156,6 +5209,7 @@ class PyTorchOpConverter:
             "aten::scatter": self.scatter,
             "aten::scatter_add": self.scatter_add,
             "aten::scatter_reduce": self.scatter_reduce,
+            "aten::eye": self.eye,
             "aten::index_copy": self.index_copy,
             "aten::index_put": self.index_put,
             "aten::scalar_tensor": self.scalar_tensor,
@@ -5202,6 +5256,7 @@ class PyTorchOpConverter:
             "aten::grid_sampler": self.grid_sampler,
             "aten::__ior__": self.make_elemwise("bitwise_or"),
             "aten::bitwise_or_": self.make_elemwise("bitwise_or"),
+            "aten::bitwise_and": self.make_elemwise("bitwise_and"),
             "aten::__iand__": self.make_elemwise("bitwise_and"),
             "aten::__ixor__": self.make_elemwise("bitwise_xor"),
             "aten::__lshift__": self.make_elemwise("left_shift"),
