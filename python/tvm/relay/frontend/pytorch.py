@@ -2513,7 +2513,7 @@ class PyTorchOpConverter:
 
         return out_size
 
-    def make_upsample(self, method):
+    def make_upsample(self, method, op_name):
         def upsample(inputs, input_types):
             data = inputs[0]
             out_size = self.get_upsample_out_size(inputs, method)
@@ -2531,9 +2531,16 @@ class PyTorchOpConverter:
                 coord_trans = "half_pixel"
 
             def func(x):
-                return _op.image.resize2d(
-                    x, out_size, None, "NCHW", method, coord_trans, cubic_alpha=-0.75
-                )
+                if op_name == "resize1d":
+                    return _op.image.resize1d(
+                        x, out_size, None, "NCW", method, coord_trans
+                    )
+                elif op_name == "resize2d":
+                    return _op.image.resize2d(
+                        x, out_size, None, "NCHW", method, coord_trans, cubic_alpha=-0.75
+                    )
+                else:
+                    raise ValueError(f"{op_name} is not supported")
 
             if self.is_quantized_tensor(data):
                 # input qparams are manually appended by us
@@ -5154,9 +5161,11 @@ class PyTorchOpConverter:
             "aten::clamp_min": self.clamp_min,
             "aten::clamp_max": self.clamp_max,
             "aten::detach": self.identity,
-            "aten::upsample_bilinear2d": self.make_upsample("linear"),
-            "aten::upsample_bicubic2d": self.make_upsample("cubic"),
-            "aten::upsample_nearest2d": self.make_upsample("nearest_neighbor"),
+            "aten::upsample_nearest1d": self.make_upsample("nearest_neighbor", "resize1d"),
+            "aten::upsample_linear1d": self.make_upsample("linear", "resize1d"),
+            "aten::upsample_bilinear2d": self.make_upsample("linear", "resize2d"),
+            "aten::upsample_bicubic2d": self.make_upsample("cubic", "resize2d"),
+            "aten::upsample_nearest2d": self.make_upsample("nearest_neighbor", "resize2d"),
             "aten::upsample_trilinear3d": self.make_upsample3d("linear"),
             "aten::upsample_nearest3d": self.make_upsample3d("nearest_neighbor"),
             "aten::expand_as": self.expand_as,
