@@ -85,6 +85,11 @@ def scatter_elements(data, indices, updates, axis=0, reduction="update"):
     before_axis_stride = axis_range * after_axis_range
 
     ind_shape = indices.shape
+    
+    # When no indices to scatter, skip scattering
+    if ind_shape[1] == 0:
+        return data  # No positions to update
+    
     ind_axis_range = ind_shape[axis]
 
     ind_before_axis_range = 1
