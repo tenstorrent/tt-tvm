@@ -3140,6 +3140,9 @@ class PyTorchOpConverter:
 
     def index_put(self, inputs, input_types):
         in_tensor = inputs[0]
+        
+        input_shape = self.infer_shape(in_tensor)  # Store original shape
+        
         indices = inputs[1]
         values = inputs[2]
         accumulate = inputs[3]
@@ -3182,6 +3185,9 @@ class PyTorchOpConverter:
             in_tensor = _op.reshape(in_tensor, newshape=(-1,))
 
             res = _op.scatter_elements(in_tensor, indices, values, 0, "add")
+            
+            # Reshape back to original shape
+            res = _op.reshape(res, input_shape)
 
             return res
 
