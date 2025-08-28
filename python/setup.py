@@ -221,14 +221,30 @@ if not CONDA_BUILD:
     with open("MANIFEST.in", "w") as fo:
         for path in LIB_LIST:
             if os.path.isfile(path):
-                shutil.copy(path, os.path.join(CURRENT_DIR, "tvm"))
                 _, libname = os.path.split(path)
+                dest_path = os.path.join(CURRENT_DIR, "tvm", libname)
+                
+                # Only copy if source and destination are different files
+                try:
+                    if not (os.path.exists(dest_path) and os.path.samefile(path, dest_path)):
+                        # Remove existing file if it exists
+                        if os.path.exists(dest_path):
+                            os.remove(dest_path)
+                        shutil.copy(path, os.path.join(CURRENT_DIR, "tvm"))
+                except (OSError, shutil.SameFileError):
+                    # Handle case where files might be the same or other OS errors
+                    pass
                 fo.write(f"include tvm/{libname}\n")
 
             if os.path.isdir(path):
                 _, libname = os.path.split(path)
-                shutil.copytree(path, os.path.join(CURRENT_DIR, "tvm", libname))
+                dest_path = os.path.join(CURRENT_DIR, "tvm", libname)
+                # Remove existing directory if it exists
+                if os.path.exists(dest_path):
+                    shutil.rmtree(dest_path)
+                shutil.copytree(path, dest_path)
                 fo.write(f"recursive-include tvm/{libname} *\n")
+
 
     setup_kwargs = {"include_package_data": True}
 
@@ -291,7 +307,8 @@ setup(
 
 if not CONDA_BUILD:
     # Wheel cleanup
-    os.remove("MANIFEST.in")
+    if os.path.exists("MANIFEST.in"):
+        os.remove("MANIFEST.in")
     for path in LIB_LIST:
         _, libname = os.path.split(path)
         _remove_path(f"tvm/{libname}")
