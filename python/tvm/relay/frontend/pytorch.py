@@ -5575,7 +5575,7 @@ class PyTorchOpConverter:
                     # in-place variant of ops like aten::relu_
                     assert operator.endswith("_"), f"Found operator \'{operator}\'"
                     op_base = operator[:-1]
-                    logger.warning(
+                    logger.trace(
                         f"In-place operator '{operator}' not found in convert_map. "
                         f"Falling back to out-of-place equivalent '{op_base}'. "
                         f"This may cause incorrect behavior if the model relies on side-effects of in-place mutation."
