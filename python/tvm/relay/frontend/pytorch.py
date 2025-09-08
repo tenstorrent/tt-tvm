@@ -3431,7 +3431,7 @@ class PyTorchOpConverter:
 
         if isinstance(mask, _expr.Call) and list(_analysis.free_vars(mask)) == []:
             mask = _expr.const(_infer_value(mask, {}))
-        mask = _op.cast(mask, "float32")
+        mask = _op.cast(mask, input_types[0])
 
         disable_masked_fill_v2 = bool(int(os.environ.get("PYBUDA_DISABLE_MASKED_FILL_V2", 0)))
         if disable_masked_fill_v2:
@@ -3453,12 +3453,14 @@ class PyTorchOpConverter:
         # to ceil those all to 1.
         # NOTE: The cast here is just to stop TVM from complaining. It will be
         # replaced with the identity function further down the line
-        mask = _op.cast(_op.greater(mask, _expr.const(0, "float32")), "float32")
+        mask = _op.cast(_op.greater(mask, _expr.const(0, input_types[0])), input_types[0])
 
         value = _op.cast(_wrap_const(inputs[2]), input_types[0])
+        if self.infer_type(value).dtype != self.infer_type(mask).dtype:
+            mask = _op.cast(mask, input_types[0])
         value = _op.broadcast_to_like(value, mask)
 
-        one_const = _expr.const(1, dtype="float32")
+        one_const = _expr.const(1, dtype=input_types[0])
         inverse_mask = _op.subtract(one_const, mask)
 
         # Original implementation
@@ -3469,7 +3471,6 @@ class PyTorchOpConverter:
         
         # (!mask * x) + (mask*y)
         return _op.add(_op.multiply(inputs[0], inverse_mask), _op.multiply(value, mask))
-
 
     def baddbmm(self, inputs, input_types):
         bmm = _op.nn.batch_matmul(inputs[1], inputs[2], out_dtype=input_types[0], transpose_a=False, transpose_b=False)
@@ -4484,14 +4485,14 @@ class PyTorchOpConverter:
         if inputs[2] is not None:
             dtype = _convert_dtype_value(inputs[2])
         else:
-            dtype = self.default_dtype
+            # Get the dtype from the input tensor (self) instead of using default_dtype
+            dtype = input_types[0]  # Use the same dtype as the input tensor
 
         for i, dim in enumerate(data):
             if isinstance(dim, int):
                 data[i] = _expr.const(dim, dtype=dtype)
 
         return self.full_impl(data, 0, dtype)
-
 
     def new_ones(self, inputs, input_types):
         data = inputs[1]
@@ -6443,7 +6444,6 @@ def from_pytorch(
             break
 
     _run_jit_passes(graph, enable_lower_all_tuples)
-
 
     if custom_convert_map:
         converter.update_convert_map(custom_convert_map)
