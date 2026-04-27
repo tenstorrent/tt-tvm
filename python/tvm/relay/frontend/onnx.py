@@ -3968,6 +3968,46 @@ class GRU(RNN):
 class Resize(OnnxOpConverter):
     """Operator converter for Resize"""
 
+    @staticmethod
+    def _try_infer_value(expr, params):
+        if expr is None:
+            return None
+        if isinstance(expr, _expr.Constant):
+            return expr.data.numpy()
+        try:
+            free = analysis.free_vars(expr)
+        except Exception:
+            return None
+        if not all(v.name_hint in params for v in free):
+            return None
+        try:
+            return infer_value(expr, params).numpy()
+        except Exception:
+            return None
+
+    @classmethod
+    def _static_scaled_size(cls, x, scale, params):
+        try:
+            in_shape = infer_shape(x)
+        except Exception:
+            return None
+        try:
+            in_shape = [int(d) for d in in_shape]
+        except (TypeError, ValueError):
+            return None
+
+        # ``scale`` may be a bare initializer Var, a Cast(Var), a
+        # multi-op expression over params, or already a Constant.
+        # infer_value handles all of these as long as every free-var is
+        # in params. If scale has a runtime free-var we give up and let
+        # the caller fall back to the dynamic expression.
+        s = cls._try_infer_value(scale, params)
+        if s is None or s.shape != (len(in_shape),):
+            return None
+
+        size_np = np.array(in_shape, dtype=s.dtype) * s
+        return _expr.const(size_np)
+
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
         mode = attr.get("mode").decode("ascii")
@@ -3983,7 +4023,9 @@ class Resize(OnnxOpConverter):
             )
 
         scale = inputs[1]
-        size = _op.cast(shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
+        size = cls._static_scaled_size(inputs[0], scale, params)
+        if size is None:
+            size = _op.cast(shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
         ndims = len(infer_shape(inputs[0]))
         out = None
         if ndims == 3:
@@ -4000,17 +4042,28 @@ class Resize(OnnxOpConverter):
         return out
 
     @classmethod
+    def _bake_size(cls, size, params):
+        if isinstance(size, _expr.Constant):
+            return size
+        size_np = cls._try_infer_value(size, params)
+        if size_np is None:
+            return size
+        return _expr.const(size_np)
+
+    @classmethod
     def _impl_v11(cls, inputs, attr, params):
         scale = inputs[2]
         scale_shape = infer_shape(scale)
-        if len(inputs) == 4:
+        if len(inputs) == 4 and inputs[3] is not None:
             assert (
                 len(scale_shape) == 0 or scale_shape[0] == 0
             ), "One of scale or size should be passed, not both."
-            size = inputs[3]
+            size = cls._bake_size(inputs[3], params)
         else:
             assert len(scale_shape) != 0, "One of scale or size should be passed."
-            size = _op.cast(shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
+            size = cls._static_scaled_size(inputs[0], scale, params)
+            if size is None:
+                size = _op.cast(shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
         return cls.v11_13_common(inputs, size, attr, params)
 
     @classmethod
@@ -4025,12 +4078,15 @@ class Resize(OnnxOpConverter):
 
         if size is not None:
             assert scale is None, "One of scale or size should be passed, not both."
+            size = cls._bake_size(size, params)
         else:
             scale_type = infer_type(scale)
             scale_shape = scale_type.checked_type.shape
             scale_dtype = scale_type.checked_type.dtype
             assert len(scale_shape) != 0, "One of scale or size should be passed."
-            size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
+            size = cls._static_scaled_size(inputs[0], scale, params)
+            if size is None:
+                size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
 
         return cls.v11_13_common(inputs, size, attr, params)
 
